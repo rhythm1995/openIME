@@ -1,0 +1,66 @@
+// Tauri invoke 封装：把所有后端命令收拢到一处，便于测试 mock 与类型收敛。
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  AppConfig,
+  Hotword,
+  LocalModelStatus,
+  ProviderConfig,
+  SessionSummary,
+  UtteranceRecord,
+} from "./types";
+
+export type PermissionKind = "microphone" | "accessibility";
+export interface PermissionStatus {
+  kind: PermissionKind;
+  state: "not_determined" | "granted" | "denied" | "restricted";
+  hint: string;
+}
+
+// 权限状态的中文映射（修 bug2：不再裸显英文枚举）。
+export const permissionLabel: Record<PermissionStatus["state"], string> = {
+  not_determined: "未授权",
+  granted: "已授权",
+  denied: "已拒绝",
+  restricted: "受限",
+};
+
+export const ipc = {
+  ping: () => invoke<string>("ping"),
+  getConfig: () => invoke<AppConfig>("get_config"),
+  defaultConfig: () => invoke<AppConfig>("default_config"),
+  saveConfig: (config: AppConfig) => invoke<void>("save_app_config", { config }),
+  validateProvider: (provider: ProviderConfig) =>
+    invoke<void>("validate_provider", { provider }),
+  testCloudConnection: (provider: ProviderConfig) =>
+    invoke<string>("test_cloud_connection", { provider }),
+  listSessions: () => invoke<SessionSummary[]>("list_sessions"),
+  listUtterances: (sessionId: string) =>
+    invoke<UtteranceRecord[]>("list_utterances", { sessionId }),
+  deleteSession: (sessionId: string) => invoke<void>("delete_session", { sessionId }),
+  checkPermission: (kind: PermissionKind) =>
+    invoke<PermissionStatus>("check_permission", { kind }),
+  requestAccessibility: () => invoke<boolean>("request_accessibility"),
+  requestMicrophone: () => invoke<boolean>("request_microphone"),
+  openPermissionSettings: (kind: PermissionKind) =>
+    invoke<void>("open_permission_settings", { kind }),
+  toggleRecording: () => invoke<boolean>("toggle_recording"),
+  getRecordingState: () => invoke<boolean>("get_recording_state"),
+  // 音频设备
+  listAudioDevices: () => invoke<string[]>("list_audio_devices"),
+  testMicrophone: (device?: string | null) =>
+    invoke<number>("test_microphone", { device: device ?? null }),
+  // 开机自启（macOS Login Items）
+  getLaunchAtLogin: () => invoke<boolean>("get_launch_at_login"),
+  setLaunchAtLogin: (enabled: boolean) =>
+    invoke<void>("set_launch_at_login", { enabled }),
+  // 本地模型（sherpa-onnx）
+  getLocalModelStatus: (mode?: string) =>
+    invoke<LocalModelStatus>("get_local_model_status", { mode }),
+  installLocalModel: (mode?: string) =>
+    invoke<void>("install_local_model", { mode }),
+  // 热词词典
+  listHotwords: () => invoke<Hotword[]>("list_hotwords"),
+  addHotword: (word: string, weight: number) =>
+    invoke<Hotword>("add_hotword", { word, weight }),
+  deleteHotword: (id: string) => invoke<void>("delete_hotword", { id }),
+};
