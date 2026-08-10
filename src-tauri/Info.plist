@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 缺少该键时 macOS 不弹麦克风授权框，录音会被 TCC 拒绝甚至直接杀进程 -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>openIME 需要使用麦克风采集语音，将其转换为文字输入</string>
+</dict>
+</plist>

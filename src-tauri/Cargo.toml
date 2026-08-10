@@ -1,0 +1,46 @@
+[package]
+name = "openime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "openIME - cross-platform voice input method (macOS first)"
+
+[lib]
+name = "openime_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+cc = "1"
+
+[dependencies]
+# 核心库（workspace 内）
+voice-core = { path = "../crates/voice-core" }
+
+# Tauri v2
+tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-autostart = "2"
+
+# 异步 / 序列化
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+[features]
+# 默认走自定义协议（生产）；开发时 tauri 会注入 devUrl
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+# 本地 sherpa-onnx 引擎（转发到 voice-core）：WITH_SHERPA=1 ./scripts/build.sh
+sherpa = ["voice-core/sherpa"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS 权限：辅助功能 + 麦克风授权状态
+core-foundation = "0.10"
