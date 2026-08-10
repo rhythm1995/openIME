@@ -1,0 +1,22 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Node / Tauri 前端
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/dist/
+dist/
+.vite/
+*.tsbuildinfo
+
+# 系统 / 编辑器
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# ZCode 会话产物（本地规划/计划文件，不入库）
+.zcode/

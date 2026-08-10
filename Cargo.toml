@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = ["crates/voice-core", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+
+[workspace.dependencies]
+# 异步运行时与工具
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "io-util"] }
+tokio-stream = "0.1"
+async-trait = "0.1"
+futures = "0.3"
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 错误
+thiserror = "1"
+anyhow = "1"
+# 日志
+tracing = "0.1"
+# ID
+uuid = { version = "1", features = ["v4"] }
+# 时间
+chrono = { version = "0.4", features = ["serde"] }
+# 测试
+mockall = "0.13"
+# 存储
+rusqlite = { version = "0.31", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.24"
+tempfile = "3"
+# WebSocket（百炼流式 ASR）
+tokio-tungstenite = { version = "0.23", features = ["rustls-tls-native-roots"] }
+# HTTP（校验/探测等轻量用途）
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# 音频采集与重采样
+cpal = "0.15"
+rubato = "0.15"
+# 文本插入（模拟键盘）
+enigo = "0.5"
+# 模型下载校验
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+# 用 unwind 而非 abort：启动期某步失败时打印 panic 位置，便于诊断，而非静默崩溃。
+panic = "unwind"
+strip = true

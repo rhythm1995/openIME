@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  # 核心 Rust crate：单测 + 集成测试，三平台。
+  core:
+    name: voice-core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Install Linux system deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy -p voice-core --all-targets -- -D warnings
+      - name: Test voice-core
+        run: cargo test -p voice-core --all-targets
+      - name: Clippy voice-core with sherpa feature (deny warnings)
+        run: cargo clippy -p voice-core --features sherpa --all-targets -- -D warnings
+      - name: Test voice-core with sherpa feature
+        run: cargo test -p voice-core --features sherpa --all-targets
+
+  # Tauri 壳：编译检查（需要 dist 前端产物 + 图标）。
+  tauri-shell:
+    name: src-tauri build check (macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+      - name: Build frontend
+        run: pnpm build
+      - name: Clippy src-tauri
+        run: cargo clippy -p openime -- -D warnings
+      - name: cargo check src-tauri
+        run: cargo check -p openime
+
+  # 前端：Vitest。
+  frontend:
+    name: frontend vitest
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+      - name: Test
+        run: pnpm test
+      - name: Type check + build
+        run: pnpm build
