@@ -1,0 +1,50 @@
+[package]
+name = "voice-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Cross-platform voice-input engine core (no Tauri dependency)"
+
+[features]
+default = []
+# 本地 sherpa-onnx ASR（重型原生依赖，按需开启）。
+sherpa = ["dep:sherpa-onnx"]
+
+[dependencies]
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+rusqlite = { workspace = true }
+r2d2 = { workspace = true }
+r2d2_sqlite = { workspace = true }
+tokio-tungstenite = { workspace = true }
+cpal = { workspace = true }
+rubato = { workspace = true }
+hound = "3.5"
+enigo = { workspace = true }
+sha2 = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+# 模型下载：stream 特性用于流式进度；rustls 避免系统 TLS 依赖。
+reqwest = { workspace = true, features = ["stream"] }
+bytes = "1"
+sherpa-onnx = { version = "1.13", optional = true }
+
+[dev-dependencies]
+mockall = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tempfile = { workspace = true }
+
+[lib]
+name = "voice_core"
+path = "src/lib.rs"
