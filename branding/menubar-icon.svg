@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- openIME Menu Bar Icon · template image (单色，macOS 状态栏用)
+       用法：作为 icon_as_template = true，macOS 自动随明暗模式反色。
+       规格：64×64（@2x for 32px 逻辑）
+       设计：3 条粗竖条（中峰最高），纯黑填充+透明背景，确保 16px 清晰 -->
+  <!-- 3 条：条宽8 间距4 总宽32 居中起x=16；高 16/28/16；圆角4 -->
+  <g fill="#000000">
+    <rect x="16" y="24" width="8" height="16" rx="4"/>
+    <rect x="28" y="18" width="8" height="28" rx="4"/>
+    <rect x="40" y="24" width="8" height="16" rx="4"/>
+  </g>
+</svg>

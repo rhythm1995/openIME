@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 320" width="900" height="320">
+  <style>
+    .bg{fill:#0d0d0f}
+    .cap{fill:#f5f5f7;font:600 18px -apple-system,"PingFang SC",sans-serif}
+    .sub{fill:#6e6e73;font:400 13px -apple-system,"PingFang SC",sans-serif}
+    .lbl{fill:#a1a1a6;font:500 13px -apple-system,monospace}
+  </style>
+  <rect class="bg" width="900" height="320"/>
+  <text x="450" y="40" text-anchor="middle" class="cap">概念 A · 小尺寸清晰度测试</text>
+  <text x="450" y="62" text-anchor="middle" class="sub">模拟 macOS 菜单栏(16) / Finder(32) / Dock 小(64) / Dock(128)</text>
+  <!-- 用 image 标签引用 png -->
+  <image href="a-16.png" x="80" y="110" width="64" height="64"/>
+  <image href="a-16.png" x="180" y="150" width="16" height="16"/>
+  <text x="188" y="235" text-anchor="middle" class="lbl">16px</text>
+  <text x="188" y="253" text-anchor="middle" class="sub">菜单栏</text>
+
+  <image href="a-32.png" x="320" y="142" width="32" height="32"/>
+  <text x="336" y="235" text-anchor="middle" class="lbl">32px</text>
+  <text x="336" y="253" text-anchor="middle" class="sub">Finder 列表</text>
+
+  <image href="a-64.png" x="450" y="126" width="64" height="64"/>
+  <text x="482" y="235" text-anchor="middle" class="lbl">64px</text>
+  <text x="482" y="253" text-anchor="middle" class="sub">Dock 小</text>
+
+  <image href="a-128.png" x="620" y="94" width="128" height="128"/>
+  <text x="684" y="275" text-anchor="middle" class="lbl">128px</text>
+  <text x="684" y="293" text-anchor="middle" class="sub">Dock</text>
+</svg>

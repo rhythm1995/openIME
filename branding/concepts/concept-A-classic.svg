@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- macOS squircle 形状 (superellipse 近似) -->
+    <clipPath id="squircle">
+      <path d="M 512 64
+        C 256 64, 140 92, 92 140
+        C 44 188, 64 256, 64 512
+        C 64 768, 44 836, 92 884
+        C 140 932, 256 960, 512 960
+        C 768 960, 884 932, 932 884
+        C 980 836, 960 768, 960 512
+        C 960 256, 980 188, 932 140
+        C 884 92, 768 64, 512 64 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- squircle 底：粒蓝实色 -->
+  <g clip-path="url(#squircle)">
+    <rect width="1024" height="1024" fill="#3B4FE0"/>
+  </g>
+
+  <!-- 经典居中对称竖条波形：5 条，中间最高，两侧递减 -->
+  <!-- 中线 x=512；条宽 56；间距 36；总宽 5*56+4*36 = 424，居中起 x=300 -->
+  <!-- 高度：外侧→内 180/300/420/300/180；圆角 28 -->
+  <g fill="#FFFFFF">
+    <!-- bar1 left: 高180 -->
+    <rect x="300" y="422" width="56" height="180" rx="28"/>
+    <!-- bar2: 高300 -->
+    <rect x="392" y="362" width="56" height="300" rx="28"/>
+    <!-- bar3 center: 高420 -->
+    <rect x="484" y="302" width="56" height="420" rx="28"/>
+    <!-- bar4: 高300 -->
+    <rect x="576" y="362" width="56" height="300" rx="28"/>
+    <!-- bar5 right: 高180 -->
+    <rect x="668" y="422" width="56" height="180" rx="28"/>
+  </g>
+</svg>

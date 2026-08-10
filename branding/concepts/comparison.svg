@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 760" width="1920" height="760">
+  <defs>
+    <clipPath id="sq">
+      <path d="M 512 64 C 256 64, 140 92, 92 140 C 44 188, 64 256, 64 512 C 64 768, 44 836, 92 884 C 140 932, 256 960, 512 960 C 768 960, 884 932, 932 884 C 980 836, 960 768, 960 512 C 960 256, 980 188, 932 140 C 884 92, 768 64, 512 64 Z"/>
+    </clipPath>
+  </defs>
+
+  <style>
+    .bg { fill: #0d0d0f; }
+    .panel { fill: #18181b; }
+    .label-name { fill: #f5f5f7; font: 600 26px -apple-system, "SF Pro Display", "PingFang SC", sans-serif; }
+    .label-desc { fill: #a1a1a6; font: 400 16px -apple-system, "SF Pro Text", "PingFang SC", sans-serif; }
+    .label-tag { fill: #6e6e73; font: 500 13px -apple-system, monospace; letter-spacing: 1px; }
+  </style>
+
+  <rect class="bg" width="1920" height="760"/>
+
+  <!-- 标题 -->
+  <text x="960" y="60" text-anchor="middle" class="label-name" style="font-size:30px">openIME · Logo 概念对比</text>
+  <text x="960" y="88" text-anchor="middle" class="label-desc">粒蓝 #3B4FE0 · squircle · 竖条声波 · 极简编辑风</text>
+
+  <!-- ====== 概念 A ====== -->
+  <g transform="translate(140, 150)">
+    <rect class="panel" x="-30" y="-30" width="500" height="560" rx="20"/>
+    <g transform="scale(0.4) translate(50, 50)">
+      <g clip-path="url(#sq)"><rect width="1024" height="1024" fill="#3B4FE0"/></g>
+      <g fill="#FFFFFF">
+        <rect x="300" y="422" width="56" height="180" rx="28"/>
+        <rect x="392" y="362" width="56" height="300" rx="28"/>
+        <rect x="484" y="302" width="56" height="420" rx="28"/>
+        <rect x="576" y="362" width="56" height="300" rx="28"/>
+        <rect x="668" y="422" width="56" height="180" rx="28"/>
+      </g>
+    </g>
+    <text x="190" y="490" text-anchor="middle" class="label-tag">CONCEPT · A</text>
+    <text x="190" y="520" text-anchor="middle" class="label-name">经典对称波形</text>
+    <text x="190" y="548" text-anchor="middle" class="label-desc">5 条竖条 · 中峰最高</text>
+    <text x="190" y="572" text-anchor="middle" class="label-desc">最稳 · 最易识别 · 缩放性最佳</text>
+  </g>
+
+  <!-- ====== 概念 B ====== -->
+  <g transform="translate(710, 150)">
+    <rect class="panel" x="-30" y="-30" width="500" height="560" rx="20"/>
+    <g transform="scale(0.4) translate(50, 50)">
+      <g clip-path="url(#sq)"><rect width="1024" height="1024" fill="#3B4FE0"/></g>
+      <g fill="#FFFFFF">
+        <rect x="274" y="452" width="44" height="120" rx="22"/>
+        <rect x="346" y="412" width="44" height="200" rx="22"/>
+        <rect x="418" y="372" width="44" height="280" rx="22"/>
+        <rect x="562" y="372" width="44" height="280" rx="22"/>
+        <rect x="634" y="412" width="44" height="200" rx="22"/>
+        <rect x="706" y="452" width="44" height="120" rx="22"/>
+      </g>
+      <circle cx="512" cy="512" r="56" fill="#3B4FE0"/>
+      <circle cx="512" cy="512" r="56" fill="none" stroke="#FFFFFF" stroke-width="10"/>
+    </g>
+    <text x="190" y="490" text-anchor="middle" class="label-tag">CONCEPT · B</text>
+    <text x="190" y="520" text-anchor="middle" class="label-name">声波 + 字母 o 融合</text>
+    <text x="190" y="548" text-anchor="middle" class="label-desc">中央负空间成 "o"</text>
+    <text x="190" y="572" text-anchor="middle" class="label-desc">最独特 · 双层语义 · 品牌识别强</text>
+  </g>
+
+  <!-- ====== 概念 C ====== -->
+  <g transform="translate(1280, 150)">
+    <rect class="panel" x="-30" y="-30" width="500" height="560" rx="20"/>
+    <g transform="scale(0.4) translate(50, 50)">
+      <g clip-path="url(#sq)"><rect width="1024" height="1024" fill="#3B4FE0"/></g>
+      <defs>
+        <clipPath id="diag2"><polygon points="240,260 784,320 784,704 240,764"/></clipPath>
+      </defs>
+      <g clip-path="url(#sq)">
+        <g fill="#FFFFFF" clip-path="url(#diag2)">
+          <rect x="282" y="162" width="60" height="700"/>
+          <rect x="382" y="162" width="60" height="700"/>
+          <rect x="482" y="162" width="60" height="700"/>
+          <rect x="582" y="162" width="60" height="700"/>
+          <rect x="682" y="162" width="60" height="700"/>
+        </g>
+      </g>
+    </g>
+    <text x="190" y="490" text-anchor="middle" class="label-tag">CONCEPT · C</text>
+    <text x="190" y="520" text-anchor="middle" class="label-name">斜切收敛波形</text>
+    <text x="190" y="548" text-anchor="middle" class="label-desc">5 等宽条 · 顶底斜切</text>
+    <text x="190" y="572" text-anchor="middle" class="label-desc">最锐利 · 编辑工具感 · 差异化</text>
+  </g>
+</svg>

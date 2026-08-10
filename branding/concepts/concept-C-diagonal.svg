@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="squircle">
+      <path d="M 512 64
+        C 256 64, 140 92, 92 140
+        C 44 188, 64 256, 64 512
+        C 64 768, 44 836, 92 884
+        C 140 932, 256 960, 512 960
+        C 768 960, 884 932, 932 884
+        C 980 836, 960 768, 960 512
+        C 960 256, 980 188, 932 140
+        C 884 92, 768 64, 512 64 Z"/>
+    </clipPath>
+    <!-- 用于裁掉每条竖条顶/底的斜切：一个平行四边形 mask -->
+    <clipPath id="diag">
+      <!-- 顶部斜切：从 y=300(左) 到 y=240(右) 的斜线下方；底部对称 -->
+      <polygon points="240,260 784,320 784,704 240,764"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <rect width="1024" height="1024" fill="#3B4FE0"/>
+  </g>
+
+  <!-- 概念 C：竖条波形 + 斜切收敛
+       5 条等高竖条，但整体被一个轻微倾斜的平行四边形裁切，
+       顶边和底边都带一个约 8° 斜角，制造"编辑/印刷/锐利工具感"。
+       斜切让 logo 在 dock 里更独特，区别于平直波形。 -->
+
+  <!-- 5 条等宽竖条（条宽 60，间距 40，总宽 5*60+4*40=460，起 x=282），
+       高度先画满 700（y=162~862），再用斜切 clip 裁出波形轮廓 -->
+  <g clip-path="url(#squircle)">
+    <g fill="#FFFFFF" clip-path="url(#diag)">
+      <rect x="282" y="162" width="60" height="700"/>
+      <rect x="382" y="162" width="60" height="700"/>
+      <rect x="482" y="162" width="60" height="700"/>
+      <rect x="582" y="162" width="60" height="700"/>
+      <rect x="682" y="162" width="60" height="700"/>
+    </g>
+  </g>
+</svg>
