@@ -3,7 +3,9 @@
 //! 处理：填充词去除 / 标点归一 / 同音字纠错 / 截断检测。
 //! 进入条件：总是先过一遍（即使总体 polish 关闭也做最小清理）；调用方见 `pipeline::apply_polish`。
 //! 任何规则失败或无可信候选 → 原样返回，不引入新错误。
-//! 热词：只做存在性匹配（`Hotword.weight` 不参与 L0）。
+//! 热词：参与同音纠错（与热词读音相同的片段替换为热词，覆盖 ASR 同音错字）。
+
+use pinyin::ToPinyin;
 
 /// L0 结果。
 #[derive(Debug, Clone)]
@@ -159,7 +161,7 @@ pub fn correct_l0(text: &str, hotwords: &[String]) -> L0Result {
         cur = punc;
     }
 
-    // 5) 同音/近音（保守：仅高频错字对 + 热词不触碰）。
+    // 5) 同音纠错：热词同音替换（方案A）+ 固定字典高频错字对。
     let hom = correct_homophones(&cur, hotwords);
     if hom != cur {
         had = true;
@@ -395,15 +397,83 @@ fn normalize_punct(s: &str) -> String {
 
 // ── 5) 同音纠错（保守小字典）─────────────────────────────
 
+/// 把汉字串转为无声调拼音（非汉字自动跳过）。如"智谱"→"zhipu"。
+fn to_pinyin_plain(s: &str) -> String {
+    s.to_pinyin()
+        .flatten()
+        .map(|p| p.plain().to_string())
+        .collect()
+}
+
+/// 热词同音纠错：按热词字数滑窗取片段，拼音与热词相同（且片段本身不是该热词）
+/// 就替换为热词。覆盖 ASR 最常见的"专有名词被识别成同音常用字"（制谱→智谱）。
+///
+/// - 不分词、不依赖 jieba：按热词字数滑窗，避开分词粒度问题。
+/// - 长热词优先（按字数降序匹配，避免短热词截断长匹配）。
+/// - 英文/非汉字热词的拼音为空，自动跳过（中英音译不处理）。
+fn correct_hotword_homophones(text: &str, hotwords: &[String]) -> String {
+    if hotwords.is_empty() {
+        return text.to_string();
+    }
+    let mut hws: Vec<(&str, String, usize)> = hotwords
+        .iter()
+        .filter_map(|w| {
+            let py = to_pinyin_plain(w);
+            if py.is_empty() {
+                None
+            } else {
+                Some((w.as_str(), py, w.chars().count()))
+            }
+        })
+        .collect();
+    hws.sort_by_key(|(_, _, n)| *n);
+    hws.reverse();
+
+    let chars: Vec<char> = text.chars().collect();
+    let mut out: Vec<char> = Vec::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let mut matched = false;
+        for (hw, hw_py, n) in &hws {
+            if i + n <= chars.len() {
+                let seg: String = chars[i..i + n].iter().collect();
+                if &seg == hw {
+                    // 已是热词本身，原样保留。
+                    out.extend(chars[i..i + n].iter());
+                    i += n;
+                    matched = true;
+                    break;
+                }
+                let seg_py = to_pinyin_plain(&seg);
+                if seg_py == *hw_py {
+                    // 同音：替换为热词。
+                    out.extend(hw.chars());
+                    i += n;
+                    matched = true;
+                    break;
+                }
+            }
+        }
+        if !matched {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out.into_iter().collect()
+}
+
 fn correct_homophones(s: &str, hotwords: &[String]) -> String {
-    // 热词命中时不轻易改同音（避免把热词识别结果再"纠"错）。
-    let lower = s.to_lowercase();
+    // 1) 热词同音纠错：把与热词读音相同的片段替换为热词。
+    let after_hw = correct_hotword_homophones(s, hotwords);
+
+    // 2) 固定字典逐字纠错（通用高频同音，如 德→得）。
+    //    含热词的句跳过，避免误改热词内部字。
+    let lower = after_hw.to_lowercase();
     let hit_hotword = hotwords.iter().any(|w| lower.contains(&w.to_lowercase()));
     if hit_hotword {
-        // 热词相关句子跳过同音纠，避免二次伤害
-        return s.to_string();
+        return after_hw;
     }
-    let mut chars: Vec<char> = s.chars().collect();
+    let mut chars: Vec<char> = after_hw.chars().collect();
     let orig_chars = chars.clone();
     let mut changed = false;
 
@@ -685,5 +755,63 @@ mod tests {
         // 合法叠词"慢慢"端到端不被塌陷。
         let r = correct_l0("我想慢慢走过去", &[]);
         assert!(r.text.contains("慢慢"), "合法叠词应保留，得到 {}", r.text);
+    }
+
+    // ── 热词同音纠错（方案A）──────────────────────────────
+
+    #[test]
+    fn hotword_homophone_corrects_same_pinyin() {
+        // 制谱 与 热词 智谱 同音 → 替换。
+        assert_eq!(
+            correct_hotword_homophones("我在制谱工作", &["智谱".into()]),
+            "我在智谱工作"
+        );
+    }
+
+    #[test]
+    fn hotword_homophone_keeps_exact_hotword() {
+        // 已是热词本身，不重复纠。
+        assert_eq!(
+            correct_hotword_homophones("智谱很好", &["智谱".into()]),
+            "智谱很好"
+        );
+    }
+
+    #[test]
+    fn hotword_homophone_no_match_unchanged() {
+        assert_eq!(
+            correct_hotword_homophones("今天天气不错", &["智谱".into()]),
+            "今天天气不错"
+        );
+    }
+
+    #[test]
+    fn hotword_homophone_skips_english() {
+        // 英文热词拼音为空，不处理（中英音译不纠）。
+        assert_eq!(
+            correct_hotword_homophones("用 Paraformer", &["Paraformer".into()]),
+            "用 Paraformer"
+        );
+    }
+
+    #[test]
+    fn hotword_homophone_longer_first() {
+        // 长热词优先：制谱科技 → 智谱科技（不被短热词"智谱"截断）。
+        assert_eq!(
+            correct_hotword_homophones("我在制谱科技工作", &["智谱".into(), "智谱科技".into()],),
+            "我在智谱科技工作"
+        );
+    }
+
+    #[test]
+    fn correct_l0_uses_hotword_homophone() {
+        // 端到端：L0 接入热词同音纠错。
+        let r = correct_l0("我在制谱工作", &["智谱".into()]);
+        assert!(
+            r.text.contains("智谱"),
+            "L0 应通过热词纠同音，得到 {}",
+            r.text
+        );
+        assert!(r.had_correction);
     }
 }

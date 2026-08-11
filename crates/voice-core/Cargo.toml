@@ -38,6 +38,8 @@ flate2 = { workspace = true }
 tar = { workspace = true }
 # 本机性能采集（给语音模型打标签）
 sysinfo = { workspace = true }
+# L0 同音纠错：汉字→拼音
+pinyin = "0.11"
 # 后续扩展 L0 同音字：pinyin / jieba-rs（届时再引入）
 # 模型下载：stream 特性用于流式进度；rustls 避免系统 TLS 依赖。
 reqwest = { workspace = true, features = ["stream"] }
