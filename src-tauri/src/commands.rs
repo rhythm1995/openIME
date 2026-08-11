@@ -760,24 +760,13 @@ pub async fn toggle_recording(
     };
 
     tokio::spawn(async move {
-        // partial 回调：左下角做状态 + 流式模型的逐字落焦上屏（后续：paraformer-trilingual 逐字 enigo）。
+        // partial 回调：overlay 显示实时识别（不上屏；统一在 final 后一次性插入）。
         let app_for_cb = app_handle.clone();
         let on_partial: voice_core::pipeline::PartialCallback = Arc::new(move |text| {
             let _ = app_for_cb.emit("recording://partial", text.to_string());
         });
 
-        // 流式引擎（百炼 / 本地 paraformer-trilingual）边说边逐字上屏；
-        // 离线引擎（SenseVoice 等）整段解码，录完一次性插入。
-        let streaming = provider_cfg.kind == voice_core::ProviderKind::Bailian
-            || provider_cfg.model == voice_core::asr_catalog::ASR_MODEL_PARAFORMER_TRILINGUAL;
-
-        // 流式模式：录音期间就要往用户输入框敲字，需先把焦点还给前台 app。
-        if streaming {
-            restore_frontmost_focus(&app_handle, frontmost.as_deref());
-            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-        }
-
-        // 录音 + 收集 finals（流式模式下 finals 已在内部逐字上屏）。
+        // 录音 + 收集 finals（不在内部插入——插入需在焦点恢复后进行）。
         let result = pipeline
             .record_and_collect(
                 audio,
@@ -785,29 +774,22 @@ pub async fn toggle_recording(
                 meta,
                 Some(on_partial),
                 Some(stop_flag),
-                streaming,
             )
             .await;
 
         match result {
             Ok(r) => {
+                // 识别结束 → 上屏前：还焦，但 HUD 仍可见，提示正在输入。
                 let _ = app_handle.emit("recording://processing", "正在输入…");
-                if streaming {
-                    // 已逐字上屏，只落库（历史）。
-                    if let Err(e) = pipeline.persist_finals(&r.session_id, &r.utterances).await {
-                        log_error!("流式结果落库失败：{e}");
-                    }
-                } else {
-                    // 离线：录完还焦 + 一次性润色上屏。
-                    restore_frontmost_focus(&app_handle, frontmost.as_deref());
-                    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                    if let Err(e) = pipeline
-                        .insert_finals_with_polish(&r.session_id, &r.utterances, &polish_ctx)
-                        .await
-                    {
-                        log_error!("插入文本失败：{e}");
-                        let _ = app_handle.emit("recording://error", e.to_string());
-                    }
+                restore_frontmost_focus(&app_handle, frontmost.as_deref());
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+
+                if let Err(e) = pipeline
+                    .insert_finals_with_polish(&r.session_id, &r.utterances, &polish_ctx)
+                    .await
+                {
+                    log_error!("插入文本失败：{e}");
+                    let _ = app_handle.emit("recording://error", e.to_string());
                 }
 
                 *recording.write().await = false;
@@ -815,7 +797,7 @@ pub async fn toggle_recording(
                 // 文字已上屏后再收起 HUD。
                 hide_overlay_only(&app_handle);
                 // stopped 事件 payload 给功能测试框/历史用：需先去重，否则
-                // 流式引擎对同一句的 endpoint+flush 两条 final 会被 join 成重复串。
+                // 同一句的 endpoint+flush 两条 final 会被 join 成重复串。
                 let deduped = voice_core::polish::dedupe_consecutive_finals(&r.utterances);
                 let _ = app_handle.emit("recording://stopped", deduped.join(""));
             }

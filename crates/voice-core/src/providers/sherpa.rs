@@ -20,7 +20,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::asr_catalog::{
     ASR_MODEL_FIRERED_LARGE, ASR_MODEL_FUNASR_NANO_FP16, ASR_MODEL_FUNASR_NANO_INT8,
-    ASR_MODEL_PARAFORMER_TRILINGUAL, ASR_MODEL_SENSEVOICE, PARAFORMER_TRILINGUAL_DIR,
+    ASR_MODEL_SENSEVOICE,
 };
 use crate::config::ProviderKind;
 use crate::model_download::normalize_asr_model_id;
@@ -243,7 +243,6 @@ impl AsrProvider for SherpaProvider {
         // 按 model id 分流：
         // - sensevoice → Offline SenseVoice
         // - firered-large → Offline FireRedASR
-        // - paraformer-trilingual → Streaming Paraformer（中粤英，encoder+decoder，无 joiner）
         // - 其它目录名 → 旧流式 Paraformer（bilingual 等，encoder+decoder.int8）
         let model_key = cfg
             .model
@@ -255,23 +254,6 @@ impl AsrProvider for SherpaProvider {
             connect_offline_with_paths(model_root, OfflineBackend::SenseVoice, lang).await
         } else if model_id == ASR_MODEL_FIRERED_LARGE {
             connect_offline_with_paths(model_root, OfflineBackend::FireRed, lang).await
-        } else if model_id == ASR_MODEL_PARAFORMER_TRILINGUAL {
-            // 流式 Paraformer 中粤英：encoder.int8 + decoder.int8（注意是 int8 decoder，无 joiner）。
-            let paths = SherpaModelPaths {
-                encoder: model_root
-                    .join(PARAFORMER_TRILINGUAL_DIR)
-                    .join("encoder.int8.onnx"),
-                decoder: model_root
-                    .join(PARAFORMER_TRILINGUAL_DIR)
-                    .join("decoder.int8.onnx"),
-                joiner: None,
-                tokens: model_root
-                    .join(PARAFORMER_TRILINGUAL_DIR)
-                    .join("tokens.txt"),
-                vad_model: vad_root.join("silero_vad.onnx"),
-                backend: StreamingBackend::Paraformer,
-            };
-            connect_with_paths(cfg, &paths).await
         } else if model_id == ASR_MODEL_FUNASR_NANO_INT8 {
             connect_offline_with_paths(
                 model_root,

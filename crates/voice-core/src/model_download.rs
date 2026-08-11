@@ -332,11 +332,11 @@ pub async fn install_local_engine(
 pub fn normalize_asr_model_id(id_or_mode: &str) -> &str {
     match id_or_mode {
         "offline" | "sensevoice" => crate::asr_catalog::ASR_MODEL_SENSEVOICE,
-        "realtime" | "paraformer" | "paraformer-trilingual" => {
-            crate::asr_catalog::ASR_MODEL_PARAFORMER_TRILINGUAL
-        }
         // 已下线的旧 model id：回退到默认 SenseVoice（避免指向不存在的目录）。
-        "zipformer-zh-2025"
+        "realtime"
+        | "paraformer"
+        | "paraformer-trilingual"
+        | "zipformer-zh-2025"
         | "zipformer"
         | "zipformer-zh-xlarge"
         | "zipformer-xlarge"
@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn manifest_has_catalog_files() {
-        // sensevoice + paraformer-trilingual + 共享 VAD
+        // sensevoice + firered 等多模型 + 共享 VAD
         let files = local_model_files();
         assert!(files.len() >= 6);
         let names: Vec<_> = files.iter().map(|f| f.file_name).collect();
@@ -616,29 +616,18 @@ mod tests {
     }
 
     #[test]
-    fn paraformer_trilingual_has_four_files() {
-        // realtime 兼容别名 → paraformer-trilingual：encoder.int8 + decoder.int8 + tokens + vad
-        let files = local_model_files_for("realtime");
-        assert_eq!(files.len(), 4);
-        let names: Vec<_> = files.iter().map(|f| f.file_name).collect();
-        assert!(names.contains(&"encoder.int8.onnx"));
-        assert!(names.contains(&"decoder.int8.onnx"));
-        assert!(names.contains(&"silero_vad.onnx"));
-    }
-
-    #[test]
     fn dest_paths_match_provider_layout() {
         let root = PathBuf::from("/data/models");
-        let files = local_model_files_for("paraformer-trilingual");
-        let enc = files
+        let files = local_model_files_for("sensevoice");
+        let model = files
             .iter()
-            .find(|f| f.file_name == "encoder.int8.onnx")
+            .find(|f| f.file_name == "model.int8.onnx")
             .unwrap();
         assert_eq!(
-            enc.dest(&root),
+            model.dest(&root),
             PathBuf::from(format!(
-                "/data/models/{}/encoder.int8.onnx",
-                crate::asr_catalog::PARAFORMER_TRILINGUAL_DIR
+                "/data/models/{}/model.int8.onnx",
+                super::SENSEVOICE_MODEL_NAME
             ))
         );
         let vad = files
@@ -660,10 +649,11 @@ mod tests {
         // 按模型 id / 兼容 mode 查
         assert_eq!(missing_files_for(dir.path(), "offline").len(), 3);
         assert_eq!(missing_files_for(dir.path(), "sensevoice").len(), 3);
-        assert_eq!(missing_files_for(dir.path(), "realtime").len(), 4);
+        // realtime / paraformer-trilingual 已下线，回退到 SenseVoice（3 文件）。
+        assert_eq!(missing_files_for(dir.path(), "realtime").len(), 3);
         assert_eq!(
             missing_files_for(dir.path(), "paraformer-trilingual").len(),
-            4
+            3
         );
     }
 

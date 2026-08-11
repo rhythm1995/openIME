@@ -31,8 +31,8 @@ pub mod traits;
 pub use asr_catalog::{
     asr_model_by_id, asr_model_catalog, asr_model_files, default_asr_model_id,
     is_asr_model_installed, AsrBackend, AsrModelInfo, ASR_MODEL_FIRERED_LARGE,
-    ASR_MODEL_FUNASR_NANO_FP16, ASR_MODEL_FUNASR_NANO_INT8, ASR_MODEL_PARAFORMER_TRILINGUAL,
-    ASR_MODEL_SENSEVOICE, FIRERED_LARGE_DIR, FUNASR_NANO_FP16_DIR, FUNASR_NANO_INT8_DIR,
+    ASR_MODEL_FUNASR_NANO_FP16, ASR_MODEL_FUNASR_NANO_INT8, ASR_MODEL_SENSEVOICE,
+    FIRERED_LARGE_DIR, FUNASR_NANO_FP16_DIR, FUNASR_NANO_INT8_DIR,
 };
 pub use config::{
     AppConfig, PolishPolicy, ProviderConfig, ProviderKind, POLISH_DEFAULT_LOCAL_MODEL,

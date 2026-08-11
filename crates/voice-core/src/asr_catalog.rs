@@ -1,21 +1,16 @@
 //! 本地 ASR 模型目录：可下载、可选中启用。
 //!
 //! 当前候选：
-//! - `sensevoice`：SenseVoice 离线（轻量多语，默认推荐）
-//! - `paraformer-trilingual`：流式 Paraformer 中粤英（边说边出，FunASR 出品）
+//! - `sensevoice`：SenseVoice 离线（轻量多语）
 //! - `firered-large`：FireRedASR Large 离线（本地中文高精度）
 //! - `funasr-nano-int8`：FunASR Nano int8 离线（encoder+LLM，方言/抗噪强）
 //! - `funasr-nano-fp16`：FunASR Nano fp16 离线（同上，fp16 LLM 精度略高）
 //!
-//! 已移除：`zipformer-zh-2025` / `zipformer-zh-xlarge`（中文识别质量差 / 配置脆弱）。
+//! 已移除：`paraformer-trilingual`（流式逐字上屏不稳定）/ `zipformer-zh-2025` / `zipformer-zh-xlarge`。
 
 use serde::Serialize;
 
 use crate::model_download::{LocalModelFile, SENSEVOICE_MODEL_NAME, VAD_DIR};
-
-/// 流式 Paraformer 中粤英 int8 安装目录名。
-pub const PARAFORMER_TRILINGUAL_DIR: &str =
-    "sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en";
 
 /// FireRedASR Large 中英 离线安装目录名。
 pub const FIRERED_LARGE_DIR: &str = "sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16";
@@ -28,7 +23,6 @@ pub const FUNASR_NANO_FP16_DIR: &str = "sherpa-onnx-funasr-nano-fp16-2025-12-30"
 
 /// 本地 ASR 模型 id。
 pub const ASR_MODEL_SENSEVOICE: &str = "sensevoice";
-pub const ASR_MODEL_PARAFORMER_TRILINGUAL: &str = "paraformer-trilingual";
 pub const ASR_MODEL_FIRERED_LARGE: &str = "firered-large";
 pub const ASR_MODEL_FUNASR_NANO_INT8: &str = "funasr-nano-int8";
 pub const ASR_MODEL_FUNASR_NANO_FP16: &str = "funasr-nano-fp16";
@@ -74,15 +68,6 @@ pub fn asr_model_catalog() -> &'static [AsrModelInfo] {
             approx_size: 239_233_841 + 315_894,
         },
         AsrModelInfo {
-            id: ASR_MODEL_PARAFORMER_TRILINGUAL,
-            title: "流式 Paraformer 中粤英",
-            description: "流式逐字解码 · 中粤英三语 · 约 228MB · FunASR 出品，边说边出（逐字上屏，精度略低于非逐字整段模式）",
-            dir_name: PARAFORMER_TRILINGUAL_DIR,
-            backend: AsrBackend::StreamingParaformer,
-            recommended: false,
-            approx_size: 166_362_800 + 72_062_549 + 81_289,
-        },
-        AsrModelInfo {
             id: ASR_MODEL_FIRERED_LARGE,
             title: "FireRedASR Large",
             description: "离线整段解码 · 中英高精度（普通话/部分方言）· 约 1.7GB · 更准但更慢更吃内存，适合追求识别率",
@@ -121,14 +106,14 @@ pub fn asr_model_by_id(id: &str) -> Option<&'static AsrModelInfo> {
 pub fn hotword_capacity(model_id: &str) -> usize {
     match model_id {
         ASR_MODEL_SENSEVOICE => 100,
-        ASR_MODEL_PARAFORMER_TRILINGUAL | ASR_MODEL_FUNASR_NANO_INT8 => 200,
+        ASR_MODEL_FUNASR_NANO_INT8 => 200,
         ASR_MODEL_FIRERED_LARGE | ASR_MODEL_FUNASR_NANO_FP16 => 300,
         _ => 100,
     }
 }
 
 pub fn default_asr_model_id() -> &'static str {
-    // 默认偏轻量：SenseVoice 适合首装（快、带标点）；用户可改选流式 Paraformer 或 FireRed。
+    // 默认偏轻量：SenseVoice 适合首装（快、带标点）；用户可改选 FireRed 或 FunASR Nano。
     ASR_MODEL_SENSEVOICE
 }
 
@@ -136,7 +121,6 @@ pub fn default_asr_model_id() -> &'static str {
 pub fn asr_model_files(id: &str) -> Vec<LocalModelFile> {
     let mut files = match id {
         ASR_MODEL_SENSEVOICE => sensevoice_files(),
-        ASR_MODEL_PARAFORMER_TRILINGUAL => paraformer_trilingual_files(),
         ASR_MODEL_FIRERED_LARGE => firered_large_files(),
         ASR_MODEL_FUNASR_NANO_INT8 => funasr_nano_files(FunasrNanoVariant::Int8),
         ASR_MODEL_FUNASR_NANO_FP16 => funasr_nano_files(FunasrNanoVariant::Fp16),
@@ -167,42 +151,6 @@ fn sensevoice_files() -> Vec<LocalModelFile> {
             ],
             sha256: "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
             size: 315_894,
-        },
-    ]
-}
-
-fn paraformer_trilingual_files() -> Vec<LocalModelFile> {
-    // SHA256 = Git LFS oid（HF x-linked-etag）。
-    vec![
-        LocalModelFile {
-            file_name: "encoder.int8.onnx",
-            rel_dir: PARAFORMER_TRILINGUAL_DIR,
-            urls: &[
-                "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en/resolve/main/encoder.int8.onnx",
-                "https://hf-mirror.com/csukuangfj/sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en/resolve/main/encoder.int8.onnx",
-            ],
-            sha256: "6047a644b41b236d9d8e89e3b94ef39d1b7037daab028131b722ca52e10b0357",
-            size: 166_362_800,
-        },
-        LocalModelFile {
-            file_name: "decoder.int8.onnx",
-            rel_dir: PARAFORMER_TRILINGUAL_DIR,
-            urls: &[
-                "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en/resolve/main/decoder.int8.onnx",
-                "https://hf-mirror.com/csukuangfj/sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en/resolve/main/decoder.int8.onnx",
-            ],
-            sha256: "545427acf508452b7d89969be082c8128c681e3432ff43aef09f6159f4b61a7e",
-            size: 72_062_549,
-        },
-        LocalModelFile {
-            file_name: "tokens.txt",
-            rel_dir: PARAFORMER_TRILINGUAL_DIR,
-            urls: &[
-                "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en/resolve/main/tokens.txt",
-                "https://hf-mirror.com/csukuangfj/sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en/resolve/main/tokens.txt",
-            ],
-            sha256: "45b31504211675dd52aa88f998a6f6161703a2834e86760c1cda645a22538085",
-            size: 81_289,
         },
     ]
 }

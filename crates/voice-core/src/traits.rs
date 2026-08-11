@@ -179,7 +179,7 @@ pub struct PolishResponse {
     pub latency_ms: u32,
 }
 
-/// 文本增强：润色 / 人设。与 [`AsrProvider`] 对称，可 mock。
+/// 文本增强：润色。与 [`AsrProvider`] 对称，可 mock。
 #[async_trait]
 pub trait TextPolishProvider: Send + Sync {
     async fn polish(&self, req: PolishRequest) -> Result<PolishResponse>;

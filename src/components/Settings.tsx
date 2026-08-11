@@ -294,12 +294,12 @@ export default function Settings() {
         <h2 className="card-title">AI 润色</h2>
         <div className="field">
           <label className="field-label">润色程度</label>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 6 }}>
+          <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
             {([
               {
                 v: "off",
                 t: "保持原样",
-                d: "不做 LLM 校对；本地规则（去口头禅/补标点/纠同音字）仍生效。",
+                d: "不做 LLM 校对，仅本地规则清理（去口头禅/补标点/纠同音字）。",
               },
               { v: "light", t: "中度润色", d: "本地规则 + LLM 仅校对（修 ASR 错，不改措辞）。" },
               {
@@ -307,29 +307,58 @@ export default function Settings() {
                 t: "高度润色",
                 d: "本地规则 + LLM 改写润色（通顺化、调整语序，保留原意）。",
               },
-            ] as const).map((opt) => (
-              <label
-                key={opt.v}
-                style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer" }}
-              >
-                <input
-                  type="radio"
-                  name="polish-mode"
-                  checked={(config.polish_mode ?? "off") === opt.v}
-                  onChange={() =>
+            ] as const).map((opt) => {
+              const selected = (config.polish_mode ?? "off") === opt.v;
+              return (
+                <div
+                  key={opt.v}
+                  onClick={() =>
                     setConfig({
                       ...config,
                       polish_mode: opt.v,
                       polish_enabled: opt.v !== "off",
                     })
                   }
-                />
-                <div>
-                  <div className="perm-name">{opt.t}</div>
-                  <div className="perm-desc">{opt.d}</div>
+                  style={{
+                    flex: 1,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                    padding: "14px 12px",
+                    borderRadius: 10,
+                    cursor: "pointer",
+                    border: selected
+                      ? "2px solid var(--accent)"
+                      : "1px solid var(--border)",
+                    background: selected ? "var(--accent-soft)" : "transparent",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span
+                      style={{
+                        width: 14,
+                        height: 14,
+                        borderRadius: "50%",
+                        border: selected
+                          ? "4px solid var(--accent)"
+                          : "2px solid var(--text-tertiary)",
+                        flexShrink: 0,
+                      }}
+                    />
+                    <strong style={{ fontSize: 14 }}>{opt.t}</strong>
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "var(--text-secondary)",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {opt.d}
+                  </div>
                 </div>
-              </label>
-            ))}
+              );
+            })}
           </div>
         </div>
 

@@ -40,9 +40,16 @@ impl TextInserter for EnigoInserter {
             .enigo
             .lock()
             .map_err(|e| Error::Insert(format!("enigo 锁中毒: {e}")))?;
-        enigo
-            .text(text)
-            .map_err(|e| Error::Insert(format!("键盘输入失败: {e}")))
+        match enigo.text(text) {
+            Ok(_) => {
+                tracing::info!("enigo.insert 成功：{} 字", text.chars().count());
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("enigo.insert 失败: {e}");
+                Err(Error::Insert(format!("键盘输入失败: {e}")))
+            }
+        }
     }
 }
 
