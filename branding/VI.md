@@ -45,15 +45,17 @@ openIME 标志由两部分组成：
 
 ### 2.3 菜单栏 Icon（template image）
 
-macOS 状态栏使用**单色 template image**（3 条粗竖条简化版），由系统随明暗模式自动反色。
+macOS 状态栏使用**单色 template image**（与 App Icon 同一套 **5 条对称声波**），由系统随明暗模式自动反色。
 
 ```
-规格：64×64（@2x，逻辑 32px）
+规格：64×64（@2x，逻辑 32px）；另有 32×32 @1x
 填充：纯黑 #000000 + 透明背景
-几何：3 条竖条，条宽 8，间距 4，高度 16/28/16，圆角 4
+几何：5 条竖条，高度比例 180/300/420/300/180（与 logo 一致）
+     内容约占画布 75%×78%（加大填充，避免状态栏里过小、失衡）
+     条宽约 6.7、间距约 3.5、圆角半宽（胶囊端）
 ```
 
-简化到 3 条是为了在 16px 状态栏尺寸下保持清晰。
+不再用 3 条简化版，以保证菜单栏与 App Icon / 侧栏 brand 一致。
 
 ### 2.4 Logo 源文件
 
@@ -148,7 +150,7 @@ macOS 状态栏使用**单色 template image**（3 条粗竖条简化版），�
 ## 7. 落地清单（已完成）
 
 - [x] App icon：1024 squircle + macOS iconset（16~1024 全尺寸）+ `.icns`
-- [x] 菜单栏 template icon：单色 3 竖条，`icon_as_template` 自动反色
+- [x] 菜单栏 template icon：单色 5 竖条（与 logo 一致，加大填充占比），`icon_as_template` 自动反色
 - [x] 侧栏 brand-logo：内联 SVG 声波 logo（替换原渐变方块+字母 o）
 - [x] 品牌主色统一：全 UI 强调色从苹果系统蓝 `#007aff` 改为粒蓝 `#3B4FE0`
 - [x] Rust 托盘：加载 template icon + `icon_as_template(true)` + 左键点菜单

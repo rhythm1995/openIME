@@ -87,10 +87,12 @@ pnpm build         # tsc + vite
 cargo run -p openime
 ```
 
-本地 sherpa 引擎（可选）：
+本地 sherpa 引擎（默认开启，与设置页「本地引擎推荐」一致）：
 
 ```bash
 cargo test -p voice-core --features sherpa
+# 打包：./scripts/build.sh   # 默认 WITH_SHERPA=1
+# 仅云端：WITH_SHERPA=0 ./scripts/build.sh
 ```
 
 ## 启动行为
@@ -100,42 +102,70 @@ cargo test -p voice-core --features sherpa
   `--autostart` 参数启动，应用静默常驻菜单栏、不弹面板。
 - 两种模式都会创建托盘（菜单栏）图标，随时可从托盘「设置/历史」打开面板。
 
-## macOS 权限与代码签名
+## macOS 权限与代码签名（已固定身份）
 
 应用需要两项系统权限：**辅助功能**（把识别文字输入到光标）与**麦克风**（采集语音）。
 
-关键点：macOS 按「代码签名指定要求」匹配授权。ad-hoc 签名每次构建的 cdhash 都变，
-会导致「系统设置里开关是开的，但应用查不到授权」。**`scripts/build.sh` 会自动选用
-钥匙串里可用的稳定签名身份**；若无则退回 ad-hoc（此时每次重装都要重新授权）。
+### 固定签名策略
 
-首次在本机构建可创建一个本地稳定签名身份（一次性）：
+macOS 按「代码签名指定要求」(designated requirement) 匹配授权：
+
+| 签名方式 | 指定要求 | 重编后授权 |
+|----------|----------|------------|
+| **ad-hoc（已禁止）** | `cdhash H"每次都变"` | 必丢 |
+| **openIME Local Dev（固定）** | `certificate root = H"<证书指纹>"` | 保持 |
+
+本仓库已写死身份名 **`openIME Local Dev`**：
+
+- `src-tauri/tauri.conf.json` → `bundle.macOS.signingIdentity`
+- `scripts/build.sh` 构建后强制 `codesign --deep` 再签一遍，并拒绝 ad-hoc
+- `scripts/ensure-signing-identity.sh` 本机没有证书时自动创建
+- `scripts/signing-identity.fingerprint` 记录期望指纹（公钥，可提交）
 
 ```bash
-# 生成自签名代码签名证书并导入登录钥匙串、信任用于代码签名
-openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 -nodes \
-  -subj "/CN=openIME Local Dev" -addext "extendedKeyUsage=codeSigning"
-openssl pkcs12 -export -legacy -out id.p12 -inkey key.pem -in cert.pem -passout pass:tmp123
-security import id.p12 -k ~/Library/Keychains/login.keychain-db -P tmp123 \
-  -T /usr/bin/codesign -T /usr/bin/security
-security add-trusted-cert -p codeSign -r trustRoot \
-  -k ~/Library/Keychains/login.keychain-db cert.pem
+# 一次性：确保本机有稳定证书（已有则跳过）
+pnpm sign:ensure
+# 或
+./scripts/ensure-signing-identity.sh
+
+# 日常打包 / 安装 / 运行（始终带固定签名）
+./scripts/build.sh            # 或 pnpm app:build
+./scripts/build.sh install    # 或 pnpm app:install → /Applications
+./scripts/build.sh run        # 或 pnpm app:run
+./scripts/build.sh resign     # 仅重签已有 .app，不重新编译
 ```
 
-授权状态异常时的排障：
+**请用上述脚本产出的 `.app` 做日常使用与授权**（`/Applications/openIME.app` 或
+`target/release/bundle/macos/openIME.app`）。`tauri dev` / 裸 `cargo run` 不走这套签名，
+辅助功能授权不稳定，调试权限时不要依赖它。
+
+### 首次授权（同一签名下只需一次）
+
+1. `./scripts/build.sh install` 装到 `/Applications`
+2. 打开 openIME → 设置 → 系统权限 → 授权麦克风 / 辅助功能  
+   （或在系统设置里勾选 **当前这份** openIME）
+3. 之后只要仍用 **同一本机证书** 打包安装，一般不必再授
+
+若系统里已有旧 openIME 条目但应用仍显示未授权：删掉旧条目再授权一次
+（旧 ad-hoc / 其它路径的条目对新签名无效）。
+
+### 排障
 
 ```bash
-# 清掉失效的旧授权条目，重新授权
+# 看签名是否固定身份（应为 Authority=openIME Local Dev，绝不能是 Signature=adhoc）
+codesign -dvvv /Applications/openIME.app 2>&1 | grep -E 'Authority|Signature|Identifier'
+codesign -d -r- /Applications/openIME.app 2>&1
+# 期望类似：designated => identifier "com.openime.desktop" and certificate root = H"51ab02..."
+
+# 清掉失效 TCC 后重授（慎用）
 tccutil reset Accessibility com.openime.desktop
 tccutil reset Microphone com.openime.desktop
-# 查看当前二进制的签名身份与指定要求
-codesign -dvvv /Applications/openIME.app 2>&1 | grep Identifier
-codesign -d -r- /Applications/openIME.app 2>&1   # ad-hoc 会显示 cdhash H"..."
 ```
 
 `Info.plist`（src-tauri/Info.plist，打包时合并）含 `NSMicrophoneUsageDescription`；
 缺少该键时系统不弹麦克风授权框。
 
-**注意：`bundle.macOS.hardenedRuntime` 必须为 `false`**。实测（macOS 26.5）：
+**注意：`bundle.macOS.hardenedRuntime` 必须为 `false`**。实测：
 自签证书 + hardened runtime 时，TCC 对麦克风请求**不弹授权框、直接拒绝**；
 关闭 hardened runtime 后弹窗正常。请求还必须在主线程发起（TCC 依赖运行循环弹窗），
 见 `request_microphone` 命令实现。
@@ -193,4 +223,5 @@ CI：GitHub Actions 三 job（core 三平台 × fmt+clippy+test / tauri-shell / 
 - ✅ **M4** model_mgr + sherpa provider（OnlineRecognizer + Silero VAD 推理，feature 门控）
 - ✅ **M5** enigo 文本插入 + pipeline 端到端
 - ✅ **M6** 悬浮窗 / 托盘 / 全局快捷键 / Onboarding / 历史详情
-- 🔜 **二期** AI 润色 / 人设 / 热词（personas/hotwords 表已预留）/ 本地小模型 / Windows 平台
+- 🚧 **二期** AI 润色（PreferLocal：Qwen2.5-1.5B GGUF / 百炼 chat）/ 人设 / 热词 · 见 `docs/phase2-local-llm-research.md`
+- 🔜 Windows 平台

@@ -1,12 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <!-- openIME Menu Bar Icon · template image (单色，macOS 状态栏用)
-       用法：作为 icon_as_template = true，macOS 自动随明暗模式反色。
+  <!-- openIME Menu Bar Icon · template image（单色，macOS 状态栏用）
+       用法：icon_as_template = true，系统随明暗模式自动反色。
        规格：64×64（@2x for 32px 逻辑）
-       设计：3 条粗竖条（中峰最高），纯黑填充+透明背景，确保 16px 清晰 -->
-  <!-- 3 条：条宽8 间距4 总宽32 居中起x=16；高 16/28/16；圆角4 -->
+       设计：与 App Icon 同一套 5 条对称声波（中峰最高），加大填充占比
+             避免状态栏里显得过小 / 与 logo 不一致。
+       几何：条宽 6.7、间距 3.5、高 21.3/34.3/50/34.3/21.3、圆角半宽（胶囊）
+             内容约 75%×78% 画布，上下左右留约 11–12% 安全边距 -->
   <g fill="#000000">
-    <rect x="16" y="24" width="8" height="16" rx="4"/>
-    <rect x="28" y="18" width="8" height="28" rx="4"/>
-    <rect x="40" y="24" width="8" height="16" rx="4"/>
+    <rect x="8.1"  y="21.35" width="6.72" height="21.34" rx="3.36"/>
+    <rect x="18.34" y="14.86" width="6.72" height="34.29" rx="3.36"/>
+    <rect x="28.58" y="7"     width="6.72" height="50"    rx="3.36"/>
+    <rect x="38.82" y="14.86" width="6.72" height="34.29" rx="3.36"/>
+    <rect x="49.06" y="21.35" width="6.72" height="21.34" rx="3.36"/>
   </g>
 </svg>

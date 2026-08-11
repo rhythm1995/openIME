@@ -9,7 +9,12 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint src --ext .ts,.tsx"
+    "lint": "eslint src --ext .ts,.tsx",
+    "sign:ensure": "./scripts/ensure-signing-identity.sh",
+    "app:build": "./scripts/build.sh",
+    "app:install": "./scripts/build.sh install",
+    "app:run": "./scripts/build.sh run",
+    "app:resign": "./scripts/build.sh resign"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
