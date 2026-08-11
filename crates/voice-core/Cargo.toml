@@ -10,6 +10,8 @@ description = "Cross-platform voice-input engine core (no Tauri dependency)"
 default = []
 # 本地 sherpa-onnx ASR（重型原生依赖，按需开启）。
 sherpa = ["dep:sherpa-onnx"]
+# 本地 GGUF 润色（llama.cpp，二期；编译较重）。
+llm = ["dep:llama-cpp-2"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -38,6 +40,8 @@ tar = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
 bytes = "1"
 sherpa-onnx = { version = "1.13", optional = true }
+# 本地 GGUF 推理（Qwen2.5-1.5B 等）；仅 llm feature。
+llama-cpp-2 = { version = "0.1", optional = true, default-features = true }
 
 [dev-dependencies]
 mockall = { workspace = true }

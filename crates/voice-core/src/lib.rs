@@ -11,7 +11,9 @@
 //! - [`providers::sherpa`]：本地 sherpa-onnx provider（M4）
 //! - [`insert`]：enigo 文本插入（M5）
 //! - [`pipeline`]：端到端编排（M5）
+//! - [`polish`]：二期文本润色（本地 GGUF / 云端 chat）
 
+pub mod asr_catalog;
 pub mod audio;
 pub mod bailian_proto;
 pub mod config;
@@ -20,25 +22,38 @@ pub mod model_download;
 pub mod model_mgr;
 pub mod permissions;
 pub mod pipeline;
+pub mod polish;
 pub mod providers;
 pub mod store;
 pub mod traits;
 
-pub use config::{AppConfig, ProviderConfig, ProviderKind};
+pub use asr_catalog::{
+    asr_model_by_id, asr_model_catalog, asr_model_files, default_asr_model_id,
+    is_asr_model_installed, AsrBackend, AsrModelInfo, ASR_MODEL_FIRERED_LARGE,
+    ASR_MODEL_SENSEVOICE, ASR_MODEL_ZIPFORMER_ZH_2025, ASR_MODEL_ZIPFORMER_ZH_XLARGE,
+    FIRERED_LARGE_DIR, ZIPFORMER_ZH_2025_DIR, ZIPFORMER_ZH_XLARGE_DIR,
+};
+pub use config::{AppConfig, PolishPolicy, ProviderConfig, ProviderKind, POLISH_DEFAULT_LOCAL_MODEL};
 pub use insert::EnigoInserter;
 pub use model_download::{
-    install_local_engine, is_local_engine_installed, is_local_engine_installed_for,
-    local_model_files, local_model_files_for, missing_files, missing_files_for, DownloadProgress,
+    install_local_engine, install_polish_model, is_local_engine_installed,
+    is_local_engine_installed_for, is_polish_model_installed, local_model_files,
+    local_model_files_for, missing_files, missing_files_for, normalize_asr_model_id,
+    polish_model_path, DownloadProgress, LLM_DIR, POLISH_GGUF_FILE, POLISH_MODEL_ID,
     SENSEVOICE_MODEL_NAME, SHERPA_MODEL_NAME, VAD_DIR,
 };
 pub use model_mgr::ModelManager;
+pub use polish::{
+    BailianChatPolish, LocalGgufPolish, PolishRouter, PolishRouterConfig,
+};
 pub use providers::bailian::test_connection;
 pub use providers::sherpa::{SherpaModelPaths, SherpaProvider};
 pub use providers::RoutingProvider;
-pub use store::{Hotword, SqliteStore};
+pub use store::{Hotword, Persona, SqliteStore};
 pub use traits::{
-    AsrProvider, AsrSession, AudioFormat, AudioFrame, AudioSource, HistoryStore, SessionSummary,
-    TextInserter, TranscriptDelta, TranscriptKind, UtteranceRecord,
+    AsrProvider, AsrSession, AudioFormat, AudioFrame, AudioSource, HistoryStore, PolishMode,
+    PolishRequest, PolishResponse, SessionSummary, TextInserter, TextPolishProvider,
+    TranscriptDelta, TranscriptKind, UtteranceRecord,
 };
 
 use thiserror::Error;
@@ -62,6 +77,8 @@ pub enum Error {
     Permission(String),
     #[error("文本插入失败: {0}")]
     Insert(String),
+    #[error("文本润色错误: {0}")]
+    Polish(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

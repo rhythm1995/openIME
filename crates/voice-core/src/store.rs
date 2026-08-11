@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
+use serde::{Deserialize, Serialize};
 
 use crate::traits::{HistoryStore, SessionSummary, UtteranceRecord};
 use crate::{Error, Result};
@@ -356,6 +357,112 @@ impl SqliteStore {
         }
         Ok(out)
     }
+
+    // ── 二期：人设 ──
+
+    pub fn list_personas(&self) -> Result<Vec<Persona>> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, prompt, is_builtin, ord, hidden FROM personas \
+                 WHERE hidden = 0 ORDER BY ord ASC, rowid ASC",
+            )
+            .map_err(|e| Error::Store(format!("list_personas prepare 失败: {e}")))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(Persona {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    prompt: r.get(2)?,
+                    is_builtin: r.get::<_, i32>(3)? != 0,
+                    ord: r.get(4)?,
+                    hidden: r.get::<_, i32>(5)? != 0,
+                })
+            })
+            .map_err(|e| Error::Store(format!("list_personas query 失败: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| Error::Store(format!("读取人设行失败: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    pub fn upsert_persona(&self, p: &Persona) -> Result<()> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO personas(id, name, prompt, is_builtin, ord, hidden) VALUES(?,?,?,?,?,?) \
+             ON CONFLICT(id) DO UPDATE SET \
+               name=excluded.name, prompt=excluded.prompt, \
+               is_builtin=excluded.is_builtin, ord=excluded.ord, hidden=excluded.hidden",
+            params![
+                p.id,
+                p.name,
+                p.prompt,
+                if p.is_builtin { 1 } else { 0 },
+                p.ord,
+                if p.hidden { 1 } else { 0 },
+            ],
+        )
+        .map_err(|e| Error::Store(format!("upsert_persona 失败: {e}")))?;
+        Ok(())
+    }
+
+    pub fn delete_persona(&self, id: &str) -> Result<()> {
+        let conn = self.conn()?;
+        conn.execute("DELETE FROM personas WHERE id=? AND is_builtin=0", [id])
+            .map_err(|e| Error::Store(format!("delete_persona 失败: {e}")))?;
+        Ok(())
+    }
+
+    /// 写入内置人设（仅当表中无该 id 时）。
+    pub fn seed_builtin_personas_if_empty(&self) -> Result<()> {
+        let existing = self.list_personas()?;
+        if !existing.is_empty() {
+            return Ok(());
+        }
+        let builtins = [
+            (
+                "builtin-formal",
+                "正式",
+                "请用正式、简洁的书面语改写，适合工作消息。",
+                0,
+            ),
+            (
+                "builtin-casual",
+                "口语",
+                "请保持口语自然，略作通顺即可，不要过于书面。",
+                1,
+            ),
+            (
+                "builtin-email",
+                "邮件",
+                "请改写成适合中文商务邮件正文的语气，礼貌但不冗长。",
+                2,
+            ),
+        ];
+        for (id, name, prompt, ord) in builtins {
+            self.upsert_persona(&Persona {
+                id: id.into(),
+                name: name.into(),
+                prompt: prompt.into(),
+                is_builtin: true,
+                ord,
+                hidden: false,
+            })?;
+        }
+        Ok(())
+    }
+}
+
+/// 二期人设。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Persona {
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
+    pub is_builtin: bool,
+    pub ord: i32,
+    pub hidden: bool,
 }
 
 #[cfg(test)]

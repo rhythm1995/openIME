@@ -144,6 +144,49 @@ pub trait TextInserter: Send + Sync {
     async fn insert(&self, text: &str) -> Result<()>;
 }
 
+// ───────────────────────── 文本润色（二期） ─────────────────────────
+
+/// 润色强度 / 模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PolishMode {
+    /// 不做任何处理（直通）。
+    #[default]
+    Off,
+    /// 轻量：去口头禅、补标点、纠明显 ASR 错、不改语气。
+    Light,
+    /// 人设改写：叠加 persona_prompt。
+    Persona,
+}
+
+/// 一次润色请求（通常对应一条 ASR final）。
+#[derive(Debug, Clone)]
+pub struct PolishRequest {
+    pub text: String,
+    pub mode: PolishMode,
+    /// 人设 system 附加指令（Persona 模式）。
+    pub persona_prompt: Option<String>,
+    /// 热词：提示模型保留写法。
+    pub hotwords: Vec<String>,
+    /// 超时；超时后 router 可回退原文/云端。
+    pub timeout: std::time::Duration,
+}
+
+/// 润色结果。
+#[derive(Debug, Clone)]
+pub struct PolishResponse {
+    pub text: String,
+    /// 实际生效的实现：passthrough / local-gguf / bailian-chat 等。
+    pub provider: String,
+    pub latency_ms: u32,
+}
+
+/// 文本增强：润色 / 人设。与 [`AsrProvider`] 对称，可 mock。
+#[async_trait]
+pub trait TextPolishProvider: Send + Sync {
+    async fn polish(&self, req: PolishRequest) -> Result<PolishResponse>;
+}
+
 // ───────────────────────── 历史存储 ─────────────────────────
 
 /// 一条录音（utterance）。一次会话可含多条。

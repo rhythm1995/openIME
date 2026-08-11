@@ -67,6 +67,23 @@ impl ProviderConfig {
     }
 }
 
+/// 二期文本润色路由策略（与 ASR PreferLocal 对称）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PolishPolicy {
+    /// 优先本地 GGUF，失败/未装可回退云端（若已配 key）。
+    #[default]
+    PreferLocal,
+    /// 优先云端 chat。
+    PreferCloud,
+    /// 仅本地。
+    LocalOnly,
+    /// 仅云端。
+    CloudOnly,
+    /// 强制关闭润色（等同 polish_enabled=false）。
+    Off,
+}
+
 /// 应用级配置。持久化到 settings 表 / 配置文件。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -82,18 +99,56 @@ pub struct AppConfig {
     /// 开机自启（macOS Login Items）。开机自启时应用静默常驻菜单栏，不弹面板。
     #[serde(default)]
     pub launch_at_login: bool,
-    /// 本地引擎模式："offline"（Fn按下录音、松开后整段解码，精度高）
-    /// 或 "realtime"（流式实时转写）。默认 offline。
+    /// 本地引擎模式（兼容旧配置）："offline" / "realtime"。
+    /// 新逻辑以 `local_asr_model` 为准；保存时会与之同步。
     #[serde(default = "default_local_mode")]
     pub local_mode: String,
+    /// 当前启用的本地 ASR 模型 id：`zipformer-zh-2025` | `sensevoice`。
+    #[serde(default = "default_local_asr_model")]
+    pub local_asr_model: String,
     /// 麦克风设备名（None/空 = 系统默认输入设备）。
     #[serde(default)]
     pub audio_device: Option<String>,
+
+    // ── 二期：AI 润色 ──
+    /// 总开关。默认 false：渐进开启，避免首启强制下 1GB 模型。
+    #[serde(default)]
+    pub polish_enabled: bool,
+    /// 本地/云端路由策略。默认 PreferLocal。
+    #[serde(default)]
+    pub polish_policy: PolishPolicy,
+    /// 本地 GGUF 模型 id（目录/文件约定，见 model_download）。
+    #[serde(default = "default_polish_local_model")]
+    pub polish_local_model: String,
+    /// 云端 chat 模型名（百炼 OpenAI 兼容），如 qwen-turbo。
+    #[serde(default = "default_polish_cloud_model")]
+    pub polish_cloud_model: String,
+    /// 当前人设 id（None = 仅 Light 润色）。
+    #[serde(default)]
+    pub active_persona_id: Option<String>,
+    /// 单次润色超时（毫秒）。
+    #[serde(default = "default_polish_timeout_ms")]
+    pub polish_timeout_ms: u32,
 }
 
 fn default_local_mode() -> String {
     "offline".to_string()
 }
+fn default_local_asr_model() -> String {
+    crate::asr_catalog::default_asr_model_id().to_string()
+}
+fn default_polish_local_model() -> String {
+    POLISH_DEFAULT_LOCAL_MODEL.to_string()
+}
+fn default_polish_cloud_model() -> String {
+    "qwen-turbo".to_string()
+}
+fn default_polish_timeout_ms() -> u32 {
+    800
+}
+
+/// 默认本地润色模型（Qwen2.5-1.5B-Instruct GGUF Q4_K_M）。
+pub const POLISH_DEFAULT_LOCAL_MODEL: &str = "qwen2.5-1.5b-instruct-q4_k_m";
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -109,14 +164,22 @@ impl Default for AppConfig {
             hotkey: "Fn".to_string(),
             mute_other_audio: false,
             launch_at_login: false,
-            local_mode: "offline".to_string(),
+            // local_mode 与默认 ASR（Zipformer 流式）对齐；新逻辑以 local_asr_model 为准。
+            local_mode: "realtime".to_string(),
+            local_asr_model: crate::asr_catalog::default_asr_model_id().to_string(),
             audio_device: None,
+            polish_enabled: false,
+            polish_policy: PolishPolicy::PreferLocal,
+            polish_local_model: POLISH_DEFAULT_LOCAL_MODEL.to_string(),
+            polish_cloud_model: "qwen-turbo".to_string(),
+            active_persona_id: None,
+            polish_timeout_ms: 800,
         }
     }
 }
 
-/// sherpa 默认模型目录名（与 model_download 的 SHERPA_MODEL_NAME 对齐）。
-const SHERPA_DEFAULT_MODEL: &str = "sherpa-onnx-streaming-paraformer-bilingual-zh-en";
+/// sherpa 默认：与 default_asr_model_id 对齐。
+const SHERPA_DEFAULT_MODEL: &str = "sensevoice";
 
 impl AppConfig {
     /// 取当前激活的 provider。
@@ -127,6 +190,34 @@ impl AppConfig {
                 self.active_provider
             ))
         })
+    }
+
+    /// 当前启用的本地 ASR 模型 id（规范化）。
+    pub fn resolved_local_asr_model(&self) -> String {
+        let raw = if self.local_asr_model.trim().is_empty() {
+            // 兼容仅写了 local_mode 的旧配置
+            self.local_mode.as_str()
+        } else {
+            self.local_asr_model.as_str()
+        };
+        crate::model_download::normalize_asr_model_id(raw).to_string()
+    }
+
+    /// 规范化 local_asr_model，并同步 local_mode / sherpa provider.model。
+    pub fn sync_local_asr_fields(&mut self) {
+        let id = self.resolved_local_asr_model();
+        self.local_asr_model = id.clone();
+        // 兼容旧字段：离线整段 ≈ offline，流式 ≈ realtime。
+        self.local_mode = match id.as_str() {
+            crate::asr_catalog::ASR_MODEL_SENSEVOICE
+            | crate::asr_catalog::ASR_MODEL_FIRERED_LARGE => "offline".to_string(),
+            _ => "realtime".to_string(),
+        };
+        if let Some(p) = self.providers.get_mut(self.active_provider) {
+            if p.kind == ProviderKind::Sherpa {
+                p.model = id;
+            }
+        }
     }
 }
 
@@ -174,7 +265,10 @@ mod tests {
         assert_eq!(c.providers.len(), 1);
         assert_eq!(c.active().unwrap().kind, ProviderKind::Sherpa);
         assert!(!c.launch_at_login);
-        assert_eq!(c.local_mode, "offline");
+        assert_eq!(
+            c.resolved_local_asr_model(),
+            crate::asr_catalog::ASR_MODEL_SENSEVOICE
+        );
     }
 
     #[test]

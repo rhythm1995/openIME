@@ -25,6 +25,21 @@ pub const SENSEVOICE_MODEL_NAME: &str = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue
 /// VAD 文件相对 model_root 的子目录。
 pub const VAD_DIR: &str = "vad";
 
+/// 二期本地润色 GGUF 子目录（相对 model_root）。
+pub const LLM_DIR: &str = "llm";
+
+/// 默认本地润色模型文件名（Qwen2.5-1.5B-Instruct Q4_K_M）。
+pub const POLISH_GGUF_FILE: &str = "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf";
+
+/// 与 AppConfig.polish_local_model 对齐的模型 id。
+pub const POLISH_MODEL_ID: &str = "qwen2.5-1.5b-instruct-q4_k_m";
+
+// 润色 GGUF：bartowski 量化（与官方 Qwen GGUF 等价 Q4_K_M）。
+const URL_POLISH_GGUF_HF: &str =
+    "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf";
+const URL_POLISH_GGUF_MIRROR: &str =
+    "https://hf-mirror.com/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf";
+
 // 流式 Paraformer 下载源。
 const URL_ENC_HF: &str = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/resolve/main/encoder.int8.onnx";
 const URL_ENC_MIRROR: &str = "https://hf-mirror.com/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/resolve/main/encoder.int8.onnx";
@@ -66,93 +81,133 @@ impl LocalModelFile {
             .join(format!("{}.part", self.file_name))
     }
 
-    /// 已安装且校验通过。
+    /// 是否视为已安装（**仅检查存在 + 大小**）。
+    ///
+    /// 打开设置页会频繁调用（每个候选模型一次）；若每次流式算 SHA256，
+    /// 会对 200MB～1GB+ 文件扫盘，造成「进主页面卡顿一小段」。
+    /// 完整 SHA256 只在**下载落盘后**做（见 download_one）；此处用大小判定即可。
+    ///
+    /// 注意：size 是硬编码的，上游文件更新后可能过期 → 此时返回 false（误判未装）。
+    /// 想避免「size 过期导致死循环下载」应改用 [`Self::is_installed_lenient`]。
     pub fn is_installed(&self, model_root: &Path) -> bool {
         let dest = self.dest(model_root);
         if !dest.is_file() {
             return false;
         }
-        match std::fs::read(&dest) {
-            Ok(bytes) => crate::model_mgr::verify_sha256(&bytes, self.sha256),
+        match std::fs::metadata(&dest) {
+            Ok(meta) => meta.len() == self.size,
             Err(_) => false,
         }
+    }
+
+    /// 宽松安装判定：size 匹配 **或** SHA256 匹配即视为已装。
+    ///
+    /// 比 [`Self::is_installed`] 慢（size 不匹配时要扫盘算 SHA256），只在**非热路径**
+    /// （判定缺失文件、跳过下载、安装状态查询）用；设置页候选列表仍用快版 `is_installed`
+    /// 做 badge 初判，偶发误判为未装也只是让用户多点一次「下载」，进入安装流程后
+    /// 此处会发现其实已装 → 秒过，不会再触发死循环。
+    ///
+    /// 修复场景：上游文件更新（size 变、SHA256 不变）时，快版会永远判为未装 → 反复下载；
+    /// lenient 版靠 SHA256 兜底认出已装文件，打破死循环。
+    pub fn is_installed_lenient(&self, model_root: &Path) -> bool {
+        if self.is_installed(model_root) {
+            return true;
+        }
+        let dest = self.dest(model_root);
+        if !dest.is_file() || self.sha256.is_empty() {
+            return false;
+        }
+        crate::model_mgr::verify_sha256_file(&dest, self.sha256)
+    }
+
+    /// 已安装且流式 SHA256 通过（仅用于下载后校验或诊断，勿在 UI 列表热路径调用）。
+    pub fn is_installed_verified(&self, model_root: &Path) -> bool {
+        if !self.is_installed(model_root) {
+            return false;
+        }
+        if self.sha256.is_empty() {
+            return true;
+        }
+        crate::model_mgr::verify_sha256_file(&self.dest(model_root), self.sha256)
     }
 }
 
 /// 本地引擎所需全部文件。
-/// `mode` = "offline" 时下载 SenseVoice 离线模型 + VAD；
-/// `mode` = "realtime" 时下载流式 Paraformer + VAD。
+///
+/// 优先走 ASR 目录 id（`sensevoice` / `zipformer-zh-2025` 及兼容别名 offline/realtime）；
+/// 未知 id 时回退旧 Paraformer 列表（仅兼容历史测试）。
 pub fn local_model_files_for(mode: &str) -> Vec<LocalModelFile> {
-    let mut files = Vec::new();
-    if mode == "offline" {
-        // SenseVoice 离线模型（中英日韩粤）。
-        files.push(LocalModelFile {
-            file_name: "model.int8.onnx",
-            rel_dir: SENSEVOICE_MODEL_NAME,
-            urls: &[URL_SV_MODEL_HF, URL_SV_MODEL_MIRROR],
-            sha256: "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
-            size: 239_233_841,
-        });
-        files.push(LocalModelFile {
-            file_name: "tokens.txt",
-            rel_dir: SENSEVOICE_MODEL_NAME,
-            urls: &[URL_SV_TOK_HF, URL_SV_TOK_MIRROR],
-            sha256: "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
-            size: 315_894,
-        });
-    } else {
-        // 流式 Paraformer（中英）。
-        files.push(LocalModelFile {
+    let id = normalize_asr_model_id(mode);
+    let catalog = crate::asr_catalog::asr_model_files(id);
+    if !catalog.is_empty() {
+        return catalog;
+    }
+    // 旧流式 Paraformer 回退（非当前 UI 候选）。
+    vec![
+        LocalModelFile {
             file_name: "encoder.int8.onnx",
             rel_dir: SHERPA_MODEL_NAME,
             urls: &[URL_ENC_HF, URL_ENC_MIRROR],
             sha256: "81a70226a8934e6ed92aa1d4fc486b428b5398e2f2619ed4897b7294cab90e9a",
             size: 165_462_184,
-        });
-        files.push(LocalModelFile {
+        },
+        LocalModelFile {
             file_name: "decoder.int8.onnx",
             rel_dir: SHERPA_MODEL_NAME,
             urls: &[URL_DEC_HF, URL_DEC_MIRROR],
             sha256: "f3cca9f77bb9d93c8fcbfb63ae617b6b1ee96818df3aa3b151c40658fe38594f",
             size: 71_664_561,
-        });
-        files.push(LocalModelFile {
+        },
+        LocalModelFile {
             file_name: "tokens.txt",
             rel_dir: SHERPA_MODEL_NAME,
             urls: &[URL_TOK_HF, URL_TOK_MIRROR],
             sha256: "59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6",
             size: 75_756,
-        });
-    }
-    // VAD（两种模式都需要）。
-    files.push(LocalModelFile {
-        file_name: "silero_vad.onnx",
-        rel_dir: VAD_DIR,
-        urls: &[URL_VAD_HF, URL_VAD_MIRROR],
-        sha256: "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28",
-        size: 643_854,
-    });
-    files
+        },
+        LocalModelFile {
+            file_name: "silero_vad.onnx",
+            rel_dir: VAD_DIR,
+            urls: &[URL_VAD_HF, URL_VAD_MIRROR],
+            sha256: "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28",
+            // 与 asr_catalog::vad_file() 保持一致（HF 上游已更新到 1.8MB）。
+            size: 1_807_522,
+        },
+    ]
 }
 
-/// 向后兼容：默认返回 offline 模式文件（含流式 + 离线 + VAD）。
+/// 向后兼容：返回目录中全部候选模型文件（去重 VAD）。
 pub fn local_model_files() -> Vec<LocalModelFile> {
-    // 返回全部可能用到的文件（流式 + 离线 + VAD），确保两种模式都能工作。
-    let mut files = local_model_files_for("offline");
-    files.extend(
-        local_model_files_for("realtime")
-            .into_iter()
-            .filter(|f| f.rel_dir == SHERPA_MODEL_NAME),
-    );
+    let mut files = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for m in crate::asr_catalog::asr_model_catalog() {
+        for f in crate::asr_catalog::asr_model_files(m.id) {
+            let key = format!("{}/{}", f.rel_dir, f.file_name);
+            if seen.insert(key) {
+                files.push(f);
+            }
+        }
+    }
     files
 }
 
 /// 尚未安装（或缺失/校验失败）的文件。空 = 本地引擎就绪。
-/// `mode` = "offline"/"realtime" 决定检查哪套模型。
+/// `mode` 兼容：offline/realtime 或 model id（sensevoice / zipformer-zh-2025）。
+///
+/// 用 lenient 判定（size 或 SHA256 任一匹配即算已装），避免上游文件更新、
+/// 硬编码 size 过期导致永远判为缺失 → 死循环下载。
 pub fn missing_files_for(model_root: &Path, mode: &str) -> Vec<LocalModelFile> {
+    let id = normalize_asr_model_id(mode);
+    let files = crate::asr_catalog::asr_model_files(id);
+    if !files.is_empty() {
+        return files
+            .into_iter()
+            .filter(|f| !f.is_installed_lenient(model_root))
+            .collect();
+    }
     local_model_files_for(mode)
         .into_iter()
-        .filter(|f| !f.is_installed(model_root))
+        .filter(|f| !f.is_installed_lenient(model_root))
         .collect()
 }
 
@@ -160,18 +215,64 @@ pub fn missing_files_for(model_root: &Path, mode: &str) -> Vec<LocalModelFile> {
 pub fn missing_files(model_root: &Path) -> Vec<LocalModelFile> {
     local_model_files()
         .into_iter()
-        .filter(|f| !f.is_installed(model_root))
+        .filter(|f| !f.is_installed_lenient(model_root))
         .collect()
 }
 
-/// 本地引擎（指定模式）是否已就绪。
+/// 本地引擎（指定模式/模型 id）是否已就绪。
 pub fn is_local_engine_installed_for(model_root: &Path, mode: &str) -> bool {
     missing_files_for(model_root, mode).is_empty()
+}
+
+/// 按 catalog id 取安装文件列表（含 VAD）。
+pub fn local_model_files_for_id(model_id: &str) -> Vec<LocalModelFile> {
+    crate::asr_catalog::asr_model_files(normalize_asr_model_id(model_id))
 }
 
 /// 向后兼容：全部文件就绪。
 pub fn is_local_engine_installed(model_root: &Path) -> bool {
     missing_files(model_root).is_empty()
+}
+
+// ──────────────── 二期：本地润色 GGUF ────────────────
+
+/// 本地润色模型文件清单（当前仅默认 Qwen2.5-1.5B Q4_K_M）。
+pub fn polish_model_files() -> Vec<LocalModelFile> {
+    vec![LocalModelFile {
+        file_name: POLISH_GGUF_FILE,
+        rel_dir: LLM_DIR,
+        urls: &[URL_POLISH_GGUF_HF, URL_POLISH_GGUF_MIRROR],
+        // LFS oid sha256 from HF pointer
+        sha256: "1adf0b11065d8ad2e8123ea110d1ec956dab4ab038eab665614adba04b6c3370",
+        size: 986_048_768,
+    }]
+}
+
+/// 润色 GGUF 安装路径。
+pub fn polish_model_path(model_root: &Path) -> PathBuf {
+    model_root.join(LLM_DIR).join(POLISH_GGUF_FILE)
+}
+
+/// 本地润色模型是否已安装且校验通过。
+pub fn is_polish_model_installed(model_root: &Path) -> bool {
+    polish_model_files()
+        .into_iter()
+        .all(|f| f.is_installed_lenient(model_root))
+}
+
+/// 下载/安装本地润色 GGUF（进度回调与 ASR 模型相同）。
+pub async fn install_polish_model(
+    model_root: &Path,
+    on_progress: &(impl Fn(DownloadProgress) + Send + Sync),
+) -> crate::Result<()> {
+    // 进度挂到设置页「润色」卡片。
+    install_file_list(
+        model_root,
+        &polish_model_files(),
+        "本地润色模型安装完成",
+        &|p| on_progress(p.with_target("polish")),
+    )
+    .await
 }
 
 /// 下载进度快照（序列化后推给前端）。
@@ -188,6 +289,17 @@ pub struct DownloadProgress {
     pub total_size: u64,
     pub speed_bps: u64,
     pub message: String,
+    /// 设置页卡片 id：ASR 模型 id 或 `polish`，用于进度条挂到对应卡片。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<String>,
+}
+
+impl DownloadProgress {
+    /// 给进度打上 target_id（回调包装用）。
+    pub fn with_target(mut self, id: impl Into<String>) -> Self {
+        self.target_id = Some(id.into());
+        self
+    }
 }
 
 /// 构造下载用 HTTP 客户端。
@@ -202,29 +314,63 @@ fn http_client() -> crate::Result<reqwest::Client> {
 
 /// 安装本地引擎：下载全部缺失文件（已装且校验通过的跳过）。
 ///
-/// - 断点续传：.part 文件存在时以 Range 请求续传（源不支持则整文件重下）。
-/// - 校验：SHA256 不符则删除文件并报错。
-/// - 故障切换：单 URL 失败自动尝试下一个候选源。
+/// - `model_id`：目录 id，如 `sensevoice` / `zipformer-zh-2025`；
+///   兼容旧值 `offline`→sensevoice、`realtime`→zipformer-zh-2025。
+/// - 断点续传 / SHA256 / 多源故障切换同前。
 pub async fn install_local_engine(
     model_root: &Path,
-    mode: &str,
+    model_id: &str,
     on_progress: &(impl Fn(DownloadProgress) + Send + Sync),
 ) -> crate::Result<()> {
-    let files = local_model_files_for(mode);
+    let id = normalize_asr_model_id(model_id);
+    let files = crate::asr_catalog::asr_model_files(id);
+    if files.is_empty() {
+        return Err(Error::Config(format!("未知本地 ASR 模型 id：{model_id}")));
+    }
+    let id_owned = id.to_string();
+    install_file_list(
+        model_root,
+        &files,
+        "本地 ASR 模型安装完成",
+        &|p| on_progress(p.with_target(&id_owned)),
+    )
+    .await
+}
+
+/// 兼容旧 mode 字符串与新 model id。
+pub fn normalize_asr_model_id(id_or_mode: &str) -> &str {
+    match id_or_mode {
+        "offline" | "sensevoice" => crate::asr_catalog::ASR_MODEL_SENSEVOICE,
+        "realtime" | "zipformer-zh-2025" | "zipformer" => {
+            crate::asr_catalog::ASR_MODEL_ZIPFORMER_ZH_2025
+        }
+        "zipformer-zh-xlarge" | "zipformer-xlarge" | "xlarge" => {
+            crate::asr_catalog::ASR_MODEL_ZIPFORMER_ZH_XLARGE
+        }
+        "firered-large" | "firered" | "fire-red" | "fire_red_asr" => {
+            crate::asr_catalog::ASR_MODEL_FIRERED_LARGE
+        }
+        other => other,
+    }
+}
+
+async fn install_file_list(
+    model_root: &Path,
+    files: &[LocalModelFile],
+    done_msg: &str,
+    on_progress: &(impl Fn(DownloadProgress) + Send + Sync),
+) -> crate::Result<()> {
     let file_count = files.len();
     let total_size: u64 = files.iter().map(|f| f.size).sum::<u64>().max(1);
-
-    // 已装文件计入"已下载"，进度从真实基线开始。
     let mut total_downloaded: u64 = files
         .iter()
-        .filter(|f| f.is_installed(model_root))
+        .filter(|f| f.is_installed_lenient(model_root))
         .map(|f| f.size)
         .sum();
-
     let client = http_client()?;
 
     for (i, file) in files.iter().enumerate() {
-        if file.is_installed(model_root) {
+        if file.is_installed_lenient(model_root) {
             on_progress(DownloadProgress {
                 phase: "downloading",
                 file_index: i,
@@ -236,6 +382,7 @@ pub async fn install_local_engine(
                 total_size,
                 speed_bps: 0,
                 message: format!("{} 已安装，跳过", file.file_name),
+            target_id: None,
             });
             continue;
         }
@@ -262,7 +409,8 @@ pub async fn install_local_engine(
         total_downloaded,
         total_size,
         speed_bps: 0,
-        message: "本地模型安装完成".to_string(),
+        message: done_msg.to_string(),
+    target_id: None,
     });
     Ok(())
 }
@@ -314,11 +462,21 @@ async fn download_one(
                     total_size,
                     speed_bps: 0,
                     message: format!("正在校验 {}", file.file_name),
+                target_id: None,
                 });
-                let bytes = tokio::fs::read(&part)
+                // 大文件用流式校验，避免 1GB+ 模型整读内存。
+                let ok = if file.sha256.is_empty() {
+                    true
+                } else {
+                    tokio::task::spawn_blocking({
+                        let part = part.clone();
+                        let sha = file.sha256;
+                        move || crate::model_mgr::verify_sha256_file(&part, sha)
+                    })
                     .await
-                    .map_err(|e| Error::Io(format!("读取下载文件失败: {e}")))?;
-                if !crate::model_mgr::verify_sha256(&bytes, file.sha256) {
+                    .unwrap_or(false)
+                };
+                if !ok {
                     let _ = tokio::fs::remove_file(&part).await;
                     last_err = format!("{} SHA256 校验失败", file.file_name);
                     continue;
@@ -419,6 +577,7 @@ async fn download_from_url(
                 total_size,
                 speed_bps: speed,
                 message: format!("正在下载 {}", file.file_name),
+            target_id: None,
             });
         }
     }
@@ -439,13 +598,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_has_four_files() {
-        // local_model_files() 返回 offline(3) + realtime(3) + VAD(1) = 7
+    fn manifest_has_catalog_files() {
+        // sensevoice + zipformer + 共享 VAD
         let files = local_model_files();
-        assert!(files.len() >= 4);
+        assert!(files.len() >= 7);
         let names: Vec<_> = files.iter().map(|f| f.file_name).collect();
         assert!(names.contains(&"encoder.int8.onnx"));
-        assert!(names.contains(&"decoder.int8.onnx"));
+        assert!(names.contains(&"decoder.onnx"));
+        assert!(names.contains(&"joiner.int8.onnx"));
         assert!(names.contains(&"model.int8.onnx"));
         assert!(names.contains(&"tokens.txt"));
         assert!(names.contains(&"silero_vad.onnx"));
@@ -461,18 +621,21 @@ mod tests {
     }
 
     #[test]
-    fn realtime_mode_has_four_files() {
+    fn zipformer_mode_has_five_files() {
+        // realtime 兼容别名 → zipformer-zh-2025：encoder + decoder + joiner + tokens + vad
         let files = local_model_files_for("realtime");
-        assert_eq!(files.len(), 4); // encoder + decoder + tokens + silero_vad
+        assert_eq!(files.len(), 5);
         let names: Vec<_> = files.iter().map(|f| f.file_name).collect();
         assert!(names.contains(&"encoder.int8.onnx"));
-        assert!(names.contains(&"decoder.int8.onnx"));
+        assert!(names.contains(&"decoder.onnx"));
+        assert!(names.contains(&"joiner.int8.onnx"));
+        assert!(names.contains(&"silero_vad.onnx"));
     }
 
     #[test]
     fn dest_paths_match_provider_layout() {
         let root = PathBuf::from("/data/models");
-        let files = local_model_files();
+        let files = local_model_files_for("zipformer-zh-2025");
         let enc = files
             .iter()
             .find(|f| f.file_name == "encoder.int8.onnx")
@@ -480,7 +643,8 @@ mod tests {
         assert_eq!(
             enc.dest(&root),
             PathBuf::from(format!(
-                "/data/models/{SHERPA_MODEL_NAME}/encoder.int8.onnx"
+                "/data/models/{}/encoder.int8.onnx",
+                crate::asr_catalog::ZIPFORMER_ZH_2025_DIR
             ))
         );
         let vad = files
@@ -499,9 +663,11 @@ mod tests {
         let n = missing_files(dir.path()).len();
         assert!(n >= 4, "expected >= 4 missing, got {n}");
         assert!(!is_local_engine_installed(dir.path()));
-        // 按模式查
+        // 按模型 id / 兼容 mode 查
         assert_eq!(missing_files_for(dir.path(), "offline").len(), 3);
-        assert_eq!(missing_files_for(dir.path(), "realtime").len(), 4);
+        assert_eq!(missing_files_for(dir.path(), "sensevoice").len(), 3);
+        assert_eq!(missing_files_for(dir.path(), "realtime").len(), 5);
+        assert_eq!(missing_files_for(dir.path(), "zipformer-zh-2025").len(), 5);
     }
 
     #[test]

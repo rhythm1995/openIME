@@ -15,8 +15,8 @@ use futures::StreamExt;
 use uuid::Uuid;
 
 use crate::traits::{
-    AsrProvider, AudioSource, HistoryStore, SessionSummary, TextInserter, TranscriptKind,
-    UtteranceRecord,
+    AsrProvider, AudioSource, HistoryStore, PolishMode, PolishRequest, SessionSummary,
+    TextInserter, TextPolishProvider, TranscriptKind, UtteranceRecord,
 };
 use crate::Error;
 
@@ -25,6 +25,18 @@ pub struct PipelineDeps {
     pub provider: Arc<dyn AsrProvider>,
     pub inserter: Arc<dyn TextInserter>,
     pub store: Arc<dyn HistoryStore>,
+    /// 二期润色；None 则直通原文。
+    pub polish: Option<Arc<dyn TextPolishProvider>>,
+}
+
+/// 润色上下文（录音结束插入前使用）。
+#[derive(Debug, Clone, Default)]
+pub struct PolishContext {
+    pub enabled: bool,
+    pub mode: PolishMode,
+    pub persona_prompt: Option<String>,
+    pub hotwords: Vec<String>,
+    pub timeout_ms: u32,
 }
 
 /// partial 增量回调（UI 用）。一期可忽略返回。
@@ -172,23 +184,84 @@ impl Pipeline {
         session_id: &str,
         finals: &[String],
     ) -> crate::Result<()> {
+        self.insert_finals_with_polish(session_id, finals, &PolishContext::default())
+            .await
+    }
+
+    /// 插入前可选润色（二期）。`ctx.enabled=false` 或无 polish 依赖时与 [`insert_finals`] 相同。
+    pub async fn insert_finals_with_polish(
+        &self,
+        session_id: &str,
+        finals: &[String],
+        ctx: &PolishContext,
+    ) -> crate::Result<()> {
+        // ASR 有时会连续推两条相同 final；先去重再润色/上屏，避免「同一句输入两次」。
+        let finals = crate::polish::dedupe_consecutive_finals(finals);
+        let mut last_inserted = String::new();
         for (seq, text) in finals.iter().enumerate() {
-            if !text.is_empty() {
-                self.deps.inserter.insert(text).await?;
+            let polished = self.apply_polish(text, ctx).await;
+            if polished.is_empty() {
+                continue;
             }
+            // 上屏级再挡一层：连续两条润色结果相同则只插一次。
+            if polished == last_inserted {
+                tracing::debug!("跳过与上一条相同的上屏文本");
+                continue;
+            }
+            self.deps.inserter.insert(&polished).await?;
+            last_inserted = polished.clone();
             self.deps
                 .store
                 .save_utterance(&UtteranceRecord {
                     id: Uuid::new_v4().to_string(),
                     session_id: session_id.to_string(),
                     seq: seq as u32,
-                    final_text: text.clone(),
+                    // 落库保存实际上屏文本（润色后）。
+                    final_text: polished,
                     audio_path: None,
                     created_at: chrono::Utc::now(),
                 })
                 .await?;
         }
         Ok(())
+    }
+
+    async fn apply_polish(&self, text: &str, ctx: &PolishContext) -> String {
+        if !ctx.enabled || text.trim().is_empty() || ctx.mode == PolishMode::Off {
+            return text.to_string();
+        }
+        let Some(polish) = &self.deps.polish else {
+            return text.to_string();
+        };
+        let req = PolishRequest {
+            text: text.to_string(),
+            mode: ctx.mode,
+            persona_prompt: ctx.persona_prompt.clone(),
+            hotwords: ctx.hotwords.clone(),
+            timeout: std::time::Duration::from_millis(ctx.timeout_ms.max(100) as u64),
+        };
+        match polish.polish(req).await {
+            Ok(r) => {
+                if r.text.trim().is_empty() {
+                    text.to_string()
+                } else {
+                    let cleaned = crate::polish::sanitize_polish_output(text, &r.text);
+                    if cleaned != r.text.trim() {
+                        tracing::info!(
+                            "润色输出已清洗（防重复）：provider={} raw_len={} clean_len={}",
+                            r.provider,
+                            r.text.len(),
+                            cleaned.len()
+                        );
+                    }
+                    cleaned
+                }
+            }
+            Err(e) => {
+                tracing::warn!("润色失败，使用原文：{e}");
+                text.to_string()
+            }
+        }
     }
 }
 
@@ -322,6 +395,7 @@ mod tests {
             provider: Arc::new(FakeProvider),
             inserter: ins.clone(),
             store: store.clone(),
+            polish: None,
         };
         (deps, ins, store)
     }
@@ -408,6 +482,7 @@ mod tests {
             provider: Arc::new(EmptyProvider),
             inserter: ins.clone(),
             store: store.clone(),
+            polish: None,
         });
 
         let cfg = ProviderConfig {

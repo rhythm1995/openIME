@@ -18,11 +18,38 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+/// 流式计算文件 SHA256（避免大模型整文件读入内存）。
+pub fn sha256_file(path: &Path) -> crate::Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| Error::Io(format!("打开文件失败 {}: {e}", path.display())))?;
+    let mut h = Sha256::new();
+    let mut buf = [0u8; 1024 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| Error::Io(format!("读文件失败 {}: {e}", path.display())))?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{:02x}", b)).collect())
+}
+
 /// 校验 bytes 的 SHA256 是否等于期望（小写 hex，可带或不带前缀）。
 pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> bool {
     let actual = sha256_hex(bytes);
     let expected = expected_hex.trim().to_lowercase();
     actual == expected
+}
+
+/// 校验磁盘文件 SHA256。
+pub fn verify_sha256_file(path: &Path, expected_hex: &str) -> bool {
+    match sha256_file(path) {
+        Ok(actual) => actual == expected_hex.trim().to_lowercase(),
+        Err(_) => false,
+    }
 }
 
 /// 解压 tar.gz 到 dir。

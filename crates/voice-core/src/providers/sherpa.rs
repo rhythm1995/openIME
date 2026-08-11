@@ -18,18 +18,33 @@ use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+use crate::asr_catalog::{
+    ASR_MODEL_FIRERED_LARGE, ASR_MODEL_SENSEVOICE, ASR_MODEL_ZIPFORMER_ZH_2025,
+    ASR_MODEL_ZIPFORMER_ZH_XLARGE, FIRERED_LARGE_DIR, ZIPFORMER_ZH_2025_DIR,
+    ZIPFORMER_ZH_XLARGE_DIR,
+};
 use crate::config::ProviderKind;
-use crate::model_download::SENSEVOICE_MODEL_NAME;
+use crate::model_download::{normalize_asr_model_id, SENSEVOICE_MODEL_NAME};
 use crate::traits::{AsrProvider, AsrSession, AudioFrame, TranscriptDelta};
 use crate::{Error, ProviderConfig};
 
-/// 解析模型文件路径。模型目录内默认用 int8 变体（更小、CPU 友好）。
+/// 流式模型路径（Paraformer 或 Zipformer transducer）。
 #[derive(Debug, Clone)]
 pub struct SherpaModelPaths {
     pub encoder: PathBuf,
     pub decoder: PathBuf,
+    /// Zipformer transducer 需要 joiner；Paraformer 可空路径。
+    pub joiner: Option<PathBuf>,
     pub tokens: PathBuf,
     pub vad_model: PathBuf,
+    pub backend: StreamingBackend,
+}
+
+/// 流式后端。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamingBackend {
+    Paraformer,
+    ZipformerTransducer,
 }
 
 /// SenseVoice 离线模型路径。
@@ -60,25 +75,89 @@ impl SenseVoicePaths {
     }
 }
 
-impl SherpaModelPaths {
-    /// 在 model_name 目录下推断路径。model 目录即 model_mgr 解压后的目标。
-    pub fn from_dirs(model_dir: &Path, vad_dir: &Path) -> Self {
+/// FireRedASR 离线路径（encoder + decoder + tokens）。
+#[derive(Debug, Clone)]
+pub struct FireRedAsrPaths {
+    pub encoder: PathBuf,
+    pub decoder: PathBuf,
+    pub tokens: PathBuf,
+}
+
+impl FireRedAsrPaths {
+    pub fn from_dirs(model_dir: &Path) -> Self {
         Self {
             encoder: model_dir.join("encoder.int8.onnx"),
             decoder: model_dir.join("decoder.int8.onnx"),
             tokens: model_dir.join("tokens.txt"),
-            vad_model: vad_dir.join("silero_vad.onnx"),
         }
     }
-
-    /// 校验所有文件存在。
     pub fn validate(&self) -> crate::Result<()> {
         for (name, p) in [
             ("encoder", &self.encoder),
             ("decoder", &self.decoder),
             ("tokens", &self.tokens),
-            ("vad_model", &self.vad_model),
         ] {
+            if !p.exists() {
+                return Err(Error::Provider(format!(
+                    "FireRedASR 模型文件缺失（{}）：{}",
+                    name,
+                    p.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 离线后端种类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfflineBackend {
+    SenseVoice,
+    FireRed,
+}
+
+impl SherpaModelPaths {
+    /// 旧流式 Paraformer 路径。
+    pub fn paraformer_from_dirs(model_dir: &Path, vad_dir: &Path) -> Self {
+        Self {
+            encoder: model_dir.join("encoder.int8.onnx"),
+            decoder: model_dir.join("decoder.int8.onnx"),
+            joiner: None,
+            tokens: model_dir.join("tokens.txt"),
+            vad_model: vad_dir.join("silero_vad.onnx"),
+            backend: StreamingBackend::Paraformer,
+        }
+    }
+
+    /// Zipformer 2025 流式 transducer 路径（decoder 为 fp32 decoder.onnx）。
+    pub fn zipformer_from_dirs(model_dir: &Path, vad_dir: &Path) -> Self {
+        Self {
+            encoder: model_dir.join("encoder.int8.onnx"),
+            decoder: model_dir.join("decoder.onnx"),
+            joiner: Some(model_dir.join("joiner.int8.onnx")),
+            tokens: model_dir.join("tokens.txt"),
+            vad_model: vad_dir.join("silero_vad.onnx"),
+            backend: StreamingBackend::ZipformerTransducer,
+        }
+    }
+
+    /// 兼容旧调用名。
+    pub fn from_dirs(model_dir: &Path, vad_dir: &Path) -> Self {
+        Self::paraformer_from_dirs(model_dir, vad_dir)
+    }
+
+    /// 校验所有文件存在。
+    pub fn validate(&self) -> crate::Result<()> {
+        let mut list: Vec<(&str, &PathBuf)> = vec![
+            ("encoder", &self.encoder),
+            ("decoder", &self.decoder),
+            ("tokens", &self.tokens),
+            ("vad_model", &self.vad_model),
+        ];
+        if let Some(ref j) = self.joiner {
+            list.push(("joiner", j));
+        }
+        for (name, p) in list {
             if !p.exists() {
                 return Err(Error::Provider(format!(
                     "sherpa 模型文件缺失（{}）：{}",
@@ -145,12 +224,38 @@ impl AsrProvider for SherpaProvider {
             .as_ref()
             .ok_or_else(|| Error::Config("SherpaProvider 未配置模型根目录".into()))?;
 
-        // 按 local_mode 分流：offline → SenseVoice 离线解码；realtime → 流式 Paraformer。
-        // mode 从 cfg.model 里的特殊前缀解析（pipeline 侧注入）。
-        if cfg.model.starts_with("offline:") {
-            connect_offline_with_paths(model_root, vad_root).await
+        // 按 model id 分流：
+        // - sensevoice → Offline SenseVoice
+        // - firered-large → Offline FireRedASR
+        // - zipformer-zh-2025 / zipformer-zh-xlarge → Streaming Zipformer
+        // - 其它目录名 → 旧流式 Paraformer
+        let model_key = cfg
+            .model
+            .strip_prefix("offline:")
+            .unwrap_or(cfg.model.as_str());
+        let model_id = normalize_asr_model_id(model_key);
+
+        if cfg.model.starts_with("offline:") || model_id == ASR_MODEL_SENSEVOICE {
+            connect_offline_with_paths(model_root, OfflineBackend::SenseVoice).await
+        } else if model_id == ASR_MODEL_FIRERED_LARGE {
+            connect_offline_with_paths(model_root, OfflineBackend::FireRed).await
+        } else if model_id == ASR_MODEL_ZIPFORMER_ZH_2025 {
+            let paths = SherpaModelPaths::zipformer_from_dirs(
+                &model_root.join(ZIPFORMER_ZH_2025_DIR),
+                vad_root,
+            );
+            connect_with_paths(cfg, &paths).await
+        } else if model_id == ASR_MODEL_ZIPFORMER_ZH_XLARGE {
+            let paths = SherpaModelPaths::zipformer_from_dirs(
+                &model_root.join(ZIPFORMER_ZH_XLARGE_DIR),
+                vad_root,
+            );
+            connect_with_paths(cfg, &paths).await
         } else {
-            let paths = SherpaModelPaths::from_dirs(&model_root.join(&cfg.model), vad_root);
+            let paths = SherpaModelPaths::paraformer_from_dirs(
+                &model_root.join(&cfg.model),
+                vad_root,
+            );
             connect_with_paths(cfg, &paths).await
         }
     }
@@ -163,19 +268,34 @@ mod engine {
     use super::*;
     use crate::traits::TranscriptKind;
     use sherpa_onnx::{
-        OfflineRecognizer, OfflineRecognizerConfig, OfflineSenseVoiceModelConfig,
-        OnlineParaformerModelConfig, OnlineRecognizer, OnlineRecognizerConfig,
-        SileroVadModelConfig, VadModelConfig, VoiceActivityDetector,
+        OfflineFireRedAsrModelConfig, OfflineRecognizer, OfflineRecognizerConfig,
+        OfflineSenseVoiceModelConfig, OnlineParaformerModelConfig, OnlineRecognizer,
+        OnlineRecognizerConfig, OnlineTransducerModelConfig, SileroVadModelConfig,
+        VadModelConfig, VoiceActivityDetector,
     };
 
-    /// 构造 recognizer 配置（纯函数，可测）。
+    /// 构造 recognizer 配置（Paraformer / Zipformer transducer）。
     #[allow(clippy::field_reassign_with_default)]
     pub fn build_recognizer_config(paths: &SherpaModelPaths) -> OnlineRecognizerConfig {
         let mut cfg = OnlineRecognizerConfig::default();
-        cfg.model_config.paraformer = OnlineParaformerModelConfig {
-            encoder: Some(paths.encoder.to_string_lossy().into_owned()),
-            decoder: Some(paths.decoder.to_string_lossy().into_owned()),
-        };
+        match paths.backend {
+            StreamingBackend::Paraformer => {
+                cfg.model_config.paraformer = OnlineParaformerModelConfig {
+                    encoder: Some(paths.encoder.to_string_lossy().into_owned()),
+                    decoder: Some(paths.decoder.to_string_lossy().into_owned()),
+                };
+            }
+            StreamingBackend::ZipformerTransducer => {
+                cfg.model_config.transducer = OnlineTransducerModelConfig {
+                    encoder: Some(paths.encoder.to_string_lossy().into_owned()),
+                    decoder: Some(paths.decoder.to_string_lossy().into_owned()),
+                    joiner: paths
+                        .joiner
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().into_owned()),
+                };
+            }
+        }
         cfg.model_config.tokens = Some(paths.tokens.to_string_lossy().into_owned());
         cfg.model_config.num_threads = 2;
         cfg.model_config.provider = Some("cpu".into());
@@ -376,11 +496,11 @@ mod engine {
         }))
     }
 
-    // ──────────────── 离线模式：SenseVoice ────────────────
+    // ──────────────── 离线模式：SenseVoice / FireRedASR ────────────────
 
     /// 构造 OfflineRecognizer 配置（SenseVoice）。
     #[allow(clippy::field_reassign_with_default)]
-    pub fn build_offline_config(sv: &super::SenseVoicePaths) -> OfflineRecognizerConfig {
+    pub fn build_sensevoice_config(sv: &super::SenseVoicePaths) -> OfflineRecognizerConfig {
         let mut cfg = OfflineRecognizerConfig::default();
         cfg.model_config.sense_voice = OfflineSenseVoiceModelConfig {
             model: Some(sv.model.to_string_lossy().into_owned()),
@@ -396,35 +516,65 @@ mod engine {
         cfg
     }
 
+    /// 构造 OfflineRecognizer 配置（FireRedASR AED）。
+    #[allow(clippy::field_reassign_with_default)]
+    pub fn build_firered_config(fr: &super::FireRedAsrPaths) -> OfflineRecognizerConfig {
+        let mut cfg = OfflineRecognizerConfig::default();
+        cfg.model_config.fire_red_asr = OfflineFireRedAsrModelConfig {
+            encoder: Some(fr.encoder.to_string_lossy().into_owned()),
+            decoder: Some(fr.decoder.to_string_lossy().into_owned()),
+        };
+        cfg.model_config.tokens = Some(fr.tokens.to_string_lossy().into_owned());
+        // 大模型略增线程，仍受 CPU 限制。
+        cfg.model_config.num_threads = 4;
+        cfg.model_config.provider = Some("cpu".into());
+        cfg.model_config.debug = false;
+        cfg.feat_config.sample_rate = 16_000;
+        cfg.feat_config.feature_dim = 80;
+        cfg
+    }
+
     /// 离线模式：Fn 按下录音→松开时整段送 OfflineRecognizer 解码。
-    /// 音频缓冲在 session 内存，finish 时一次性解码推出结果。
     pub async fn connect_offline_with_paths(
         model_root: &Path,
-        _vad_root: &Path,
+        backend: super::OfflineBackend,
     ) -> crate::Result<Box<dyn super::AsrSession>> {
-        let sv_dir = model_root.join(super::SENSEVOICE_MODEL_NAME);
-        let sv = super::SenseVoicePaths::from_dirs(&sv_dir);
-        sv.validate()?;
+        let cfg = match backend {
+            super::OfflineBackend::SenseVoice => {
+                let sv = super::SenseVoicePaths::from_dirs(
+                    &model_root.join(super::SENSEVOICE_MODEL_NAME),
+                );
+                sv.validate()?;
+                build_sensevoice_config(&sv)
+            }
+            super::OfflineBackend::FireRed => {
+                let fr =
+                    super::FireRedAsrPaths::from_dirs(&model_root.join(super::FIRERED_LARGE_DIR));
+                fr.validate()?;
+                build_firered_config(&fr)
+            }
+        };
 
-        let cfg = build_offline_config(&sv);
-        let recognizer = OfflineRecognizer::create(&cfg)
-            .ok_or_else(|| Error::Provider("创建 OfflineRecognizer 失败".into()))?;
+        let label = match backend {
+            super::OfflineBackend::SenseVoice => "SenseVoice",
+            super::OfflineBackend::FireRed => "FireRedASR",
+        };
+        let recognizer = OfflineRecognizer::create(&cfg).ok_or_else(|| {
+            Error::Provider(format!("创建 OfflineRecognizer 失败（{label}）"))
+        })?;
         let recognizer = SendOfflineRecognizer(recognizer);
 
         let (dtx, drx) = mpsc::unbounded_channel::<crate::Result<TranscriptDelta>>();
         let (audio_tx, audio_rx) = std::sync::mpsc::channel::<Vec<f32>>();
 
-        // spawn 驱动线程：收完全部音频后一次性解码。
         std::thread::Builder::new()
             .name("sherpa-offline".into())
             .spawn(move || {
                 let recognizer = recognizer.0;
                 let mut all_samples: Vec<f32> = Vec::new();
-                // 收集全部音频。
                 while let Ok(samples) = audio_rx.recv() {
                     all_samples.extend_from_slice(&samples);
                 }
-                // audio_tx drop → recv 返回 Err → 开始解码。
                 if all_samples.is_empty() {
                     let _ = dtx.send(Ok(TranscriptDelta::final_("", 0)));
                     return;
@@ -466,7 +616,7 @@ pub async fn connect_with_paths(
 #[cfg(not(feature = "sherpa"))]
 pub async fn connect_offline_with_paths(
     _model_root: &Path,
-    _vad_root: &Path,
+    _backend: OfflineBackend,
 ) -> crate::Result<Box<dyn AsrSession>> {
     Err(Error::Provider(
         "本地 sherpa-onnx 引擎未启用：请在编译时开启 `sherpa` feature".into(),
@@ -588,7 +738,7 @@ mod tests {
         ] {
             std::fs::write(dir.path().join(name), b"stub").unwrap();
         }
-        let paths = SherpaModelPaths::from_dirs(dir.path(), dir.path());
+        let paths = SherpaModelPaths::paraformer_from_dirs(dir.path(), dir.path());
         assert!(paths.validate().is_ok());
     }
 }
