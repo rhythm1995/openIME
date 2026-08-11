@@ -155,8 +155,8 @@ pub enum PolishMode {
     Off,
     /// 轻量：去口头禅、补标点、纠明显 ASR 错、不改语气。
     Light,
-    /// 人设改写：叠加 persona_prompt。
-    Persona,
+    /// 高度：L0 规则 + L2 改写润色（通顺化、调整语序，保留原意）。
+    Heavy,
 }
 
 /// 一次润色请求（通常对应一条 ASR final）。
@@ -164,8 +164,6 @@ pub enum PolishMode {
 pub struct PolishRequest {
     pub text: String,
     pub mode: PolishMode,
-    /// 人设 system 附加指令（Persona 模式）。
-    pub persona_prompt: Option<String>,
     /// 热词：提示模型保留写法。
     pub hotwords: Vec<String>,
     /// 超时；超时后 router 可回退原文/云端。

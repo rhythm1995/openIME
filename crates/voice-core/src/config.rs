@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::traits::PolishMode;
 use crate::Error;
 
 /// 一期支持的 provider 类型。
@@ -126,9 +127,9 @@ pub struct AppConfig {
     /// 云端 chat 模型名（百炼 OpenAI 兼容），如 qwen-turbo。
     #[serde(default = "default_polish_cloud_model")]
     pub polish_cloud_model: String,
-    /// 当前人设 id（None = 仅 Light 润色）。
+    /// 润色程度：Off（保持原样）/ Light（中度，仅校对）/ Heavy（高度，改写润色）。
     #[serde(default)]
-    pub active_persona_id: Option<String>,
+    pub polish_mode: PolishMode,
     /// 单次润色超时（毫秒）。
     #[serde(default = "default_polish_timeout_ms")]
     pub polish_timeout_ms: u32,
@@ -184,7 +185,7 @@ impl Default for AppConfig {
             polish_policy: PolishPolicy::PreferLocal,
             polish_local_model: POLISH_DEFAULT_LOCAL_MODEL.to_string(),
             polish_cloud_model: "qwen-turbo".to_string(),
-            active_persona_id: None,
+            polish_mode: PolishMode::Off,
             polish_timeout_ms: 800,
         }
     }

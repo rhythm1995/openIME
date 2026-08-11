@@ -274,6 +274,8 @@ pub fn run() {
             commands::list_hotwords,
             commands::add_hotword,
             commands::delete_hotword,
+            commands::get_hotword_limit,
+            commands::import_hotwords_csv,
             commands::frontend_log,
             commands::set_launch_at_login,
             commands::get_launch_at_login,
@@ -285,7 +287,6 @@ pub fn run() {
             commands::install_local_model,
             commands::get_polish_model_status,
             commands::install_polish_model,
-            commands::list_personas,
         ])
         .build(tauri::generate_context!())
         .expect("构建 Tauri 应用失败");

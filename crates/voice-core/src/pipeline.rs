@@ -34,7 +34,6 @@ pub struct PipelineDeps {
 pub struct PolishContext {
     pub enabled: bool,
     pub mode: PolishMode,
-    pub persona_prompt: Option<String>,
     pub hotwords: Vec<String>,
     pub timeout_ms: u32,
 }
@@ -85,7 +84,7 @@ impl Pipeline {
         stop_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> crate::Result<SessionResult> {
         let result = self
-            .record_and_collect(audio, cfg, meta, on_partial, stop_flag)
+            .record_and_collect(audio, cfg, meta, on_partial, stop_flag, false)
             .await?;
         self.insert_finals(&result.session_id, &result.utterances)
             .await?;
@@ -103,6 +102,7 @@ impl Pipeline {
         meta: SessionMeta,
         on_partial: Option<PartialCallback>,
         stop_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        streaming_insert: bool,
     ) -> crate::Result<SessionResult> {
         let session_id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
@@ -127,7 +127,13 @@ impl Pipeline {
         let deltas = asr.deltas();
 
         // reader：消费 deltas，收集 final，partial 走回调。
+        // streaming_insert=true 时，partial/final 还会经 diff_prefix 增量上屏到 inserter
+        // （流式引擎边说边出字；离线引擎无 partial，保持原 collect 行为）。
         let partial_cb = on_partial;
+        let inserter = self.deps.inserter.clone();
+        let inserted: std::sync::Arc<std::sync::Mutex<String>> =
+            std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let streaming = streaming_insert;
         let reader = tokio::spawn(async move {
             let mut finals: Vec<String> = Vec::new();
             let mut deltas = deltas;
@@ -138,8 +144,30 @@ impl Pipeline {
                             if let Some(cb) = &partial_cb {
                                 cb(&d.text);
                             }
+                            if streaming {
+                                let delta = {
+                                    let mut s = inserted.lock().unwrap();
+                                    let delta = crate::insert::diff_prefix(&s, &d.text).to_string();
+                                    *s = d.text.clone();
+                                    delta
+                                };
+                                if !delta.is_empty() {
+                                    let _ = inserter.insert(&delta).await;
+                                }
+                            }
                         }
                         TranscriptKind::Final => {
+                            if streaming {
+                                let delta = {
+                                    let mut s = inserted.lock().unwrap();
+                                    let delta = crate::insert::diff_prefix(&s, &d.text).to_string();
+                                    s.clear(); // 句末：下一句从零开始
+                                    delta
+                                };
+                                if !delta.is_empty() {
+                                    let _ = inserter.insert(&delta).await;
+                                }
+                            }
                             finals.push(d.text.clone());
                         }
                     },
@@ -222,6 +250,31 @@ impl Pipeline {
         Ok(())
     }
 
+    /// 流式模式专用：finals 已在录音期间逐字上屏，这里只去重 + 落库，不重复插入。
+    pub async fn persist_finals(&self, session_id: &str, finals: &[String]) -> crate::Result<()> {
+        let finals = crate::polish::dedupe_consecutive_finals(finals);
+        let mut last = String::new();
+        for (seq, text) in finals.iter().enumerate() {
+            let text = text.trim();
+            if text.is_empty() || text == last {
+                continue;
+            }
+            self.deps
+                .store
+                .save_utterance(&UtteranceRecord {
+                    id: Uuid::new_v4().to_string(),
+                    session_id: session_id.to_string(),
+                    seq: seq as u32,
+                    final_text: text.to_string(),
+                    audio_path: None,
+                    created_at: chrono::Utc::now(),
+                })
+                .await?;
+            last = text.to_string();
+        }
+        Ok(())
+    }
+
     async fn apply_polish(&self, text: &str, ctx: &PolishContext) -> String {
         if text.trim().is_empty() {
             return text.to_string();
@@ -257,7 +310,6 @@ impl Pipeline {
         let req = PolishRequest {
             text: l0.text.clone(),
             mode: ctx.mode,
-            persona_prompt: ctx.persona_prompt.clone(),
             hotwords: ctx.hotwords.clone(),
             timeout: std::time::Duration::from_millis(ctx.timeout_ms.max(100) as u64),
         };
@@ -591,7 +643,6 @@ mod tests {
         PolishContext {
             enabled: true,
             mode,
-            persona_prompt: None,
             hotwords: vec![],
             timeout_ms: 1000,
         }
@@ -697,5 +748,67 @@ mod tests {
             .unwrap();
         assert!(ins.out.lock().unwrap().is_empty());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn streaming_inserts_partial_incrementally() {
+        // 流式模式：partial 逐字增量上屏，final 补差额。
+        // FakeSession.finish 产 partial("你好") + final("你好世界")。
+        let (deps, ins, store) = deps();
+        let pipe = Pipeline::new(deps);
+        let cfg = ProviderConfig {
+            kind: crate::ProviderKind::Sherpa,
+            base_url: String::new(),
+            api_key: String::new(),
+            model: "test".into(),
+            vocabulary_id: None,
+            language: None,
+        };
+        let meta = SessionMeta {
+            engine: "cloud".into(),
+            provider: "fake".into(),
+            model: "test".into(),
+        };
+        let result = pipe
+            .record_and_collect(Box::new(FakeAudio::new(3)), &cfg, meta, None, None, true)
+            .await
+            .unwrap();
+        // partial "你好" + final 追加 "世界" → 上屏 "你好世界"
+        assert_eq!(*ins.out.lock().unwrap(), "你好世界");
+        assert_eq!(result.utterances, vec!["你好世界"]);
+        // persist_finals 落库（不重复上屏）
+        pipe.persist_finals(&result.session_id, &result.utterances)
+            .await
+            .unwrap();
+        assert_eq!(store.utterances.lock().unwrap().len(), 1);
+        assert_eq!(store.utterances.lock().unwrap()[0].final_text, "你好世界");
+    }
+
+    #[tokio::test]
+    async fn non_streaming_does_not_insert_during_collect() {
+        // 非流式：record_and_collect 不上屏（等调用方 insert_finals）。
+        let (deps, ins, _store) = deps();
+        let pipe = Pipeline::new(deps);
+        let cfg = ProviderConfig {
+            kind: crate::ProviderKind::Sherpa,
+            base_url: String::new(),
+            api_key: String::new(),
+            model: "test".into(),
+            vocabulary_id: None,
+            language: None,
+        };
+        let meta = SessionMeta {
+            engine: "local".into(),
+            provider: "fake".into(),
+            model: "test".into(),
+        };
+        let _ = pipe
+            .record_and_collect(Box::new(FakeAudio::new(3)), &cfg, meta, None, None, false)
+            .await
+            .unwrap();
+        assert!(
+            ins.out.lock().unwrap().is_empty(),
+            "非流式 collect 不应上屏"
+        );
     }
 }

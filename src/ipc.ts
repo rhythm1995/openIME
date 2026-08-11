@@ -3,9 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppConfig,
   Hotword,
+  HotwordImportResult,
+  HotwordLimit,
   LocalAsrModelEntry,
   LocalModelStatus,
-  Persona,
   PolishModelStatus,
   ProviderConfig,
   SessionSummary,
@@ -72,10 +73,12 @@ export const ipc = {
   // 二期：AI 润色
   getPolishModelStatus: () => invoke<PolishModelStatus>("get_polish_model_status"),
   installPolishModel: () => invoke<void>("install_polish_model"),
-  listPersonas: () => invoke<Persona[]>("list_personas"),
   // 热词词典
   listHotwords: () => invoke<Hotword[]>("list_hotwords"),
   addHotword: (word: string, weight: number) =>
     invoke<Hotword>("add_hotword", { word, weight }),
   deleteHotword: (id: string) => invoke<void>("delete_hotword", { id }),
+  getHotwordLimit: () => invoke<HotwordLimit>("get_hotword_limit"),
+  importHotwordsCsv: (content: string) =>
+    invoke<HotwordImportResult>("import_hotwords_csv", { content }),
 };

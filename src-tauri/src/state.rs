@@ -51,8 +51,6 @@ impl AppState {
                 p.model = "sherpa-onnx-streaming-paraformer-bilingual-zh-en".to_string();
             }
         }
-        // 二期内置人设（正式/口语/邮件）。
-        let _ = store.seed_builtin_personas_if_empty();
         let store_arc: Arc<SqliteStore> = Arc::new(store);
         Ok(Self {
             store: store_arc,
@@ -133,14 +131,15 @@ impl AppState {
                 )) as Arc<dyn TextPolishProvider>
             });
 
+        let polish_on = cfg.polish_mode != PolishMode::Off;
         Arc::new(PolishRouter {
             cfg: PolishRouterConfig {
-                policy: if cfg.polish_enabled {
+                policy: if polish_on {
                     cfg.polish_policy
                 } else {
                     PolishPolicy::Off
                 },
-                enabled: cfg.polish_enabled,
+                enabled: polish_on,
             },
             local,
             cloud,
@@ -150,21 +149,13 @@ impl AppState {
     /// 录音插入前的润色上下文。
     pub async fn polish_context(&self) -> PolishContext {
         let cfg = self.config.read().await.clone();
-        let mode = if !cfg.polish_enabled {
-            PolishMode::Off
-        } else if cfg.active_persona_id.is_some() {
-            PolishMode::Persona
-        } else {
+        // 兼容旧配置：polish_mode 缺失(Off) 但旧版 polish_enabled=true → 迁到 Light。
+        let mode = if cfg.polish_mode != PolishMode::Off {
+            cfg.polish_mode
+        } else if cfg.polish_enabled {
             PolishMode::Light
-        };
-
-        let persona_prompt = if let Some(id) = &cfg.active_persona_id {
-            self.store
-                .list_personas()
-                .ok()
-                .and_then(|ps| ps.into_iter().find(|p| &p.id == id).map(|p| p.prompt))
         } else {
-            None
+            PolishMode::Off
         };
 
         let hotwords = self
@@ -176,9 +167,8 @@ impl AppState {
             .collect();
 
         PolishContext {
-            enabled: cfg.polish_enabled,
+            enabled: mode != PolishMode::Off,
             mode,
-            persona_prompt,
             hotwords,
             timeout_ms: cfg.polish_timeout_ms.max(100),
         }

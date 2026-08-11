@@ -50,7 +50,7 @@ pub use polish::{BailianChatPolish, LocalGgufPolish, PolishRouter, PolishRouterC
 pub use providers::bailian::test_connection;
 pub use providers::sherpa::{SherpaModelPaths, SherpaProvider};
 pub use providers::RoutingProvider;
-pub use store::{Hotword, Persona, SqliteStore};
+pub use store::{Hotword, SqliteStore};
 pub use system::{collect_system_info, compute_model_tag, ModelPerfTag, SystemInfo};
 pub use traits::{
     AsrProvider, AsrSession, AudioFormat, AudioFrame, AudioSource, HistoryStore, PolishMode,

@@ -16,7 +16,6 @@ import type {
   LocalAsrModelEntry,
   LocalModelStatus,
   ModelDownloadProgress,
-  Persona,
   PolishModelStatus,
   PolishPolicy,
   ProviderConfig,
@@ -80,7 +79,6 @@ export default function Settings() {
   const [testingMic, setTestingMic] = useState(false);
   // 二期润色
   const [polishStatus, setPolishStatus] = useState<PolishModelStatus | null>(null);
-  const [personas, setPersonas] = useState<Persona[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,9 +108,6 @@ export default function Settings() {
       }).catch(() => {});
       ipc.getPolishModelStatus().then((s) => {
         if (!cancelled) setPolishStatus(s);
-      }).catch(() => {});
-      ipc.listPersonas().then((p) => {
-        if (!cancelled) setPersonas(p);
       }).catch(() => {});
       refreshSystemInfo(false);
       // 麦克风枚举最重，再往后一点。
@@ -297,24 +292,48 @@ export default function Settings() {
       {/* AI 润色 */}
       <div className="card">
         <h2 className="card-title">AI 润色</h2>
-        <div className="perm-item">
-          <div>
-            <div className="perm-name">启用润色</div>
-            <div className="perm-desc">
-              识别定稿后纠错上屏：去口头禅、补标点、纠同音错；可选人设。本地规则默认生效，LLM 校对可选。
-            </div>
+        <div className="field">
+          <label className="field-label">润色程度</label>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 6 }}>
+            {([
+              {
+                v: "off",
+                t: "保持原样",
+                d: "不做 LLM 校对；本地规则（去口头禅/补标点/纠同音字）仍生效。",
+              },
+              { v: "light", t: "中度润色", d: "本地规则 + LLM 仅校对（修 ASR 错，不改措辞）。" },
+              {
+                v: "heavy",
+                t: "高度润色",
+                d: "本地规则 + LLM 改写润色（通顺化、调整语序，保留原意）。",
+              },
+            ] as const).map((opt) => (
+              <label
+                key={opt.v}
+                style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer" }}
+              >
+                <input
+                  type="radio"
+                  name="polish-mode"
+                  checked={(config.polish_mode ?? "off") === opt.v}
+                  onChange={() =>
+                    setConfig({
+                      ...config,
+                      polish_mode: opt.v,
+                      polish_enabled: opt.v !== "off",
+                    })
+                  }
+                />
+                <div>
+                  <div className="perm-name">{opt.t}</div>
+                  <div className="perm-desc">{opt.d}</div>
+                </div>
+              </label>
+            ))}
           </div>
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={!!config.polish_enabled}
-              onChange={(e) => setConfig({ ...config, polish_enabled: e.target.checked })}
-            />
-            <span className="slider" />
-          </label>
         </div>
 
-        {config.polish_enabled && (
+        {(config.polish_mode ?? "off") !== "off" && (
           <>
             <div className="field" style={{ marginTop: 14 }}>
               <label className="field-label">路由策略</label>
@@ -335,26 +354,6 @@ export default function Settings() {
               <span className="field-hint">
                 本地需下载约 986MB 的 Qwen2.5-1.5B-Instruct Q4_K_M；云端复用百炼 API Key
               </span>
-            </div>
-
-            <div className="field">
-              <label className="field-label">人设</label>
-              <select
-                value={config.active_persona_id ?? ""}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    active_persona_id: e.target.value || null,
-                  })
-                }
-              >
-                <option value="">无（仅轻量润色）</option>
-                {personas.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
             </div>
 
             <div className="field">

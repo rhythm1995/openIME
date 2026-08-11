@@ -52,12 +52,7 @@ impl TextPolishProvider for BailianChatPolish {
         }
 
         let t0 = Instant::now();
-        let messages = build_messages(
-            &req.text,
-            req.mode,
-            req.persona_prompt.as_deref(),
-            &req.hotwords,
-        );
+        let messages = build_messages(&req.text, req.mode, &req.hotwords);
         let body_msgs: Vec<_> = messages
             .iter()
             .map(|(role, content)| json!({ "role": role, "content": content }))

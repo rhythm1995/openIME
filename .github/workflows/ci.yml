@@ -57,6 +57,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
+      - name: Install cmake (for llama.cpp / llm feature)
+        run: brew install cmake
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
       - name: Build frontend

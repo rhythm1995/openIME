@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { Lightbulb, Trash2, BookOpen, Search, AlertTriangle } from "lucide-react";
-import type { Hotword } from "../types";
+import { useEffect, useRef, useState } from "react";
+import { Lightbulb, Trash2, BookOpen, Search, AlertTriangle, Upload } from "lucide-react";
+import type { Hotword, HotwordLimit } from "../types";
 import { ipc } from "../ipc";
 
 // 词典：自定义术语（热词），用于提升 Fun-ASR 对特定名词的识别准确率。
@@ -9,12 +9,38 @@ export default function Dictionary() {
   const [words, setWords] = useState<Hotword[] | null>(null);
   const [newWord, setNewWord] = useState("");
   const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState<HotwordLimit | null>(null);
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = async () => {
     try {
-      setWords(await ipc.listHotwords());
+      const [ws, lim] = await Promise.all([
+        ipc.listHotwords(),
+        ipc.getHotwordLimit().catch(() => null),
+      ]);
+      setWords(ws);
+      if (lim) setLimit(lim);
     } catch {
       setWords([]);
+    }
+  };
+
+  const onImportFile = async (file: File) => {
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const res = await ipc.importHotwordsCsv(text);
+      await refresh();
+      const capNote =
+        res.total > res.limit
+          ? `\n注意：当前模型仅前 ${res.limit} 个对识别生效（词典共 ${res.total} 个）。`
+          : "";
+      alert(`导入完成：新增 ${res.imported} 个，词典共 ${res.total} 个。${capNote}`);
+    } catch (e) {
+      alert(`导入失败：${String(e)}`);
+    } finally {
+      setImporting(false);
     }
   };
   useEffect(() => {
@@ -95,6 +121,42 @@ export default function Dictionary() {
             已有 {filtered.length} 个相近词条（见下方列表）。
           </span>
         )}
+
+        {/* 批量导入 + 容量标注 */}
+        <div
+          className="row-between"
+          style={{ marginTop: 12, alignItems: "center", flexWrap: "wrap", gap: 8 }}
+        >
+          <button
+            className="btn"
+            onClick={() => fileRef.current?.click()}
+            disabled={importing}
+          >
+            <Upload size={14} style={{ marginRight: 6, verticalAlign: "-2px" }} />
+            {importing ? "导入中…" : "导入 CSV"}
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,text/csv"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onImportFile(f);
+              e.target.value = "";
+            }}
+          />
+          {limit && (
+            <span className="field-hint">
+              当前模型「{limit.model_id}」热词上限 {limit.limit}，已有 {limit.current} 个
+              {limit.current > limit.limit && (
+                <strong style={{ color: "var(--warning)" }}>
+                  （仅前 {limit.limit} 个对识别生效）
+                </strong>
+              )}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* 列表 */}

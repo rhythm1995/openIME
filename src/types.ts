@@ -18,6 +18,9 @@ export type PolishPolicy =
   | "cloud_only"
   | "off";
 
+/** 润色程度：off（保持原样）/ light（中度，仅校对）/ heavy（高度，改写润色）。 */
+export type PolishMode = "off" | "light" | "heavy";
+
 export interface AppConfig {
   active_provider: number;
   providers: ProviderConfig[];
@@ -38,7 +41,7 @@ export interface AppConfig {
   polish_policy?: PolishPolicy;
   polish_local_model?: string;
   polish_cloud_model?: string;
-  active_persona_id?: string | null;
+  polish_mode?: PolishMode;
   polish_timeout_ms?: number;
 }
 
@@ -50,15 +53,6 @@ export interface PolishModelStatus {
   total_size: number;
   model_path: string;
   llm_feature: boolean;
-}
-
-export interface Persona {
-  id: string;
-  name: string;
-  prompt: string;
-  is_builtin: boolean;
-  ord: number;
-  hidden: boolean;
 }
 
 export interface SessionSummary {
@@ -84,6 +78,20 @@ export interface Hotword {
   id: string;
   word: string;
   weight: number;
+}
+
+/** 当前 ASR 模型的热词容量上限与已用数量（get_hotword_limit）。 */
+export interface HotwordLimit {
+  limit: number;
+  current: number;
+  model_id: string;
+}
+
+/** 热词 CSV 导入结果（import_hotwords_csv）。 */
+export interface HotwordImportResult {
+  imported: number;
+  total: number;
+  limit: number;
 }
 
 /** 本地引擎安装状态（get_local_model_status）。 */

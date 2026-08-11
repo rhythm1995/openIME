@@ -452,11 +452,6 @@ pub async fn install_polish_model(
     Ok(())
 }
 
-#[tauri::command]
-pub fn list_personas(state: State<'_, AppState>) -> Result<Vec<voice_core::Persona>, String> {
-    state.store.list_personas().map_err(|e| e.to_string())
-}
-
 /// 下载安装本地引擎模型（后台进行，进度经 model://download-progress 事件推送）。
 /// `mode` 为 ASR 模型 id（`zipformer-zh-2025` / `sensevoice`）或兼容旧值 offline/realtime。
 #[tauri::command]
@@ -771,7 +766,18 @@ pub async fn toggle_recording(
             let _ = app_for_cb.emit("recording://partial", text.to_string());
         });
 
-        // 录音 + 收集 finals（不在内部插入——插入需在焦点恢复后进行）。
+        // 流式引擎（百炼 / 本地 paraformer-trilingual）边说边逐字上屏；
+        // 离线引擎（SenseVoice 等）整段解码，录完一次性插入。
+        let streaming = provider_cfg.kind == voice_core::ProviderKind::Bailian
+            || provider_cfg.model == voice_core::asr_catalog::ASR_MODEL_PARAFORMER_TRILINGUAL;
+
+        // 流式模式：录音期间就要往用户输入框敲字，需先把焦点还给前台 app。
+        if streaming {
+            restore_frontmost_focus(&app_handle, frontmost.as_deref());
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        }
+
+        // 录音 + 收集 finals（流式模式下 finals 已在内部逐字上屏）。
         let result = pipeline
             .record_and_collect(
                 audio,
@@ -779,22 +785,29 @@ pub async fn toggle_recording(
                 meta,
                 Some(on_partial),
                 Some(stop_flag),
+                streaming,
             )
             .await;
 
         match result {
             Ok(r) => {
-                // 识别结束 → 上屏前：还焦，但 HUD 仍可见，提示正在输入。
                 let _ = app_handle.emit("recording://processing", "正在输入…");
-                restore_frontmost_focus(&app_handle, frontmost.as_deref());
-                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-
-                if let Err(e) = pipeline
-                    .insert_finals_with_polish(&r.session_id, &r.utterances, &polish_ctx)
-                    .await
-                {
-                    log_error!("插入文本失败：{e}");
-                    let _ = app_handle.emit("recording://error", e.to_string());
+                if streaming {
+                    // 已逐字上屏，只落库（历史）。
+                    if let Err(e) = pipeline.persist_finals(&r.session_id, &r.utterances).await {
+                        log_error!("流式结果落库失败：{e}");
+                    }
+                } else {
+                    // 离线：录完还焦 + 一次性润色上屏。
+                    restore_frontmost_focus(&app_handle, frontmost.as_deref());
+                    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                    if let Err(e) = pipeline
+                        .insert_finals_with_polish(&r.session_id, &r.utterances, &polish_ctx)
+                        .await
+                    {
+                        log_error!("插入文本失败：{e}");
+                        let _ = app_handle.emit("recording://error", e.to_string());
+                    }
                 }
 
                 *recording.write().await = false;
@@ -871,6 +884,59 @@ pub fn add_hotword(
 #[tauri::command]
 pub fn delete_hotword(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.store.delete_hotword(&id).map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+pub struct HotwordLimit {
+    pub limit: usize,
+    pub current: usize,
+    pub model_id: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct HotwordImportResult {
+    pub imported: usize,
+    pub total: usize,
+    pub limit: usize,
+}
+
+/// 当前 ASR 模型的热词容量上限与已用数量（前端标注「仅前 N 个对识别生效」）。
+#[tauri::command]
+pub fn get_hotword_limit(state: State<'_, AppState>) -> Result<HotwordLimit, String> {
+    let cfg = state.config.blocking_read().clone();
+    let model_id = cfg.resolved_local_asr_model();
+    let limit = voice_core::asr_catalog::hotword_capacity(&model_id);
+    let current = state.store.list_hotwords().map(|v| v.len()).unwrap_or(0);
+    Ok(HotwordLimit {
+        limit,
+        current,
+        model_id,
+    })
+}
+
+/// 从 CSV 文本批量导入热词（每行一个词；支持「词,权重」取首列；忽略空行与重复）。
+/// 返回新增数、导入后总数、当前模型容量上限。
+#[tauri::command]
+pub fn import_hotwords_csv(
+    state: State<'_, AppState>,
+    content: String,
+) -> Result<HotwordImportResult, String> {
+    let words: Vec<String> = content
+        .lines()
+        .map(|l| l.split(',').next().unwrap_or("").trim().to_string())
+        .collect();
+    let imported = state
+        .store
+        .add_hotwords_batch(&words)
+        .map_err(|e| e.to_string())?;
+    let model_id = state.config.blocking_read().resolved_local_asr_model();
+    let limit = voice_core::asr_catalog::hotword_capacity(&model_id);
+    let total = state.store.list_hotwords().map(|v| v.len()).unwrap_or(0);
+    Ok(HotwordImportResult {
+        imported,
+        total,
+        limit,
+    })
 }
 
 #[allow(dead_code)]

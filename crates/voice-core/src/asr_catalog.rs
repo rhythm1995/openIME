@@ -67,10 +67,10 @@ pub fn asr_model_catalog() -> &'static [AsrModelInfo] {
         AsrModelInfo {
             id: ASR_MODEL_SENSEVOICE,
             title: "SenseVoice",
-            description: "离线整段解码 · 中英日韩粤 · 约 240MB · 快、省资源，多语混说友好；默认推荐",
+            description: "离线整段解码 · 中英日韩粤 · 约 240MB · 快、省资源，多语混说友好",
             dir_name: SENSEVOICE_MODEL_NAME,
             backend: AsrBackend::OfflineSenseVoice,
-            recommended: true,
+            recommended: false,
             approx_size: 239_233_841 + 315_894,
         },
         AsrModelInfo {
@@ -114,6 +114,17 @@ pub fn asr_model_catalog() -> &'static [AsrModelInfo] {
 
 pub fn asr_model_by_id(id: &str) -> Option<&'static AsrModelInfo> {
     asr_model_catalog().iter().find(|m| m.id == id)
+}
+
+/// 各 ASR 模型热词容量上限（经验值：模型越大可利用的偏置词越多）。
+/// 超出部分仍存库可见，但导出给引擎时只取前 N 个对识别生效。
+pub fn hotword_capacity(model_id: &str) -> usize {
+    match model_id {
+        ASR_MODEL_SENSEVOICE => 100,
+        ASR_MODEL_PARAFORMER_TRILINGUAL | ASR_MODEL_FUNASR_NANO_INT8 => 200,
+        ASR_MODEL_FIRERED_LARGE | ASR_MODEL_FUNASR_NANO_FP16 => 300,
+        _ => 100,
+    }
 }
 
 pub fn default_asr_model_id() -> &'static str {

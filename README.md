@@ -212,7 +212,7 @@ ls ~/Library/Logs/DiagnosticReports/ | grep -i openime
 | model_mgr | SHA256 向量 / 校验 / tar.gz 解压 / 校验失败拒绝 | 4 |
 | trait 契约 | 对象安全 / 端到端 fake / config 校验 | 6 |
 | 前端 | App(ping/保存/校验失败/Onboarding) + History(空/删除) | 6 |
-| **合计** | voice-core lib 99 + 百炼/traits 集成 8 + 前端 7 | **114** |
+| **合计** | voice-core lib 103 + 百炼/traits 集成 8 + 前端 7 | **118** |
 
 CI：GitHub Actions 三 job（core 三平台 × fmt+clippy+test / tauri-shell / frontend vitest+build）。
 
@@ -225,5 +225,5 @@ CI：GitHub Actions 三 job（core 三平台 × fmt+clippy+test / tauri-shell / 
 - ✅ **M4** model_mgr + sherpa provider（OnlineRecognizer + Silero VAD 推理，feature 门控）
 - ✅ **M5** enigo 文本插入 + pipeline 端到端
 - ✅ **M6** 悬浮窗 / 托盘 / 全局快捷键 / Onboarding / 历史详情
-- 🚧 **二期** AI 润色：**L0 规则纠错**（零延迟，已接入 pipeline，润色关也跑）/ **L2 LLM 校对**（PreferLocal：Qwen2.5-1.5B GGUF / 百炼 chat，失败回退 L0）/ 人设 / 热词 / **本机性能→模型适配度标签**（轻量/适合/较慢/不推荐）· 见 `docs/phase2-local-llm-research.md`
+- 🚧 **二期** AI 润色三档（保持原样 / 中度仅校对 / 高度改写润色）：**L0 规则纠错**（零延迟，润色关也跑）+ **L2 LLM**（Qwen2.5-1.5B GGUF 本地 / 百炼 chat，PreferLocal 失败回退 L0）/ **流式逐字上屏**（百炼 + paraformer-trilingual，边说边出字；离线引擎录完一次性插入）/ **热词 CSV 导入**（按模型限量，超出标注仅前 N 个生效）/ **本机性能→模型适配度标签** · 见 `docs/phase2-local-llm-research.md`
 - 🔜 Windows 平台
