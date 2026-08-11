@@ -20,3 +20,6 @@ dist/
 
 # ZCode 会话产物（本地规划/计划文件，不入库）
 .zcode/
+
+# 本机代码签名指纹（机器特定，不入库）
+scripts/signing-identity.fingerprint
