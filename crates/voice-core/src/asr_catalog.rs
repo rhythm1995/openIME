@@ -61,7 +61,7 @@ pub fn asr_model_catalog() -> &'static [AsrModelInfo] {
         AsrModelInfo {
             id: ASR_MODEL_SENSEVOICE,
             title: "SenseVoice",
-            description: "离线整段解码 · 中英日韩粤 · 约 240MB · 快、省资源，多语混说友好",
+            description: "离线整段解码 · 中英日韩粤五语 · 约 240MB · 轻量首选。速度快、峰值内存小（~0.5GB），首装即用；自带标点、多语混说友好。整段解码（非逐字流式），短句即时输入够用。普通话准确率略低于 FireRedASR Large，日常聊天最均衡。",
             dir_name: SENSEVOICE_MODEL_NAME,
             backend: AsrBackend::OfflineSenseVoice,
             recommended: false,
@@ -70,7 +70,7 @@ pub fn asr_model_catalog() -> &'static [AsrModelInfo] {
         AsrModelInfo {
             id: ASR_MODEL_FIRERED_LARGE,
             title: "FireRedASR Large",
-            description: "离线整段解码 · 中英高精度（普通话/部分方言）· 约 1.7GB · 更准但更慢更吃内存，适合追求识别率",
+            description: "离线整段解码 · 中英 · 约 1.7GB · 普通话最准。开源 SOTA 档（CER≈3%），适合正式文稿/会议/长句，纠错最少。AED 架构整段解码，更慢、峰值内存 ~2GB+，低配机可能卡顿。仅中英，不支持方言/日韩。追求识别率选它。",
             dir_name: FIRERED_LARGE_DIR,
             backend: AsrBackend::OfflineFireRed,
             recommended: false,
@@ -79,7 +79,7 @@ pub fn asr_model_catalog() -> &'static [AsrModelInfo] {
         AsrModelInfo {
             id: ASR_MODEL_FUNASR_NANO_INT8,
             title: "FunASR Nano int8",
-            description: "离线 encoder+LLM · 中(7方言口音)+英+日 · 约 948MB · 内置 ITN，方言/抗噪强，嘈杂场景适用",
+            description: "离线 encoder+LLM · 中(7方言)+英+日 · 约 948MB · 方言/抗噪强。int8 量化体积最小；内置 ITN（数字/日期归一化），支持吴/粤/闽/客/赣等 7 方言 + 日文，嘈杂场景稳。注意：int8 偶有重复字小瑕疵，要更高精度选 fp16 版。",
             dir_name: FUNASR_NANO_INT8_DIR,
             backend: AsrBackend::OfflineFunAsrNano,
             recommended: false,
@@ -88,7 +88,7 @@ pub fn asr_model_catalog() -> &'static [AsrModelInfo] {
         AsrModelInfo {
             id: ASR_MODEL_FUNASR_NANO_FP16,
             title: "FunASR Nano fp16",
-            description: "离线 encoder+LLM · 中(7方言口音)+英+日 · 约 1.5GB · fp16 LLM 精度略高，Apple Silicon 友好",
+            description: "离线 encoder+LLM · 中(7方言)+英+日 · 约 1.5GB · Apple Silicon 友好。fp16 LLM 精度优于 int8、Metal 加速稳；内置 ITN，方言/抗噪强，支持日文。常说方言/粤语、或要日文、或 M 系列上求精度速度平衡选它。体积比 int8 大。",
             dir_name: FUNASR_NANO_FP16_DIR,
             backend: AsrBackend::OfflineFunAsrNano,
             recommended: false,
