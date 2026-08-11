@@ -46,6 +46,8 @@ enigo = "0.5"
 sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
+# 本机性能采集（给语音模型打标签）
+sysinfo = "0.32"
 
 [profile.release]
 codegen-units = 1

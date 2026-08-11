@@ -19,12 +19,11 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::asr_catalog::{
-    ASR_MODEL_FIRERED_LARGE, ASR_MODEL_SENSEVOICE, ASR_MODEL_ZIPFORMER_ZH_2025,
-    ASR_MODEL_ZIPFORMER_ZH_XLARGE, FIRERED_LARGE_DIR, ZIPFORMER_ZH_2025_DIR,
-    ZIPFORMER_ZH_XLARGE_DIR,
+    ASR_MODEL_FIRERED_LARGE, ASR_MODEL_FUNASR_NANO_FP16, ASR_MODEL_FUNASR_NANO_INT8,
+    ASR_MODEL_PARAFORMER_TRILINGUAL, ASR_MODEL_SENSEVOICE, PARAFORMER_TRILINGUAL_DIR,
 };
 use crate::config::ProviderKind;
-use crate::model_download::{normalize_asr_model_id, SENSEVOICE_MODEL_NAME};
+use crate::model_download::normalize_asr_model_id;
 use crate::traits::{AsrProvider, AsrSession, AudioFrame, TranscriptDelta};
 use crate::{Error, ProviderConfig};
 
@@ -114,6 +113,15 @@ impl FireRedAsrPaths {
 pub enum OfflineBackend {
     SenseVoice,
     FireRed,
+    /// FunASR Nano（encoder+LLM 混合）。variant 0 = int8, 1 = fp16。
+    FunAsrNano(FunasrNanoQuant),
+}
+
+/// FunASR Nano 量化变体。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunasrNanoQuant {
+    Int8,
+    Fp16,
 }
 
 impl SherpaModelPaths {
@@ -224,11 +232,19 @@ impl AsrProvider for SherpaProvider {
             .as_ref()
             .ok_or_else(|| Error::Config("SherpaProvider 未配置模型根目录".into()))?;
 
+        // 语言：provider.language > 空→zh（由 sync_local_asr_fields 同步）。
+        let lang = cfg
+            .language
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("zh");
+
         // 按 model id 分流：
         // - sensevoice → Offline SenseVoice
         // - firered-large → Offline FireRedASR
-        // - zipformer-zh-2025 / zipformer-zh-xlarge → Streaming Zipformer
-        // - 其它目录名 → 旧流式 Paraformer
+        // - paraformer-trilingual → Streaming Paraformer（中粤英，encoder+decoder，无 joiner）
+        // - 其它目录名 → 旧流式 Paraformer（bilingual 等，encoder+decoder.int8）
         let model_key = cfg
             .model
             .strip_prefix("offline:")
@@ -236,26 +252,43 @@ impl AsrProvider for SherpaProvider {
         let model_id = normalize_asr_model_id(model_key);
 
         if cfg.model.starts_with("offline:") || model_id == ASR_MODEL_SENSEVOICE {
-            connect_offline_with_paths(model_root, OfflineBackend::SenseVoice).await
+            connect_offline_with_paths(model_root, OfflineBackend::SenseVoice, lang).await
         } else if model_id == ASR_MODEL_FIRERED_LARGE {
-            connect_offline_with_paths(model_root, OfflineBackend::FireRed).await
-        } else if model_id == ASR_MODEL_ZIPFORMER_ZH_2025 {
-            let paths = SherpaModelPaths::zipformer_from_dirs(
-                &model_root.join(ZIPFORMER_ZH_2025_DIR),
-                vad_root,
-            );
+            connect_offline_with_paths(model_root, OfflineBackend::FireRed, lang).await
+        } else if model_id == ASR_MODEL_PARAFORMER_TRILINGUAL {
+            // 流式 Paraformer 中粤英：encoder.int8 + decoder.int8（注意是 int8 decoder，无 joiner）。
+            let paths = SherpaModelPaths {
+                encoder: model_root
+                    .join(PARAFORMER_TRILINGUAL_DIR)
+                    .join("encoder.int8.onnx"),
+                decoder: model_root
+                    .join(PARAFORMER_TRILINGUAL_DIR)
+                    .join("decoder.int8.onnx"),
+                joiner: None,
+                tokens: model_root
+                    .join(PARAFORMER_TRILINGUAL_DIR)
+                    .join("tokens.txt"),
+                vad_model: vad_root.join("silero_vad.onnx"),
+                backend: StreamingBackend::Paraformer,
+            };
             connect_with_paths(cfg, &paths).await
-        } else if model_id == ASR_MODEL_ZIPFORMER_ZH_XLARGE {
-            let paths = SherpaModelPaths::zipformer_from_dirs(
-                &model_root.join(ZIPFORMER_ZH_XLARGE_DIR),
-                vad_root,
-            );
-            connect_with_paths(cfg, &paths).await
+        } else if model_id == ASR_MODEL_FUNASR_NANO_INT8 {
+            connect_offline_with_paths(
+                model_root,
+                OfflineBackend::FunAsrNano(FunasrNanoQuant::Int8),
+                lang,
+            )
+            .await
+        } else if model_id == ASR_MODEL_FUNASR_NANO_FP16 {
+            connect_offline_with_paths(
+                model_root,
+                OfflineBackend::FunAsrNano(FunasrNanoQuant::Fp16),
+                lang,
+            )
+            .await
         } else {
-            let paths = SherpaModelPaths::paraformer_from_dirs(
-                &model_root.join(&cfg.model),
-                vad_root,
-            );
+            let paths =
+                SherpaModelPaths::paraformer_from_dirs(&model_root.join(&cfg.model), vad_root);
             connect_with_paths(cfg, &paths).await
         }
     }
@@ -270,8 +303,8 @@ mod engine {
     use sherpa_onnx::{
         OfflineFireRedAsrModelConfig, OfflineRecognizer, OfflineRecognizerConfig,
         OfflineSenseVoiceModelConfig, OnlineParaformerModelConfig, OnlineRecognizer,
-        OnlineRecognizerConfig, OnlineTransducerModelConfig, SileroVadModelConfig,
-        VadModelConfig, VoiceActivityDetector,
+        OnlineRecognizerConfig, OnlineTransducerModelConfig, SileroVadModelConfig, VadModelConfig,
+        VoiceActivityDetector,
     };
 
     /// 构造 recognizer 配置（Paraformer / Zipformer transducer）。
@@ -500,11 +533,14 @@ mod engine {
 
     /// 构造 OfflineRecognizer 配置（SenseVoice）。
     #[allow(clippy::field_reassign_with_default)]
-    pub fn build_sensevoice_config(sv: &super::SenseVoicePaths) -> OfflineRecognizerConfig {
+    pub fn build_sensevoice_config(
+        sv: &super::SenseVoicePaths,
+        language: &str,
+    ) -> OfflineRecognizerConfig {
         let mut cfg = OfflineRecognizerConfig::default();
         cfg.model_config.sense_voice = OfflineSenseVoiceModelConfig {
             model: Some(sv.model.to_string_lossy().into_owned()),
-            language: Some("auto".into()),
+            language: Some(normalize_language(language)),
             use_itn: true,
         };
         cfg.model_config.tokens = Some(sv.tokens.to_string_lossy().into_owned());
@@ -534,34 +570,121 @@ mod engine {
         cfg
     }
 
+    fn normalize_language(lang: &str) -> String {
+        match lang.trim().to_lowercase().as_str() {
+            "zh" | "zh-cn" | "zh_cn" | "中文" => "zh".into(),
+            "en" | "英文" => "en".into(),
+            "yue" | "粤语" | "cantonese" | "zh-yue" => "yue".into(),
+            _ => "auto".into(),
+        }
+    }
+
+    /// 构造 OfflineRecognizer 配置（FunASR Nano，encoder+LLM 混合）。
+    /// embedding/encoder_adaptor/llm 是三个 onnx 文件；tokenizer 指向 Qwen3-0.6B 目录。
+    #[allow(clippy::field_reassign_with_default)]
+    pub fn build_funasr_nano_config(
+        embedding: &Path,
+        encoder_adaptor: &Path,
+        llm: &Path,
+        tokenizer_dir: &Path,
+        language: &str,
+    ) -> OfflineRecognizerConfig {
+        use sherpa_onnx::{OfflineFunASRNanoModelConfig, OfflineModelConfig};
+        let mut cfg = OfflineRecognizerConfig::default();
+        cfg.model_config.funasr_nano = OfflineFunASRNanoModelConfig {
+            embedding: Some(embedding.to_string_lossy().into_owned()),
+            encoder_adaptor: Some(encoder_adaptor.to_string_lossy().into_owned()),
+            llm: Some(llm.to_string_lossy().into_owned()),
+            tokenizer: Some(tokenizer_dir.to_string_lossy().into_owned()),
+            // itn=1 开启内置逆文本归一化（数字/日期/单位等规范化输出）。
+            itn: 1,
+            language: Some(normalize_language(language)),
+            ..Default::default()
+        };
+        cfg.model_config.num_threads = 4;
+        cfg.model_config.provider = Some("cpu".into());
+        cfg.model_config.debug = false;
+        cfg.feat_config.sample_rate = 16_000;
+        cfg.feat_config.feature_dim = 80;
+        let _ = OfflineModelConfig::default(); // 抑制未用 import 警告
+        cfg
+    }
+
     /// 离线模式：Fn 按下录音→松开时整段送 OfflineRecognizer 解码。
     pub async fn connect_offline_with_paths(
         model_root: &Path,
         backend: super::OfflineBackend,
+        language: &str,
     ) -> crate::Result<Box<dyn super::AsrSession>> {
-        let cfg = match backend {
+        let lang = language;
+        let mut cfg = match backend {
             super::OfflineBackend::SenseVoice => {
                 let sv = super::SenseVoicePaths::from_dirs(
-                    &model_root.join(super::SENSEVOICE_MODEL_NAME),
+                    &model_root.join(crate::model_download::SENSEVOICE_MODEL_NAME),
                 );
                 sv.validate()?;
-                build_sensevoice_config(&sv)
+                build_sensevoice_config(&sv, lang)
             }
             super::OfflineBackend::FireRed => {
-                let fr =
-                    super::FireRedAsrPaths::from_dirs(&model_root.join(super::FIRERED_LARGE_DIR));
+                let fr = super::FireRedAsrPaths::from_dirs(
+                    &model_root.join(crate::asr_catalog::FIRERED_LARGE_DIR),
+                );
                 fr.validate()?;
                 build_firered_config(&fr)
+            }
+            super::OfflineBackend::FunAsrNano(quant) => {
+                let dir = match quant {
+                    super::FunasrNanoQuant::Int8 => crate::asr_catalog::FUNASR_NANO_INT8_DIR,
+                    super::FunasrNanoQuant::Fp16 => crate::asr_catalog::FUNASR_NANO_FP16_DIR,
+                };
+                let model_dir = model_root.join(dir);
+                let tokenizer_dir = model_dir.join("Qwen3-0.6B");
+                let llm_name = match quant {
+                    super::FunasrNanoQuant::Int8 => "llm.int8.onnx",
+                    super::FunasrNanoQuant::Fp16 => "llm.fp16.onnx",
+                };
+                // 校验文件存在。
+                for (name, p) in [
+                    ("embedding", model_dir.join("embedding.int8.onnx")),
+                    (
+                        "encoder_adaptor",
+                        model_dir.join("encoder_adaptor.int8.onnx"),
+                    ),
+                    ("llm", model_dir.join(llm_name)),
+                    ("tokenizer_dir", tokenizer_dir.clone()),
+                ] {
+                    if !p.exists() {
+                        return Err(Error::Provider(format!(
+                            "FunASR Nano 模型文件缺失（{name}）：{}",
+                            p.display()
+                        )));
+                    }
+                }
+                build_funasr_nano_config(
+                    &model_dir.join("embedding.int8.onnx"),
+                    &model_dir.join("encoder_adaptor.int8.onnx"),
+                    &model_dir.join(llm_name),
+                    &tokenizer_dir,
+                    lang,
+                )
             }
         };
 
         let label = match backend {
             super::OfflineBackend::SenseVoice => "SenseVoice",
             super::OfflineBackend::FireRed => "FireRedASR",
+            super::OfflineBackend::FunAsrNano(quant) => match quant {
+                super::FunasrNanoQuant::Int8 => "FunASR Nano int8",
+                super::FunasrNanoQuant::Fp16 => "FunASR Nano fp16",
+            },
         };
-        let recognizer = OfflineRecognizer::create(&cfg).ok_or_else(|| {
-            Error::Provider(format!("创建 OfflineRecognizer 失败（{label}）"))
-        })?;
+        // FunASR Nano int8/fp16 在高分模型上容易吃满，降一线程换稳定性（与 FireRed 路径一致）
+        if matches!(backend, super::OfflineBackend::FunAsrNano(_)) {
+            cfg.model_config.num_threads = 2;
+        }
+
+        let recognizer = OfflineRecognizer::create(&cfg)
+            .ok_or_else(|| Error::Provider(format!("创建 OfflineRecognizer 失败（{label}）")))?;
         let recognizer = SendOfflineRecognizer(recognizer);
 
         let (dtx, drx) = mpsc::unbounded_channel::<crate::Result<TranscriptDelta>>();
@@ -617,6 +740,7 @@ pub async fn connect_with_paths(
 pub async fn connect_offline_with_paths(
     _model_root: &Path,
     _backend: OfflineBackend,
+    _language: &str,
 ) -> crate::Result<Box<dyn AsrSession>> {
     Err(Error::Provider(
         "本地 sherpa-onnx 引擎未启用：请在编译时开启 `sherpa` feature".into(),

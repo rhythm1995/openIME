@@ -48,12 +48,6 @@ const URL_DEC_MIRROR: &str = "https://hf-mirror.com/csukuangfj/sherpa-onnx-strea
 const URL_TOK_HF: &str = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/resolve/main/tokens.txt";
 const URL_TOK_MIRROR: &str = "https://hf-mirror.com/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/resolve/main/tokens.txt";
 
-// SenseVoice 离线模型下载源。
-const URL_SV_MODEL_HF: &str = "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx";
-const URL_SV_MODEL_MIRROR: &str = "https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx";
-const URL_SV_TOK_HF: &str = "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt";
-const URL_SV_TOK_MIRROR: &str = "https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt";
-
 const URL_VAD_HF: &str = "https://huggingface.co/csukuangfj/vad/resolve/main/silero_vad.onnx";
 const URL_VAD_MIRROR: &str = "https://hf-mirror.com/csukuangfj/vad/resolve/main/silero_vad.onnx";
 
@@ -328,12 +322,9 @@ pub async fn install_local_engine(
         return Err(Error::Config(format!("未知本地 ASR 模型 id：{model_id}")));
     }
     let id_owned = id.to_string();
-    install_file_list(
-        model_root,
-        &files,
-        "本地 ASR 模型安装完成",
-        &|p| on_progress(p.with_target(&id_owned)),
-    )
+    install_file_list(model_root, &files, "本地 ASR 模型安装完成", &|p| {
+        on_progress(p.with_target(&id_owned))
+    })
     .await
 }
 
@@ -341,12 +332,15 @@ pub async fn install_local_engine(
 pub fn normalize_asr_model_id(id_or_mode: &str) -> &str {
     match id_or_mode {
         "offline" | "sensevoice" => crate::asr_catalog::ASR_MODEL_SENSEVOICE,
-        "realtime" | "zipformer-zh-2025" | "zipformer" => {
-            crate::asr_catalog::ASR_MODEL_ZIPFORMER_ZH_2025
+        "realtime" | "paraformer" | "paraformer-trilingual" => {
+            crate::asr_catalog::ASR_MODEL_PARAFORMER_TRILINGUAL
         }
-        "zipformer-zh-xlarge" | "zipformer-xlarge" | "xlarge" => {
-            crate::asr_catalog::ASR_MODEL_ZIPFORMER_ZH_XLARGE
-        }
+        // 已下线的旧 model id：回退到默认 SenseVoice（避免指向不存在的目录）。
+        "zipformer-zh-2025"
+        | "zipformer"
+        | "zipformer-zh-xlarge"
+        | "zipformer-xlarge"
+        | "xlarge" => crate::asr_catalog::ASR_MODEL_SENSEVOICE,
         "firered-large" | "firered" | "fire-red" | "fire_red_asr" => {
             crate::asr_catalog::ASR_MODEL_FIRERED_LARGE
         }
@@ -382,7 +376,7 @@ async fn install_file_list(
                 total_size,
                 speed_bps: 0,
                 message: format!("{} 已安装，跳过", file.file_name),
-            target_id: None,
+                target_id: None,
             });
             continue;
         }
@@ -410,7 +404,7 @@ async fn install_file_list(
         total_size,
         speed_bps: 0,
         message: done_msg.to_string(),
-    target_id: None,
+        target_id: None,
     });
     Ok(())
 }
@@ -462,7 +456,7 @@ async fn download_one(
                     total_size,
                     speed_bps: 0,
                     message: format!("正在校验 {}", file.file_name),
-                target_id: None,
+                    target_id: None,
                 });
                 // 大文件用流式校验，避免 1GB+ 模型整读内存。
                 let ok = if file.sha256.is_empty() {
@@ -577,7 +571,7 @@ async fn download_from_url(
                 total_size,
                 speed_bps: speed,
                 message: format!("正在下载 {}", file.file_name),
-            target_id: None,
+                target_id: None,
             });
         }
     }
@@ -599,13 +593,14 @@ mod tests {
 
     #[test]
     fn manifest_has_catalog_files() {
-        // sensevoice + zipformer + 共享 VAD
+        // sensevoice + paraformer-trilingual + 共享 VAD
         let files = local_model_files();
-        assert!(files.len() >= 7);
+        assert!(files.len() >= 6);
         let names: Vec<_> = files.iter().map(|f| f.file_name).collect();
+        // paraformer-trilingual: encoder.int8 + decoder.int8 + tokens
         assert!(names.contains(&"encoder.int8.onnx"));
-        assert!(names.contains(&"decoder.onnx"));
-        assert!(names.contains(&"joiner.int8.onnx"));
+        assert!(names.contains(&"decoder.int8.onnx"));
+        // sensevoice: model.int8
         assert!(names.contains(&"model.int8.onnx"));
         assert!(names.contains(&"tokens.txt"));
         assert!(names.contains(&"silero_vad.onnx"));
@@ -621,21 +616,20 @@ mod tests {
     }
 
     #[test]
-    fn zipformer_mode_has_five_files() {
-        // realtime 兼容别名 → zipformer-zh-2025：encoder + decoder + joiner + tokens + vad
+    fn paraformer_trilingual_has_four_files() {
+        // realtime 兼容别名 → paraformer-trilingual：encoder.int8 + decoder.int8 + tokens + vad
         let files = local_model_files_for("realtime");
-        assert_eq!(files.len(), 5);
+        assert_eq!(files.len(), 4);
         let names: Vec<_> = files.iter().map(|f| f.file_name).collect();
         assert!(names.contains(&"encoder.int8.onnx"));
-        assert!(names.contains(&"decoder.onnx"));
-        assert!(names.contains(&"joiner.int8.onnx"));
+        assert!(names.contains(&"decoder.int8.onnx"));
         assert!(names.contains(&"silero_vad.onnx"));
     }
 
     #[test]
     fn dest_paths_match_provider_layout() {
         let root = PathBuf::from("/data/models");
-        let files = local_model_files_for("zipformer-zh-2025");
+        let files = local_model_files_for("paraformer-trilingual");
         let enc = files
             .iter()
             .find(|f| f.file_name == "encoder.int8.onnx")
@@ -644,7 +638,7 @@ mod tests {
             enc.dest(&root),
             PathBuf::from(format!(
                 "/data/models/{}/encoder.int8.onnx",
-                crate::asr_catalog::ZIPFORMER_ZH_2025_DIR
+                crate::asr_catalog::PARAFORMER_TRILINGUAL_DIR
             ))
         );
         let vad = files
@@ -666,8 +660,11 @@ mod tests {
         // 按模型 id / 兼容 mode 查
         assert_eq!(missing_files_for(dir.path(), "offline").len(), 3);
         assert_eq!(missing_files_for(dir.path(), "sensevoice").len(), 3);
-        assert_eq!(missing_files_for(dir.path(), "realtime").len(), 5);
-        assert_eq!(missing_files_for(dir.path(), "zipformer-zh-2025").len(), 5);
+        assert_eq!(missing_files_for(dir.path(), "realtime").len(), 4);
+        assert_eq!(
+            missing_files_for(dir.path(), "paraformer-trilingual").len(),
+            4
+        );
     }
 
     #[test]

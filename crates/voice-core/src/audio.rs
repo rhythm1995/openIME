@@ -166,7 +166,7 @@ impl CpalAudioSource {
 
     /// 按设备名建立采集源；`device` 为 None / 找不到时回退默认输入设备。
     pub fn new_with_device(device: Option<String>) -> crate::Result<Self> {
-        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        use cpal::traits::{DeviceTrait, StreamTrait};
         let host = cpal::default_host();
         let dev = Self::pick_device(&host, device.as_deref())
             .ok_or_else(|| Error::Audio("找不到输入设备".into()))?;

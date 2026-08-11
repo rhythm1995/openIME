@@ -9,6 +9,7 @@ import type {
   PolishModelStatus,
   ProviderConfig,
   SessionSummary,
+  SystemInfo,
   UtteranceRecord,
 } from "./types";
 
@@ -57,7 +58,13 @@ export const ipc = {
   setLaunchAtLogin: (enabled: boolean) =>
     invoke<void>("set_launch_at_login", { enabled }),
   // 本地模型（sherpa-onnx）
+  getSystemInfo: (refresh: boolean = false) =>
+    invoke<SystemInfo>("get_system_info", { refresh }),
   listLocalAsrModels: () => invoke<LocalAsrModelEntry[]>("list_local_asr_models"),
+  setActiveAsrModel: (modelId: string) =>
+    invoke<void>("set_active_asr_model", { modelId }),
+  deleteLocalAsrModel: (modelId: string) =>
+    invoke<void>("delete_local_asr_model", { modelId }),
   getLocalModelStatus: (mode?: string) =>
     invoke<LocalModelStatus>("get_local_model_status", { mode }),
   installLocalModel: (mode?: string) =>

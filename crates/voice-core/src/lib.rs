@@ -25,15 +25,18 @@ pub mod pipeline;
 pub mod polish;
 pub mod providers;
 pub mod store;
+pub mod system;
 pub mod traits;
 
 pub use asr_catalog::{
     asr_model_by_id, asr_model_catalog, asr_model_files, default_asr_model_id,
     is_asr_model_installed, AsrBackend, AsrModelInfo, ASR_MODEL_FIRERED_LARGE,
-    ASR_MODEL_SENSEVOICE, ASR_MODEL_ZIPFORMER_ZH_2025, ASR_MODEL_ZIPFORMER_ZH_XLARGE,
-    FIRERED_LARGE_DIR, ZIPFORMER_ZH_2025_DIR, ZIPFORMER_ZH_XLARGE_DIR,
+    ASR_MODEL_FUNASR_NANO_FP16, ASR_MODEL_FUNASR_NANO_INT8, ASR_MODEL_PARAFORMER_TRILINGUAL,
+    ASR_MODEL_SENSEVOICE, FIRERED_LARGE_DIR, FUNASR_NANO_FP16_DIR, FUNASR_NANO_INT8_DIR,
 };
-pub use config::{AppConfig, PolishPolicy, ProviderConfig, ProviderKind, POLISH_DEFAULT_LOCAL_MODEL};
+pub use config::{
+    AppConfig, PolishPolicy, ProviderConfig, ProviderKind, POLISH_DEFAULT_LOCAL_MODEL,
+};
 pub use insert::EnigoInserter;
 pub use model_download::{
     install_local_engine, install_polish_model, is_local_engine_installed,
@@ -43,13 +46,12 @@ pub use model_download::{
     SENSEVOICE_MODEL_NAME, SHERPA_MODEL_NAME, VAD_DIR,
 };
 pub use model_mgr::ModelManager;
-pub use polish::{
-    BailianChatPolish, LocalGgufPolish, PolishRouter, PolishRouterConfig,
-};
+pub use polish::{BailianChatPolish, LocalGgufPolish, PolishRouter, PolishRouterConfig};
 pub use providers::bailian::test_connection;
 pub use providers::sherpa::{SherpaModelPaths, SherpaProvider};
 pub use providers::RoutingProvider;
 pub use store::{Hotword, Persona, SqliteStore};
+pub use system::{collect_system_info, compute_model_tag, ModelPerfTag, SystemInfo};
 pub use traits::{
     AsrProvider, AsrSession, AudioFormat, AudioFrame, AudioSource, HistoryStore, PolishMode,
     PolishRequest, PolishResponse, SessionSummary, TextInserter, TextPolishProvider,

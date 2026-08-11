@@ -27,6 +27,7 @@ static void handle_event(NSEvent *event) {
 // CGEventTap 回调（C 函数）。
 static CGEventRef cg_callback(CGEventTapProxy proxy, CGEventType type,
                                CGEventRef event, void *refcon) {
+    (void)proxy; (void)refcon; // CGEventTapCallBack 签名固定，此回调不使用这两个参数。
     if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
         return event;
     }

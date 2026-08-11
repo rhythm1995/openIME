@@ -179,11 +179,7 @@ impl Pipeline {
     /// 把已收集的 final 文本插入前台 App 并落库。
     ///
     /// 调用方负责：需要在插入前确保目标窗口（前台 App）已获得焦点。
-    pub async fn insert_finals(
-        &self,
-        session_id: &str,
-        finals: &[String],
-    ) -> crate::Result<()> {
+    pub async fn insert_finals(&self, session_id: &str, finals: &[String]) -> crate::Result<()> {
         self.insert_finals_with_polish(session_id, finals, &PolishContext::default())
             .await
     }
@@ -227,14 +223,39 @@ impl Pipeline {
     }
 
     async fn apply_polish(&self, text: &str, ctx: &PolishContext) -> String {
-        if !ctx.enabled || text.trim().is_empty() || ctx.mode == PolishMode::Off {
+        if text.trim().is_empty() {
             return text.to_string();
         }
+        // ── L0 规则层：总是先过一遍（即使总体润色关闭，也做最小清理）；不阻断。
+        let l0 = crate::polish::correct_l0(text, &ctx.hotwords);
+        if l0.text.trim().is_empty() {
+            return l0.text;
+        }
+        tracing::debug!(
+            "L0 规则层：had_correction={} truncation={} 原='{}' 纠后='{}'",
+            l0.had_correction,
+            l0.truncation_flag,
+            text,
+            l0.text
+        );
+
+        // 若总体润色关闭 / 无 provider / 模式 Off → L0 直出。
+        if !ctx.enabled || ctx.mode == PolishMode::Off {
+            return l0.text;
+        }
         let Some(polish) = &self.deps.polish else {
-            return text.to_string();
+            return l0.text;
         };
+
+        // ── L2 gating：≤8 字跳过 LLM（过度纠正 + 延迟不值得；调研 6.3）。
+        if l0.text.trim().chars().count() <= 8 {
+            tracing::debug!("L2 跳过：≤8 字，L0 直出");
+            return l0.text;
+        }
+
+        // ── L2 LLM 纯校对（失败→ L0 回退，不阻断上屏）。
         let req = PolishRequest {
-            text: text.to_string(),
+            text: l0.text.clone(),
             mode: ctx.mode,
             persona_prompt: ctx.persona_prompt.clone(),
             hotwords: ctx.hotwords.clone(),
@@ -243,9 +264,9 @@ impl Pipeline {
         match polish.polish(req).await {
             Ok(r) => {
                 if r.text.trim().is_empty() {
-                    text.to_string()
+                    l0.text
                 } else {
-                    let cleaned = crate::polish::sanitize_polish_output(text, &r.text);
+                    let cleaned = crate::polish::sanitize_polish_output(&l0.text, &r.text);
                     if cleaned != r.text.trim() {
                         tracing::info!(
                             "润色输出已清洗（防重复）：provider={} raw_len={} clean_len={}",
@@ -258,8 +279,8 @@ impl Pipeline {
                 }
             }
             Err(e) => {
-                tracing::warn!("润色失败，使用原文：{e}");
-                text.to_string()
+                tracing::warn!("润色失败，使用 L0 结果：{e}");
+                l0.text
             }
         }
     }
@@ -268,10 +289,14 @@ impl Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::{AsrSession, AudioFormat, AudioFrame, TranscriptDelta};
+    use crate::traits::{
+        AsrSession, AudioFormat, AudioFrame, PolishRequest, PolishResponse, TextPolishProvider,
+        TranscriptDelta,
+    };
     use crate::ProviderConfig;
     use async_trait::async_trait;
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Mutex as StdMutex;
     use tokio_stream::wrappers::UnboundedReceiverStream;
 
@@ -417,6 +442,7 @@ mod tests {
             api_key: String::new(),
             model: "test".into(),
             vocabulary_id: None,
+            language: None,
         };
         let meta = SessionMeta {
             engine: "local".into(),
@@ -491,6 +517,7 @@ mod tests {
             api_key: String::new(),
             model: "test".into(),
             vocabulary_id: None,
+            language: None,
         };
         let meta = SessionMeta {
             engine: "local".into(),
@@ -504,5 +531,171 @@ mod tests {
         assert!(r.utterances.is_empty());
         assert_eq!(store.sessions.lock().unwrap().len(), 1);
         assert!(ins.out.lock().unwrap().is_empty());
+    }
+
+    // ── L0 / L2 / 回退 集成测试（TDD）──────────────────────────
+
+    enum MockBehavior {
+        Ok(String),
+        Empty,
+        Err,
+    }
+
+    struct MockPolish {
+        calls: Arc<AtomicU32>,
+        behavior: MockBehavior,
+    }
+    impl MockPolish {
+        fn new(b: MockBehavior) -> Self {
+            Self {
+                calls: Arc::new(AtomicU32::new(0)),
+                behavior: b,
+            }
+        }
+    }
+    #[async_trait]
+    impl TextPolishProvider for MockPolish {
+        async fn polish(&self, _req: PolishRequest) -> crate::Result<PolishResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match &self.behavior {
+                MockBehavior::Ok(t) => Ok(PolishResponse {
+                    text: t.clone(),
+                    provider: "mock".into(),
+                    latency_ms: 1,
+                }),
+                MockBehavior::Empty => Ok(PolishResponse {
+                    text: String::new(),
+                    provider: "mock".into(),
+                    latency_ms: 1,
+                }),
+                MockBehavior::Err => Err(crate::Error::Provider("mock fail".into())),
+            }
+        }
+    }
+
+    fn deps_with_polish(
+        polish: Arc<dyn TextPolishProvider>,
+    ) -> (PipelineDeps, Arc<RecInserter>, Arc<MemStore>) {
+        let ins = Arc::new(RecInserter::default());
+        let store = Arc::new(MemStore::default());
+        let deps = PipelineDeps {
+            provider: Arc::new(FakeProvider),
+            inserter: ins.clone(),
+            store: store.clone(),
+            polish: Some(polish),
+        };
+        (deps, ins, store)
+    }
+
+    fn ctx_enabled(mode: PolishMode) -> PolishContext {
+        PolishContext {
+            enabled: true,
+            mode,
+            persona_prompt: None,
+            hotwords: vec![],
+            timeout_ms: 1000,
+        }
+    }
+
+    #[tokio::test]
+    async fn l0_cleanup_runs_even_when_polish_disabled() {
+        // 总开关关闭 / 无 provider：L0 规则层仍生效（去填充词 + 补句号）。
+        let (deps, ins, _store) = deps(); // polish: None
+        let pipe = Pipeline::new(deps);
+        let ctx = PolishContext {
+            enabled: false,
+            ..Default::default()
+        };
+        pipe.insert_finals_with_polish("s1", &["嗯那个今天天气不错".into()], &ctx)
+            .await
+            .unwrap();
+        let out = ins.out.lock().unwrap().clone();
+        assert!(
+            out.contains("今天天气不错"),
+            "L0 应去掉首部填充词，得到 {out}"
+        );
+        assert!(out.ends_with('。'), "L0 应给长句补句号，得到 {out}");
+    }
+
+    #[tokio::test]
+    async fn l2_skipped_when_l0_result_short() {
+        // L0 结果 ≤8 字 → 不调用 LLM（调研 6.3：过度纠正 + 延迟不值得）。
+        let mock = Arc::new(MockPolish::new(MockBehavior::Ok("不该出现".into())));
+        let calls = mock.calls.clone();
+        let (deps, ins, _store) = deps_with_polish(mock);
+        let pipe = Pipeline::new(deps);
+        pipe.insert_finals_with_polish("s1", &["你好".into()], &ctx_enabled(PolishMode::Light))
+            .await
+            .unwrap();
+        assert_eq!(*ins.out.lock().unwrap(), "你好");
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "短句(≤8字)不应调用 L2");
+    }
+
+    #[tokio::test]
+    async fn l2_used_for_long_text_and_inserts_corrected() {
+        // 长句 → L2 校对，返回纠正文本 → 上屏纠正后结果。
+        let mock = Arc::new(MockPolish::new(MockBehavior::Ok(
+            "我们下午在会议室见面吧".into(),
+        )));
+        let calls = mock.calls.clone();
+        let (deps, ins, _store) = deps_with_polish(mock);
+        let pipe = Pipeline::new(deps);
+        pipe.insert_finals_with_polish(
+            "s1",
+            &["我们下午在会试室见面吧".into()],
+            &ctx_enabled(PolishMode::Light),
+        )
+        .await
+        .unwrap();
+        assert_eq!(*ins.out.lock().unwrap(), "我们下午在会议室见面吧");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn l2_error_falls_back_to_l0() {
+        // L2 失败 → 不阻断，回退 L0 结果上屏。
+        let mock = Arc::new(MockPolish::new(MockBehavior::Err));
+        let calls = mock.calls.clone();
+        let (deps, ins, _store) = deps_with_polish(mock);
+        let pipe = Pipeline::new(deps);
+        pipe.insert_finals_with_polish(
+            "s1",
+            &["我们下午在会试室见面吧".into()],
+            &ctx_enabled(PolishMode::Light),
+        )
+        .await
+        .unwrap();
+        assert_eq!(*ins.out.lock().unwrap(), "我们下午在会试室见面吧");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn l2_empty_output_falls_back_to_l0() {
+        // L2 返回空串 → 视同无效，回退 L0。
+        let mock = Arc::new(MockPolish::new(MockBehavior::Empty));
+        let (deps, ins, _store) = deps_with_polish(mock);
+        let pipe = Pipeline::new(deps);
+        pipe.insert_finals_with_polish(
+            "s1",
+            &["我们下午在会试室见面吧".into()],
+            &ctx_enabled(PolishMode::Light),
+        )
+        .await
+        .unwrap();
+        assert_eq!(*ins.out.lock().unwrap(), "我们下午在会试室见面吧");
+    }
+
+    #[tokio::test]
+    async fn empty_final_is_skipped() {
+        // 空 final 不应触发 polish，也不上屏。
+        let mock = Arc::new(MockPolish::new(MockBehavior::Ok("x".into())));
+        let calls = mock.calls.clone();
+        let (deps, ins, _store) = deps_with_polish(mock);
+        let pipe = Pipeline::new(deps);
+        pipe.insert_finals_with_polish("s1", &["".into()], &ctx_enabled(PolishMode::Light))
+            .await
+            .unwrap();
+        assert!(ins.out.lock().unwrap().is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }

@@ -27,8 +27,8 @@ pub fn sanitize_polish_output(original: &str, polished: &str) -> String {
             return once;
         }
         // 3) 润色结果 = 原文 + 改写，且改写又以原文开头 → 取后半改写版。
-        if p.starts_with(o) {
-            let rest = p[o.len()..].trim_start_matches(is_soft_sep).trim();
+        if let Some(stripped) = p.strip_prefix(o) {
+            let rest = stripped.trim_start_matches(is_soft_sep).trim();
             if !rest.is_empty() && rest != o && !rest.starts_with(o) {
                 // 原文紧跟真正改写：取改写部分（更可能是模型「先回显再改写」）。
                 // 但若 rest 明显更长且包含 o，仍可能是重复——交给 split_exact_double。
@@ -85,7 +85,13 @@ fn is_soft_sep(c: char) -> bool {
 fn strip_wrappers(s: &str) -> String {
     let mut t = s.trim().to_string();
     // 成对引号
-    let pairs = [('"', '"'), ('"', '"'), ('\'', '\''), ('「', '」'), ('『', '』')];
+    let pairs = [
+        ('"', '"'),
+        ('"', '"'),
+        ('\'', '\''),
+        ('「', '」'),
+        ('『', '』'),
+    ];
     for (a, b) in pairs {
         if t.starts_with(a) && t.ends_with(b) && t.chars().count() >= 2 {
             let mut chars = t.chars();
@@ -227,10 +233,7 @@ mod tests {
 
     #[test]
     fn strip_label_prefix() {
-        assert_eq!(
-            sanitize_polish_output("嗯你好", "改写：你好。"),
-            "你好。"
-        );
+        assert_eq!(sanitize_polish_output("嗯你好", "改写：你好。"), "你好。");
     }
 
     #[test]

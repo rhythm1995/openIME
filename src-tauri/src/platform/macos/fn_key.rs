@@ -9,7 +9,6 @@ extern "C" {
     fn openime_frontmost_bundle_id() -> *const c_char;
     fn openime_activate_app(bundle_id: *const c_char) -> i32;
     fn openime_prepare_overlay_window(ns_window: *mut c_void);
-    fn openime_show_window_without_activating(ns_window: *mut c_void);
     fn openime_show_overlay_preserving_focus(
         ns_window: *mut c_void,
         x: f64,
@@ -74,14 +73,6 @@ pub fn prepare_overlay_window(ns_window: *mut c_void) {
         return;
     }
     unsafe { openime_prepare_overlay_window(ns_window) };
-}
-
-/// 显示窗口但不激活本 app / 不抢 key（保留用户输入框光标）。
-pub fn show_window_without_activating(ns_window: *mut c_void) {
-    if ns_window.is_null() {
-        return;
-    }
-    unsafe { openime_show_window_without_activating(ns_window) };
 }
 
 /// 显示录音 overlay，并尽量保留调用前的焦点/光标。

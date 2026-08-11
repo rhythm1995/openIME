@@ -19,7 +19,11 @@ pub struct BailianChatPolish {
 }
 
 impl BailianChatPolish {
-    pub fn new(api_key: impl Into<String>, base_url: impl Into<String>, model: impl Into<String>) -> Self {
+    pub fn new(
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
         Self {
             api_key: api_key.into(),
             base_url: base_url.into(),
@@ -59,10 +63,7 @@ impl TextPolishProvider for BailianChatPolish {
             .map(|(role, content)| json!({ "role": role, "content": content }))
             .collect();
 
-        let url = format!(
-            "{}/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let client = reqwest::Client::builder()
             .timeout(req.timeout)
             .build()

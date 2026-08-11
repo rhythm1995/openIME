@@ -122,7 +122,7 @@ fn run_gguf_completion_llama(
     use llama_cpp_2::llama_backend::LlamaBackend;
     use llama_cpp_2::llama_batch::LlamaBatch;
     use llama_cpp_2::model::params::LlamaModelParams;
-    use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel};
+    use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
     use llama_cpp_2::sampling::LlamaSampler;
     use std::num::NonZeroU32;
 
@@ -134,8 +134,9 @@ fn run_gguf_completion_llama(
     let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
         .map_err(|e| Error::Provider(format!("加载 GGUF 失败: {e}")))?;
 
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(n_ctx).unwrap_or(NonZeroU32::new(2048).unwrap()));
+    let ctx_params = LlamaContextParams::default().with_n_ctx(Some(
+        NonZeroU32::new(n_ctx).unwrap_or(NonZeroU32::new(2048).unwrap()),
+    ));
     let mut ctx = model
         .new_context(&backend, ctx_params)
         .map_err(|e| Error::Provider(format!("创建 llama context 失败: {e}")))?;
@@ -145,8 +146,14 @@ fn run_gguf_completion_llama(
         .filter_map(|(role, content)| LlamaChatMessage::new(role.clone(), content.clone()).ok())
         .collect();
 
+    // 新版 llama-cpp-2：apply_chat_template 需要显式 &LlamaChatTemplate。
+    // 优先用模型内置模板（chat_template），拿不到则回退 chatml（Qwen2.5 Instruct 兼容）。
+    let tmpl = model
+        .chat_template(None)
+        .or_else(|_| LlamaChatTemplate::new("chatml"))
+        .map_err(|e| Error::Provider(format!("取 chat_template 失败: {e}")))?;
     let prompt = model
-        .apply_chat_template(None, &chat_msgs, true)
+        .apply_chat_template(&tmpl, &chat_msgs, true)
         .map_err(|e| Error::Provider(format!("apply_chat_template 失败: {e}")))?;
 
     let tokens = model

@@ -192,6 +192,47 @@ pub struct LocalAsrModelEntry {
     pub installed: bool,
     pub active: bool,
     pub missing_size: u64,
+    /// 本机适配度标签（由 system.rs 打标）。首次无缓存时为空，前端应容忍 None。
+    pub perf_tag: Option<voice_core::ModelPerfTag>,
+}
+
+const SYSTEM_INFO_KEY: &str = "system_info";
+
+fn system_info_cached(store: &voice_core::SqliteStore) -> Option<voice_core::SystemInfo> {
+    store
+        .get_setting(SYSTEM_INFO_KEY)
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
+fn system_info_ensure(state: &State<'_, AppState>) -> Option<voice_core::SystemInfo> {
+    if let Some(cached) = system_info_cached(&state.store) {
+        return Some(cached);
+    }
+    let fresh = voice_core::collect_system_info();
+    let json = serde_json::to_string(&fresh).unwrap_or_default();
+    let _ = state.store.set_setting(SYSTEM_INFO_KEY, &json);
+    Some(fresh)
+}
+
+#[tauri::command]
+pub fn get_system_info(
+    state: State<'_, AppState>,
+    refresh: bool,
+) -> Result<voice_core::SystemInfo, String> {
+    if !refresh {
+        if let Some(cached) = system_info_cached(&state.store) {
+            return Ok(cached);
+        }
+    }
+    let fresh = voice_core::collect_system_info();
+    let json = serde_json::to_string(&fresh).map_err(|e| e.to_string())?;
+    state
+        .store
+        .set_setting(SYSTEM_INFO_KEY, &json)
+        .map_err(|e| e.to_string())?;
+    Ok(fresh)
 }
 
 #[tauri::command]
@@ -202,11 +243,16 @@ pub fn list_local_asr_models(
         return Err("未配置本地模型目录".to_string());
     };
     let active = state.config.blocking_read().resolved_local_asr_model();
+    // 本机信息：读缓存，若无则采集一次并写回（极简持久化）。
+    let sys_opt = system_info_ensure(&state);
     let entries = voice_core::asr_model_catalog()
         .iter()
         .map(|m| {
             let missing = voice_core::missing_files_for(&model_root, m.id);
             let missing_size: u64 = missing.iter().map(|f| f.size).sum();
+            let perf_tag = sys_opt
+                .as_ref()
+                .map(|sys| voice_core::compute_model_tag(m.approx_size, sys));
             LocalAsrModelEntry {
                 id: m.id.to_string(),
                 title: m.title.to_string(),
@@ -214,7 +260,8 @@ pub fn list_local_asr_models(
                 backend: match m.backend {
                     voice_core::AsrBackend::OfflineSenseVoice => "offline_sense_voice".into(),
                     voice_core::AsrBackend::OfflineFireRed => "offline_fire_red".into(),
-                    voice_core::AsrBackend::StreamingZipformer => "streaming_zipformer".into(),
+                    voice_core::AsrBackend::StreamingParaformer => "streaming_paraformer".into(),
+                    voice_core::AsrBackend::OfflineFunAsrNano => "offline_funasr_nano".into(),
                 },
                 recommended: m.recommended,
                 approx_size: m.approx_size,
@@ -222,10 +269,75 @@ pub fn list_local_asr_models(
                 // 未安装不可算「使用中」
                 active: missing.is_empty() && m.id == active,
                 missing_size,
+                perf_tag,
             }
         })
         .collect();
     Ok(entries)
+}
+
+/// 启用某个已安装的本地 ASR 模型：写回 config 并立即生效（无需手动点「保存设置」）。
+/// 同步 local_asr_model / local_mode / sherpa provider.model。
+#[tauri::command]
+pub fn set_active_asr_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model_id: String,
+) -> Result<(), String> {
+    let id = voice_core::normalize_asr_model_id(&model_id).to_string();
+    // 校验：必须是目录里的已知模型。
+    if voice_core::asr_model_by_id(&id).is_none() {
+        return Err(format!("未知的 ASR 模型 id：{model_id}"));
+    }
+    {
+        let mut cfg = state.config.blocking_write();
+        cfg.local_asr_model = id.clone();
+        cfg.sync_local_asr_fields();
+        // 持久化（store 已在 AppState 持有）。
+        if let Err(e) = crate::state::save_config(&state.store, &cfg) {
+            return Err(format!("保存配置失败：{e}"));
+        }
+    }
+    log_info!("已启用本地 ASR 模型：{id}");
+    let _ = app.emit("asr://active-changed", &id);
+    Ok(())
+}
+
+/// 删除某个已安装本地 ASR 模型的全部文件（不影响共享 VAD）。
+#[tauri::command]
+pub fn delete_local_asr_model(state: State<'_, AppState>, model_id: String) -> Result<(), String> {
+    let Some(model_root) = state.model_root() else {
+        return Err("未配置本地模型目录".to_string());
+    };
+    let id = voice_core::normalize_asr_model_id(&model_id).to_string();
+    let Some(info) = voice_core::asr_model_by_id(&id) else {
+        return Err(format!("未知的 ASR 模型 id：{model_id}"));
+    };
+    // 删除模型主体目录（不动共享的 vad/）。
+    let dir = model_root.join(info.dir_name);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)
+            .map_err(|e| format!("删除模型目录失败 {}: {e}", dir.display()))?;
+        log_info!("已删除本地 ASR 模型目录：{}", dir.display());
+    }
+    // 若删的是当前启用模型，回退到任一已装候选；都删了则保留配置（录音时会引导下载）。
+    {
+        let cfg = state.config.blocking_read();
+        if cfg.resolved_local_asr_model() == id {
+            drop(cfg);
+            let fallback = voice_core::asr_model_catalog()
+                .iter()
+                .find(|m| m.id != id && voice_core::is_asr_model_installed(&model_root, m.id));
+            if let Some(fb) = fallback {
+                let mut cfg = state.config.blocking_write();
+                cfg.local_asr_model = fb.id.to_string();
+                cfg.sync_local_asr_fields();
+                let _ = crate::state::save_config(&state.store, &cfg);
+                log_info!("删后回退启用模型：{}", fb.id);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -291,7 +403,10 @@ pub fn get_polish_model_status(state: State<'_, AppState>) -> Result<PolishModel
 
 /// 下载安装本地润色 GGUF（进度复用 model://download-progress）。
 #[tauri::command]
-pub async fn install_polish_model(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn install_polish_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let Some(model_root) = state.model_root() else {
         return Err("未配置本地模型目录".to_string());
     };
@@ -578,19 +693,22 @@ pub async fn toggle_recording(
 
     // 读当前 provider 配置。
     let cfg = state.config.read().await.clone();
-    let mut provider_cfg = cfg.active().map_err(|e| {
-        release_recording_guard(&state);
-        e.to_string()
-    })?.clone();
+    let mut provider_cfg = cfg
+        .active()
+        .map_err(|e| {
+            release_recording_guard(&state);
+            e.to_string()
+        })?
+        .clone();
 
     // 本地引擎：注入当前启用的 ASR 模型 id；未安装则回退到任一已装候选。
     if provider_cfg.kind == voice_core::ProviderKind::Sherpa {
         let mut model_id = cfg.resolved_local_asr_model();
         if let Some(root) = state.model_root() {
             if !voice_core::is_local_engine_installed_for(&root, &model_id) {
-                let fallback = voice_core::asr_model_catalog().iter().find(|m| {
-                    voice_core::is_local_engine_installed_for(&root, m.id)
-                });
+                let fallback = voice_core::asr_model_catalog()
+                    .iter()
+                    .find(|m| voice_core::is_local_engine_installed_for(&root, m.id));
                 if let Some(m) = fallback {
                     log_warn!(
                         "配置的 ASR「{}」未安装，回退到已安装的「{}」",
@@ -621,11 +739,10 @@ pub async fn toggle_recording(
 
     // 建立音频源（优先用户选定的麦克风，否则系统默认）。
     let audio: Box<dyn voice_core::AudioSource> = Box::new(
-        CpalAudioSource::new_with_device(cfg.audio_device.clone())
-            .map_err(|e| {
-                release_recording_guard(&state);
-                e.to_string()
-            })?,
+        CpalAudioSource::new_with_device(cfg.audio_device.clone()).map_err(|e| {
+            release_recording_guard(&state);
+            e.to_string()
+        })?,
     );
 
     state.clear_stop();
@@ -648,7 +765,7 @@ pub async fn toggle_recording(
     };
 
     tokio::spawn(async move {
-        // partial 回调：发 Tauri 事件给 overlay。
+        // partial 回调：左下角做状态 + 流式模型的逐字落焦上屏（后续：paraformer-trilingual 逐字 enigo）。
         let app_for_cb = app_handle.clone();
         let on_partial: voice_core::pipeline::PartialCallback = Arc::new(move |text| {
             let _ = app_for_cb.emit("recording://partial", text.to_string());
@@ -684,7 +801,10 @@ pub async fn toggle_recording(
                 guard.store(false, std::sync::atomic::Ordering::SeqCst);
                 // 文字已上屏后再收起 HUD。
                 hide_overlay_only(&app_handle);
-                let _ = app_handle.emit("recording://stopped", r.utterances.join(""));
+                // stopped 事件 payload 给功能测试框/历史用：需先去重，否则
+                // 流式引擎对同一句的 endpoint+flush 两条 final 会被 join 成重复串。
+                let deduped = voice_core::polish::dedupe_consecutive_finals(&r.utterances);
+                let _ = app_handle.emit("recording://stopped", deduped.join(""));
             }
             Err(e) => {
                 hide_overlay_only(&app_handle);

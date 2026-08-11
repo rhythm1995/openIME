@@ -38,10 +38,9 @@ export default function RecorderOverlay() {
       setPhase("listening");
       setStatus("正在聆听…");
     }).then((u) => unlisteners.push(u));
-    listen<string>("recording://partial", (e) => {
+    // 流式逐字走输入组件直入，不再在左下角大段回显；仅保持"正在聆听"状态。
+    listen<string>("recording://partial", () => {
       setPhase("listening");
-      setPartial(e.payload);
-      if (e.payload) setStatus(e.payload);
     }).then((u) => unlisteners.push(u));
     listen<string>("recording://processing", (e) => {
       setPhase("processing");

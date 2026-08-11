@@ -182,6 +182,7 @@ async fn fake_pipeline_produces_final_and_inserts() {
         api_key: String::new(),
         model: "fake".into(),
         vocabulary_id: None,
+        language: None,
     };
     let mut session = provider.connect(&cfg).await.unwrap();
     let inserter = Arc::new(RecordingInserter::default());
@@ -243,6 +244,7 @@ fn provider_validate_reports_missing_fields() {
         api_key: String::new(),
         model: String::new(),
         vocabulary_id: None,
+        language: None,
     };
     let err = empty_bailian.validate().unwrap_err();
     assert!(matches!(err, Error::Config(_)), "got {err:?}");

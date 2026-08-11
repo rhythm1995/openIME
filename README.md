@@ -206,11 +206,13 @@ ls ~/Library/Logs/DiagnosticReports/ | grep -i openime
 | 音频 | f32↔s16le / 重采样比例 / WAV fixture / 错误路径 | 7 |
 | 权限 | 状态枚举 / checker / 序列化 | 3 |
 | 文本插入 | diff_prefix 增量 / 空串 | 2 |
-| pipeline | partial 回调 + final 插入 + 落库 / 空 finals 仍建会话 | 2 |
+| pipeline | partial/final + 插入 + 落库 + **L0 总生效 / L2 ≤8字跳过 / L2 成功 / 失败回退 / 空串回退** | 8 |
+| L0 规则纠错 | 填充词去除 / 句末语气词保留 / 合法叠词豁免 / 标点归一 / 同音字保守边界 / 截断检测 | 23 |
+| 系统采集 | 模型适配度标签：轻量/中量/重型 × 内存分档 / 磁盘不足 / Apple Silicon / 300·1100MB 边界 | 9 |
 | model_mgr | SHA256 向量 / 校验 / tar.gz 解压 / 校验失败拒绝 | 4 |
 | trait 契约 | 对象安全 / 端到端 fake / config 校验 | 6 |
 | 前端 | App(ping/保存/校验失败/Onboarding) + History(空/删除) | 6 |
-| **合计** | | **46** |
+| **合计** | voice-core lib 99 + 百炼/traits 集成 8 + 前端 7 | **114** |
 
 CI：GitHub Actions 三 job（core 三平台 × fmt+clippy+test / tauri-shell / frontend vitest+build）。
 
@@ -223,5 +225,5 @@ CI：GitHub Actions 三 job（core 三平台 × fmt+clippy+test / tauri-shell / 
 - ✅ **M4** model_mgr + sherpa provider（OnlineRecognizer + Silero VAD 推理，feature 门控）
 - ✅ **M5** enigo 文本插入 + pipeline 端到端
 - ✅ **M6** 悬浮窗 / 托盘 / 全局快捷键 / Onboarding / 历史详情
-- 🚧 **二期** AI 润色（PreferLocal：Qwen2.5-1.5B GGUF / 百炼 chat）/ 人设 / 热词 · 见 `docs/phase2-local-llm-research.md`
+- 🚧 **二期** AI 润色：**L0 规则纠错**（零延迟，已接入 pipeline，润色关也跑）/ **L2 LLM 校对**（PreferLocal：Qwen2.5-1.5B GGUF / 百炼 chat，失败回退 L0）/ 人设 / 热词 / **本机性能→模型适配度标签**（轻量/适合/较慢/不推荐）· 见 `docs/phase2-local-llm-research.md`
 - 🔜 Windows 平台

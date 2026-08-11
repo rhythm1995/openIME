@@ -109,6 +109,7 @@ async fn bailian_full_flow() {
         api_key: "sk-test".into(),
         model: "fun-asr-realtime".into(),
         vocabulary_id: None,
+        language: None,
     };
 
     let provider = BailianProvider;
@@ -150,6 +151,7 @@ async fn bailian_reports_task_failed() {
         api_key: "sk-test".into(),
         model: "fun-asr-realtime".into(),
         vocabulary_id: None,
+        language: None,
     };
 
     let provider = BailianProvider;

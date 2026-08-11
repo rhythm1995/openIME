@@ -6,9 +6,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use voice_core::pipeline::{Pipeline, PipelineDeps, PolishContext};
 use voice_core::{
-    AppConfig, BailianChatPolish, EnigoInserter, Error, HistoryStore, LocalGgufPolish,
-    PolishMode, PolishPolicy, PolishRouter, PolishRouterConfig, RoutingProvider, SqliteStore,
-    TextInserter, TextPolishProvider,
+    AppConfig, BailianChatPolish, EnigoInserter, Error, HistoryStore, LocalGgufPolish, PolishMode,
+    PolishPolicy, PolishRouter, PolishRouterConfig, RoutingProvider, SqliteStore, TextInserter,
+    TextPolishProvider,
 };
 
 pub const CONFIG_KEY: &str = "app_config";

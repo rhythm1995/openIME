@@ -105,11 +105,19 @@ pnpm build
 ensure_signing
 
 # ──────────────── Tauri 打包 ────────────────
-echo "==> tauri build (release bundle, identity=${APPLE_SIGNING_IDENTITY})"
+# 默认开启 llm feature（本地 GGUF 润色），需系统 cmake + Metal。
+# 无 cmake 环境会自动回退到不含 llm 的构建（见下方 fallback）。
+BUILD_FEATURES="custom-protocol,sherpa,llm"
+if ! command -v cmake >/dev/null 2>&1; then
+    echo "==> 未检测到 cmake，回退到不含 llm 的构建（本地润色将不可用）"
+    BUILD_FEATURES="custom-protocol,sherpa"
+fi
+
+echo "==> tauri build (release bundle, identity=${APPLE_SIGNING_IDENTITY}, features=${BUILD_FEATURES})"
 if [[ "$WITH_SHERPA" == "1" ]]; then
-    pnpm exec tauri build $SHERPA_FLAG
+    pnpm exec tauri build --features "$BUILD_FEATURES"
 else
-    pnpm exec tauri build --no-default-features --features custom-protocol
+    pnpm exec tauri build --no-default-features --features "$BUILD_FEATURES"
 fi
 
 # ──────────────── 产物定位 ────────────────

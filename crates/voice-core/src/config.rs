@@ -30,6 +30,9 @@ pub struct ProviderConfig {
     /// 百炼热词表 ID（可选；二期 UI 再暴露）。
     #[serde(default)]
     pub vocabulary_id: Option<String>,
+    /// 本地 ASR 语言提示（仅 sherpa 用）：`zh` / `en` / `yue` / `auto`。
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 impl ProviderConfig {
@@ -129,6 +132,10 @@ pub struct AppConfig {
     /// 单次润色超时（毫秒）。
     #[serde(default = "default_polish_timeout_ms")]
     pub polish_timeout_ms: u32,
+
+    /// 默认识别语言：`zh` / `en` / `yue` / `auto`。默认 `zh`。
+    #[serde(default = "default_local_language")]
+    pub local_language: String,
 }
 
 fn default_local_mode() -> String {
@@ -146,6 +153,9 @@ fn default_polish_cloud_model() -> String {
 fn default_polish_timeout_ms() -> u32 {
     800
 }
+fn default_local_language() -> String {
+    "zh".into()
+}
 
 /// 默认本地润色模型（Qwen2.5-1.5B-Instruct GGUF Q4_K_M）。
 pub const POLISH_DEFAULT_LOCAL_MODEL: &str = "qwen2.5-1.5b-instruct-q4_k_m";
@@ -160,6 +170,7 @@ impl Default for AppConfig {
                 api_key: String::new(),
                 model: SHERPA_DEFAULT_MODEL.to_string(),
                 vocabulary_id: None,
+                language: None,
             }],
             hotkey: "Fn".to_string(),
             mute_other_audio: false,
@@ -168,6 +179,7 @@ impl Default for AppConfig {
             local_mode: "realtime".to_string(),
             local_asr_model: crate::asr_catalog::default_asr_model_id().to_string(),
             audio_device: None,
+            local_language: default_local_language(),
             polish_enabled: false,
             polish_policy: PolishPolicy::PreferLocal,
             polish_local_model: POLISH_DEFAULT_LOCAL_MODEL.to_string(),
@@ -210,12 +222,22 @@ impl AppConfig {
         // 兼容旧字段：离线整段 ≈ offline，流式 ≈ realtime。
         self.local_mode = match id.as_str() {
             crate::asr_catalog::ASR_MODEL_SENSEVOICE
-            | crate::asr_catalog::ASR_MODEL_FIRERED_LARGE => "offline".to_string(),
+            | crate::asr_catalog::ASR_MODEL_FIRERED_LARGE
+            | crate::asr_catalog::ASR_MODEL_FUNASR_NANO_INT8
+            | crate::asr_catalog::ASR_MODEL_FUNASR_NANO_FP16 => "offline".to_string(),
             _ => "realtime".to_string(),
         };
+        // 同步语言到 sherpa provider（empty → zh）
+        let lang = if self.local_language.trim().is_empty() {
+            "zh".into()
+        } else {
+            self.local_language.trim().to_lowercase()
+        };
+        self.local_language = lang.clone();
         if let Some(p) = self.providers.get_mut(self.active_provider) {
             if p.kind == ProviderKind::Sherpa {
                 p.model = id;
+                p.language = Some(lang);
             }
         }
     }
@@ -233,6 +255,7 @@ mod tests {
             api_key: String::new(),
             model: "paraformer-online".into(),
             vocabulary_id: None,
+            language: None,
         };
         assert!(c.validate().is_ok());
     }
@@ -245,6 +268,7 @@ mod tests {
             api_key: "sk-xxx".into(),
             model: "fun-asr-realtime".into(),
             vocabulary_id: None,
+            language: None,
         };
         assert!(c.validate().is_ok());
 
@@ -254,6 +278,7 @@ mod tests {
             api_key: "sk-xxx".into(),
             model: "fun-asr-realtime".into(),
             vocabulary_id: None,
+            language: None,
         };
         assert!(bad.validate().is_err());
     }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   Monitor,
@@ -9,6 +9,7 @@ import {
   AlertTriangle,
   Loader2,
   CircleDot,
+  Trash2,
 } from "lucide-react";
 import type {
   AppConfig,
@@ -19,16 +20,12 @@ import type {
   PolishModelStatus,
   PolishPolicy,
   ProviderConfig,
+  SystemInfo,
 } from "../types";
 import { ipc, permissionLabel, type PermissionKind, type PermissionStatus } from "../ipc";
 
 // 默认本地 ASR id（与 voice-core asr_catalog 对齐；未安装时不算「使用中」）。
 const DEFAULT_LOCAL_ASR = "sensevoice";
-
-/** 离线整段解码类模型 id（启用时同步 local_mode=offline）。 */
-function isOfflineAsrId(id: string): boolean {
-  return id === "sensevoice" || id === "firered-large";
-}
 
 function fmtSize(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
@@ -58,15 +55,22 @@ export default function Settings() {
   const [dl, setDl] = useState<ModelDownloadProgress | null>(null);
   const [dlError, setDlError] = useState<string | null>(null);
   const [dlTargetId, setDlTargetId] = useState<string | null>(null);
+  // ASR 模型启用 / 删除的瞬态状态。
+  const [enablingId, setEnablingId] = useState<string | null>(null);
+  const [enableTip, setEnableTip] = useState<{ id: string; ok: boolean; text: string } | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  // 本机性能（给语音模型打标签）— 不显眼的"重新采集"。
+  const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
+  const [systemRefreshing, setSystemRefreshing] = useState(false);
+  const refreshSystemInfo = (force: boolean) => {
+    const p = ipc.getSystemInfo(force);
+    p.then(setSystemInfo).catch(() => {});
+    return p;
+  };
   // 功能测试：Fn 键事件 + 语音录入测试框
   const [fnCount, setFnCount] = useState(0);
   const [fnState, setFnState] = useState<"idle" | "down">("idle");
   const [testText, setTestText] = useState("");
-  // 功能测试框：录音开始时的文本基准（支持多次录音累加，但单次录音 partial/final 不重复）。
-  const testBaseRef = useRef("");
-  // 保持 testText 最新值，供事件回调（闭包只注册一次）读取，避免 stale closure。
-  const testTextRef = useRef("");
-  testTextRef.current = testText;
   const [recording, setRecording] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
@@ -110,6 +114,7 @@ export default function Settings() {
       ipc.listPersonas().then((p) => {
         if (!cancelled) setPersonas(p);
       }).catch(() => {});
+      refreshSystemInfo(false);
       // 麦克风枚举最重，再往后一点。
       setTimeout(() => {
         if (cancelled) return;
@@ -158,19 +163,18 @@ export default function Settings() {
       setFnState(e.payload ? "down" : "idle");
     }).then((u) => unlisteners.push(u));
 
-    // 录音状态变化：实时更新测试框。
-    // 语义：录音开始记下当前文本作为基准 base；partial = base + 实时识别；
-    //       stopped = base + 最终识别。这样单次录音 partial 与 final 不重复，
-    //       多次录音的内容依次追加到基准后。
+    // 录音状态变化：只更新录音指示灯，不再直接写测试框文本。
+    // 测试框的文本由 enigo 键盘模拟直接输入（设置窗口前台 + textarea 聚焦时），
+    // 通过 textarea 的 onChange 自然同步到 testText。若再用 partial/stopped 事件
+    // 写一遍，会和 enigo 输入重复 → 同一句出现两次。
     listen("recording://started", () => {
-      testBaseRef.current = testTextRef.current;
+      setRecording(true);
     }).then((u) => unlisteners.push(u));
-    listen<string>("recording://partial", (e) => {
-      setTestText(testBaseRef.current + (e.payload || ""));
+    listen<string>("recording://partial", () => {
+      // partial 流式增量仅用于 overlay 显示，不写测试框。
     }).then((u) => unlisteners.push(u));
-    listen<string>("recording://stopped", (e) => {
+    listen<string>("recording://stopped", () => {
       setRecording(false);
-      setTestText(testBaseRef.current + (e.payload ? e.payload : ""));
     }).then((u) => unlisteners.push(u));
     listen<string>("recording://error", (e) => {
       setRecording(false);
@@ -290,14 +294,14 @@ export default function Settings() {
       <h1 className="page-title">设置</h1>
       <p className="page-subtitle">配置语音识别引擎、AI 润色与快捷键</p>
 
-      {/* 二期：AI 润色 */}
+      {/* AI 润色 */}
       <div className="card">
-        <h2 className="card-title">AI 润色（二期）</h2>
+        <h2 className="card-title">AI 润色</h2>
         <div className="perm-item">
           <div>
             <div className="perm-name">启用润色</div>
             <div className="perm-desc">
-              识别定稿后改写上屏：去口头禅、补标点；可选人设。默认优先本地 Qwen2.5-1.5B
+              识别定稿后纠错上屏：去口头禅、补标点、纠同音错；可选人设。本地规则默认生效，LLM 校对可选。
             </div>
           </div>
           <label className="switch">
@@ -375,7 +379,7 @@ export default function Settings() {
                       ? `已安装 · ${fmtSize(polishStatus.total_size)}`
                       : `未安装 · 约 ${fmtSize(polishStatus.total_size)}`}
                     {!polishStatus.llm_feature &&
-                      " · 当前构建未开 llm feature（装好模型后仍需 cmake + --features llm 才能本地推理）"}
+                      " · 当前构建未启用本地推理（需用 ./scripts/build.sh 重新打包）"}
                   </span>
                 ) : (
                   <span className="field-hint">状态加载中…</span>
@@ -531,6 +535,70 @@ export default function Settings() {
             <span className="field-hint" style={{ display: "block", marginBottom: 10 }}>
               下载后可启用；同时只启用一个，录音时走该模型识别。完全离线，音频不出本机。
             </span>
+            <div className="field" style={{ gap: 6, marginBottom: 10 }}>
+              <label className="field-label" htmlFor="local-language">
+                默认语言
+              </label>
+              <select
+                id="local-language"
+                value={config.local_language || "zh"}
+                onChange={(e) => setConfig({ ...config, local_language: e.target.value })}
+              >
+                <option value="zh">中文（zh）</option>
+                <option value="en">英文（en）</option>
+                <option value="yue">粤语（yue）</option>
+                <option value="auto">自动（auto）</option>
+              </select>
+              <span className="field-hint">传入各本地模型的 language 参数（SenseVoice/FunASR-Nano 直接提升识别率）</span>
+            </div>
+
+            {/* 本机信息小条 + 不显眼的"重新采集" */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                flexWrap: "wrap",
+                marginBottom: 12,
+                padding: "8px 10px",
+                borderRadius: 10,
+                background: "var(--accent-soft)",
+                fontSize: 11,
+                color: "var(--text-secondary)",
+              }}
+            >
+              {systemInfo ? (
+                <span style={{ flex: 1, minWidth: 120 }}>
+                  本机：{systemInfo.cpu_brand || "未知CPU"} ·{" "}
+                  {fmtSize(systemInfo.total_mem)} (可用 {fmtSize(systemInfo.avail_mem)}) ·{" "}
+                  {systemInfo.os_version} · 磁盘剩余 {fmtSize(systemInfo.disk_free)}
+                  {systemInfo.is_apple_silicon ? " · Apple Silicon" : ""}
+                </span>
+              ) : (
+                <span style={{ flex: 1 }}>正在采集本机信息…</span>
+              )}
+              <button
+                className="btn btn-sm btn-ghost"
+                style={{ fontSize: 11, flexShrink: 0 }}
+                disabled={systemRefreshing}
+                title="重新采集本机 CPU/内存/磁盘信息并给模型打标签"
+                onClick={async () => {
+                  setSystemRefreshing(true);
+                  try {
+                    await refreshSystemInfo(true);
+                    const list = await ipc.listLocalAsrModels();
+                    setAsrModels(list);
+                  } catch {}
+                  setSystemRefreshing(false);
+                }}
+              >
+                {systemRefreshing ? (
+                  <Loader2 size={11} className="spin" />
+                ) : (
+                  "重新采集"
+                )}
+              </button>
+            </div>
 
             {(() => {
               const models = asrModels.length
@@ -631,6 +699,33 @@ export default function Settings() {
                               使用中
                             </span>
                           )}
+                          {m.perf_tag && (
+                            <span
+                              className="badge"
+                              style={{
+                                fontSize: 11,
+                                background:
+                                  m.perf_tag.kind === "suitable"
+                                    ? "rgba(52, 199, 89, 0.14)"
+                                    : m.perf_tag.kind === "usable"
+                                      ? "rgba(255, 149, 0, 0.14)"
+                                      : m.perf_tag.kind === "unknown"
+                                        ? "var(--card-hover)"
+                                        : "rgba(255, 59, 48, 0.12)",
+                                color:
+                                  m.perf_tag.kind === "suitable"
+                                    ? "var(--success)"
+                                    : m.perf_tag.kind === "usable"
+                                      ? "var(--warning)"
+                                      : m.perf_tag.kind === "unknown"
+                                        ? "var(--text-tertiary)"
+                                        : "var(--danger)",
+                              }}
+                              title={m.perf_tag.reason}
+                            >
+                              {m.perf_tag.tag}
+                            </span>
+                          )}
                         </div>
                         <div className="field-hint" style={{ marginBottom: 0 }}>
                           {m.description}
@@ -693,7 +788,7 @@ export default function Settings() {
                           ? `约 ${fmtSize(m.approx_size)}`
                           : `约需下载 ${fmtSize(m.missing_size || m.approx_size)}`}
                       </span>
-                      <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                      <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
                         {!m.installed && (
                           <button
                             className="btn btn-sm"
@@ -712,25 +807,87 @@ export default function Settings() {
                             {isDownloadingThis ? "下载中…" : "下载"}
                           </button>
                         )}
+                        {m.installed && !selected && (
+                          <button
+                            className="btn btn-sm btn-icon"
+                            title="删除该模型（释放磁盘）"
+                            disabled={enablingId === m.id || deletingId === m.id}
+                            onClick={async () => {
+                              if (!window.confirm(`删除已安装的「${m.title}」模型文件？此操作不可撤销。`)) return;
+                              setDeletingId(m.id);
+                              setEnableTip(null);
+                              try {
+                                await ipc.deleteLocalAsrModel(m.id);
+                                // 刷新列表与配置。
+                                const [list, cfg] = await Promise.all([
+                                  ipc.listLocalAsrModels(),
+                                  ipc.getConfig(),
+                                ]);
+                                setAsrModels(list);
+                                setConfig(cfg);
+                              } catch (e) {
+                                alert(`删除失败：${e}`);
+                              } finally {
+                                setDeletingId(null);
+                              }
+                            }}
+                          >
+                            {deletingId === m.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                          </button>
+                        )}
                         <button
                           className={`btn btn-sm${selected ? " btn-ghost" : ""}`}
-                          disabled={!m.installed || selected}
+                          disabled={!m.installed || selected || enablingId === m.id}
                           title={
-                            !m.installed ? "请先下载安装后再启用" : selected ? "当前已启用" : "启用该模型"
+                            !m.installed
+                              ? "请先下载安装后再启用"
+                              : selected
+                                ? "当前已启用"
+                                : "启用该模型"
                           }
-                          onClick={() => {
-                            setConfig({
-                              ...config,
-                              local_asr_model: m.id,
-                              local_mode: isOfflineAsrId(m.id) ? "offline" : "realtime",
-                            });
-                            setActive({ model: m.id });
+                          onClick={async () => {
+                            setEnablingId(m.id);
+                            setEnableTip(null);
+                            try {
+                              await ipc.setActiveAsrModel(m.id);
+                              // 后端已持久化 + 同步 local_mode/provider.model；拉回最新配置与列表。
+                              const [cfg, list] = await Promise.all([ipc.getConfig(), ipc.listLocalAsrModels()]);
+                              setConfig(cfg);
+                              setAsrModels(list);
+                              setEnableTip({ id: m.id, ok: true, text: `已启用「${m.title}」` });
+                              setTimeout(() => setEnableTip((t) => (t && t.id === m.id ? null : t)), 3000);
+                            } catch (e) {
+                              setEnableTip({ id: m.id, ok: false, text: String(e) });
+                            } finally {
+                              setEnablingId(null);
+                            }
                           }}
                         >
-                          {selected ? "已启用" : "启用"}
+                          {enablingId === m.id ? (
+                            <Loader2 size={13} className="spin" />
+                          ) : selected ? (
+                            "已启用"
+                          ) : (
+                            "启用"
+                          )}
                         </button>
                       </div>
                     </div>
+                    {enableTip && enableTip.id === m.id && (
+                      <div
+                        style={{
+                          marginTop: 6,
+                          fontSize: 12,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 5,
+                          color: enableTip.ok ? "var(--success)" : "var(--danger)",
+                        }}
+                      >
+                        {enableTip.ok ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+                        {enableTip.text}
+                      </div>
+                    )}
                   </div>
                 );
               });

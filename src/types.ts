@@ -8,6 +8,7 @@ export interface ProviderConfig {
   api_key: string;
   model: string;
   vocabulary_id?: string | null;
+  language?: string | null;
 }
 
 export type PolishPolicy =
@@ -30,6 +31,8 @@ export interface AppConfig {
   local_asr_model?: string;
   /** 麦克风设备名（null/未设置 = 系统默认输入） */
   audio_device?: string | null;
+  /** 默认识别语言：zh / en / yue / auto（默认 zh） */
+  local_language?: string;
   /** 二期：AI 润色总开关 */
   polish_enabled?: boolean;
   polish_policy?: PolishPolicy;
@@ -96,6 +99,12 @@ export interface LocalModelStatus {
 }
 
 /** 本地 ASR 候选（list_local_asr_models）。 */
+export interface ModelPerfTag {
+  tag: string;
+  kind: string; // suitable | usable | not_recommended | unknown | light
+  reason: string;
+  color: string;
+}
 export interface LocalAsrModelEntry {
   id: string;
   title: string;
@@ -106,6 +115,19 @@ export interface LocalAsrModelEntry {
   installed: boolean;
   active: boolean;
   missing_size: number;
+  perf_tag?: ModelPerfTag | null;
+}
+
+/** 本机性能（get_system_info，持久化到 settings::system_info）。 */
+export interface SystemInfo {
+  total_mem: number;
+  avail_mem: number;
+  cpu_brand: string;
+  cpu_cores: number;
+  os_version: string;
+  disk_free: number;
+  is_apple_silicon: boolean;
+  collected_at: string;
 }
 
 /** 模型下载进度事件（model://download-progress）。 */

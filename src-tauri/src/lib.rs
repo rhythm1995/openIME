@@ -11,6 +11,7 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use voice_core::SqliteStore;
@@ -64,6 +65,17 @@ pub fn run() {
                 log_error!("创建 data_dir 失败：{e}");
                 anyhow::anyhow!("创建 data_dir 失败: {e}")
             })?;
+
+            // 单实例：通过 unix domain socket 协调。
+            // 已有实例在跑 → 新进程发 "show" 指令唤起已运行实例的主窗口，然后自己退出。
+            // 这是用户「再次打开 app」时期望的行为（弹出现有实例，而非开第二个）。
+            let sock_path = data_dir.join("openime.sock");
+            if let Err(e) = single_instance_check(app.handle().clone(), &sock_path) {
+                log_info!("单实例检查：{e}，退出本进程");
+                // 唤起已运行实例后退出本进程。setup 早期阶段直接 process::exit 最干净。
+                std::process::exit(0);
+            }
+
             let db_path = data_dir.join("openime.db");
             let store = SqliteStore::open(&db_path).map_err(|e| {
                 log_error!("打开数据库失败：{e}（路径：{}）", db_path.display());
@@ -91,27 +103,24 @@ pub fn run() {
             let _ = APP_HANDLE.set(app.handle().clone());
 
             // 托盘菜单（失败不阻塞启动：菜单栏 App 至少要能跑）。
-            let open_main =
-                MenuItem::with_id(app, "open_main", "打开主窗口", true, None::<&str>)?;
+            let open_main = MenuItem::with_id(app, "open_main", "打开主窗口", true, None::<&str>)?;
             let history = MenuItem::with_id(app, "history", "历史记录", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "退出 openIME", true, None::<&str>)?;
-            let menu = Menu::with_items(
-                app,
-                &[&open_main, &history, &settings, &sep, &quit],
-            )?;
+            let menu = Menu::with_items(app, &[&open_main, &history, &settings, &sep, &quit])?;
             log_info!("托盘菜单已创建");
             // 菜单栏图标：用单色 template image（声波剪影），macOS 会随明暗模式自动反色。
             // 失败则退回 default_window_icon（彩色 app icon），最坏退回无图标。
-            let tray_icon: Option<tauri::image::Image> =
-                match tauri::image::Image::from_bytes(include_bytes!("../icons/menubar-template@2x.png")) {
-                    Ok(img) => Some(img),
-                    Err(e) => {
-                        log_warn!("菜单栏 template 图标加载失败，退回 app icon：{e}");
-                        app.default_window_icon().cloned()
-                    }
-                };
+            let tray_icon: Option<tauri::image::Image> = match tauri::image::Image::from_bytes(
+                include_bytes!("../icons/menubar-template@2x.png"),
+            ) {
+                Ok(img) => Some(img),
+                Err(e) => {
+                    log_warn!("菜单栏 template 图标加载失败，退回 app icon：{e}");
+                    app.default_window_icon().cloned()
+                }
+            };
             log_info!(
                 "托盘图标：{}",
                 if tray_icon.is_some() {
@@ -120,11 +129,12 @@ pub fn run() {
                     "无（托盘可能不可见！）"
                 }
             );
-            // 左键点击托盘图标 = 弹出菜单（macOS 标准行为）。右键同样弹菜单。
+            // 左键点击托盘图标 = 直接打开主窗口（不弹菜单，最简交互）。
+            // 右键仍可弹菜单（含打开/设置/历史/退出）作为兜底入口。
             let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("main-tray")
-                .tooltip("openIME")
+                .tooltip("openIME — 点击打开")
                 .icon_as_template(true)
-                .menu_on_left_click(true)
+                .show_menu_on_left_click(false)
                 .menu(&menu)
                 .on_menu_event(|app, event| {
                     log_info!("托盘菜单点击：{}", event.id.as_ref());
@@ -143,6 +153,18 @@ pub fn run() {
                             app.exit(0);
                         }
                         _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    // 左键抬起 → 直接打开主窗口。
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        log_info!("托盘左键点击 → 打开主窗口");
+                        show_main_window(tray.app_handle());
                     }
                 });
             if let Some(ic) = tray_icon {
@@ -163,8 +185,8 @@ pub fn run() {
                             let _ = win.hide();
                         }
                         // 回到菜单栏常驻形态，Dock 图标消失。
-                        let _ = app_handle
-                            .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                        let _ =
+                            app_handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
                         log_info!("main 窗口关闭请求 → 隐藏并恢复 Accessory");
                     }
                 });
@@ -256,6 +278,9 @@ pub fn run() {
             commands::set_launch_at_login,
             commands::get_launch_at_login,
             commands::list_local_asr_models,
+            commands::get_system_info,
+            commands::set_active_asr_model,
+            commands::delete_local_asr_model,
             commands::get_local_model_status,
             commands::install_local_model,
             commands::get_polish_model_status,
@@ -273,7 +298,7 @@ pub fn run() {
     app.set_activation_policy(tauri::ActivationPolicy::Accessory);
     if let Some(main) = app.get_webview_window("main") {
         if main.is_visible().unwrap_or(false) {
-            let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
             log_info!("主窗口可见 → Regular 激活策略");
         } else {
             log_info!("主窗口隐藏 → Accessory（菜单栏常驻）");
@@ -396,6 +421,57 @@ fn show_main_window(app: &tauri::AppHandle) {
         }
         None => log_warn!("main 窗口不存在"),
     }
+}
+
+/// 单实例协调：用 unix domain socket 做存在性探测。
+///
+/// - 若 socket 文件存在且能连上 → 已有实例在跑：发 "show" 唤起其主窗口，返回 Err 让调用方退出。
+/// - 否则（无 socket / 连接失败 = 残留 socket）→ 本进程成为「主实例」，起一个监听线程
+///   接收后续新进程的 "show" 指令并唤起本实例主窗口；返回 Ok 继续。
+///
+/// socket 走 app_data_dir，路径稳定、用户无关、无端口冲突。
+fn single_instance_check(app: tauri::AppHandle, sock_path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::net::UnixStream;
+
+    // 1) 先探测是否已有实例：尝试连接。
+    if UnixStream::connect(sock_path).is_ok() {
+        // 已连上 → 有实例在跑。发 "show" 指令（不关心响应），让对端弹主窗口。
+        // 给对端一点时间接受；connect 成功即说明监听端已就绪。
+        let _ = std::fs::write(sock_path.with_extension("show"), "1");
+        // 也直接通过 socket 写一行，确保对端收到。
+        if let Ok(mut s) = UnixStream::connect(sock_path) {
+            use std::io::Write;
+            let _ = s.write_all(b"show");
+        }
+        return Err("已有实例运行，已唤起其主窗口".into());
+    }
+
+    // 2) 残留 socket（上次崩溃未清理）：删除后绑定。
+    let _ = std::fs::remove_file(sock_path);
+
+    // 3) 本进程成为主实例：起监听线程。
+    let listener = std::os::unix::net::UnixListener::bind(sock_path)
+        .map_err(|e| format!("绑定单实例 socket 失败: {e}"))?;
+    let app_for_listener = app.clone();
+    std::thread::Builder::new()
+        .name("single-instance-sock".into())
+        .spawn(move || {
+            use std::io::Read;
+            for stream in listener.incoming() {
+                if stream.is_err() {
+                    continue;
+                }
+                let mut s = stream.unwrap();
+                let mut buf = [0u8; 16];
+                let _ = s.read(&mut buf);
+                // 收到任意指令 → 唤起主窗口。
+                log_info!("单实例：收到唤起请求，显示主窗口");
+                show_main_window(&app_for_listener);
+            }
+        })
+        .map_err(|e| format!("启动单实例监听线程失败: {e}"))?;
+
+    Ok(())
 }
 
 // ──────────────── 录音快捷键 ────────────────
@@ -545,7 +621,11 @@ fn on_fn_edge(pressed: bool) {
         return;
     };
 
+    // Fn 释放的 300ms 尾部延时与按下的"继续说" отмены共用一个代数；分别声明成两个静态会导致不共享。
+    static STOP_GEN: AtomicU64 = AtomicU64::new(0);
     if pressed {
+        // 松开的尾部延时如果还在 sleep，说明用户想继续说 —— 取消该次待停。
+        STOP_GEN.fetch_add(1, Ordering::SeqCst);
         // 300ms 防抖。
         static LAST_TRIGGER_MS: AtomicU64 = AtomicU64::new(0);
         let now_ms = SystemTime::now()
@@ -559,10 +639,18 @@ fn on_fn_edge(pressed: bool) {
         LAST_TRIGGER_MS.store(now_ms, Ordering::SeqCst);
         trigger_toggle(app);
     } else {
-        // 松开：停止录音并提示「识别中」；HUD 保持到文字上屏后再收。
-        let _ = app.emit("recording://processing", "正在识别…");
+        // 松开：延后 300ms 再停，保留一点尾音，避免用户刚说完的最后一个字被切掉。
+        // 若期间用户又按下（想继续说），则该次待停被按下分支的 STOP_GEN 累加作废。
+        let gen = STOP_GEN.fetch_add(1, Ordering::SeqCst) + 1;
         let state = app.state::<AppState>().clone();
+        let app_for_processing = app.clone();
         tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            // 期间若已再次按下，gen 已过期，不再停。
+            if STOP_GEN.load(Ordering::SeqCst) != gen {
+                return;
+            }
+            let _ = app_for_processing.emit("recording://processing", "正在识别…");
             state.request_stop();
         });
     }
@@ -579,7 +667,7 @@ fn trigger_toggle(app: &tauri::AppHandle) {
     // 仅在「即将开始录音」时显示 HUD；已在录音中则由松开/停止路径处理，避免闪一下。
     let already = app
         .try_state::<AppState>()
-        .map(|s| s.recording.blocking_read().clone())
+        .map(|s| *s.recording.blocking_read())
         .unwrap_or(false);
     if !already {
         show_overlay(app, frontmost.as_deref());
@@ -587,8 +675,7 @@ fn trigger_toggle(app: &tauri::AppHandle) {
     }
     tauri::async_runtime::spawn(async move {
         let state = app_clone.state::<AppState>();
-        match commands::toggle_recording(app_clone.clone(), state.clone(), frontmost_for_cmd)
-            .await
+        match commands::toggle_recording(app_clone.clone(), state.clone(), frontmost_for_cmd).await
         {
             Ok(started) => {
                 log_info!("toggle_recording 结果：started={started}");
