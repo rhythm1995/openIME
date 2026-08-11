@@ -10,6 +10,13 @@ export interface ProviderConfig {
   vocabulary_id?: string | null;
 }
 
+export type PolishPolicy =
+  | "prefer_local"
+  | "prefer_cloud"
+  | "local_only"
+  | "cloud_only"
+  | "off";
+
 export interface AppConfig {
   active_provider: number;
   providers: ProviderConfig[];
@@ -17,10 +24,38 @@ export interface AppConfig {
   mute_other_audio: boolean;
   /** 开机自启（macOS Login Items）；开机自启时应用静默常驻菜单栏 */
   launch_at_login?: boolean;
-  /** 本地引擎模式：offline（Fn按下录、松开解码）/ realtime（实时流式） */
+  /** 本地引擎模式（兼容旧字段）：offline / realtime；以 local_asr_model 为准 */
   local_mode?: string;
+  /** 当前启用的本地 ASR 模型 id：zipformer-zh-2025 | sensevoice */
+  local_asr_model?: string;
   /** 麦克风设备名（null/未设置 = 系统默认输入） */
   audio_device?: string | null;
+  /** 二期：AI 润色总开关 */
+  polish_enabled?: boolean;
+  polish_policy?: PolishPolicy;
+  polish_local_model?: string;
+  polish_cloud_model?: string;
+  active_persona_id?: string | null;
+  polish_timeout_ms?: number;
+}
+
+export interface PolishModelStatus {
+  installed: boolean;
+  downloading: boolean;
+  model_id: string;
+  file_name: string;
+  total_size: number;
+  model_path: string;
+  llm_feature: boolean;
+}
+
+export interface Persona {
+  id: string;
+  name: string;
+  prompt: string;
+  is_builtin: boolean;
+  ord: number;
+  hidden: boolean;
 }
 
 export interface SessionSummary {
@@ -57,6 +92,20 @@ export interface LocalModelStatus {
   missing_size: number;
   total_size: number;
   model_root: string;
+  model_id?: string;
+}
+
+/** 本地 ASR 候选（list_local_asr_models）。 */
+export interface LocalAsrModelEntry {
+  id: string;
+  title: string;
+  description: string;
+  backend: string;
+  recommended: boolean;
+  approx_size: number;
+  installed: boolean;
+  active: boolean;
+  missing_size: number;
 }
 
 /** 模型下载进度事件（model://download-progress）。 */
@@ -71,4 +120,6 @@ export interface ModelDownloadProgress {
   total_size: number;
   speed_bps: number;
   message: string;
+  /** ASR 模型 id 或 `polish`，进度条挂在对应卡片 */
+  target_id?: string | null;
 }

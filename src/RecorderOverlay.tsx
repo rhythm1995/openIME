@@ -3,48 +3,81 @@ import { listen } from "@tauri-apps/api/event";
 import { ipc } from "./ipc";
 import { logger } from "./logger";
 
-// 悬浮窗：显示录音状态与实时转写（partial）。
+type Phase = "idle" | "listening" | "processing" | "error";
+
+// 悬浮窗：Fn 按下 → 文字上屏前保持可见。
 // 路由 index.html#overlay 时渲染本组件。
+// 注意：不要 window.close()；收起由原生 orderOut 负责，否则会和 HUD 生命周期打架。
 export default function RecorderOverlay() {
-  const [recording, setRecording] = useState(false);
+  const [phase, setPhase] = useState<Phase>("listening");
   const [partial, setPartial] = useState("");
+  const [status, setStatus] = useState("正在聆听…");
   const [error, setError] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState(false);
 
   useEffect(() => {
     logger.info("overlay 组件挂载");
-    ipc.getRecordingState().then(setRecording).catch((e) => {
-      logger.error("get_recording_state 失败:", e);
-    });
+    // 窗口可能在录音已开始后才被 orderFront：读一次后端状态。
+    ipc
+      .getRecordingState()
+      .then((r) => {
+        if (r) {
+          setPhase("listening");
+          setStatus("正在聆听…");
+        }
+      })
+      .catch((e) => {
+        logger.error("get_recording_state 失败:", e);
+      });
 
     const unlisteners: Array<() => void> = [];
-    listen<string>("recording://partial", (e) => setPartial(e.payload)).then((u) =>
-      unlisteners.push(u)
-    );
-    listen<string>("recording://stopped", () => {
-      setRecording(false);
+    listen("recording://started", () => {
+      setError(null);
+      setLeaving(false);
       setPartial("");
-      window.close();
+      setPhase("listening");
+      setStatus("正在聆听…");
+    }).then((u) => unlisteners.push(u));
+    listen<string>("recording://partial", (e) => {
+      setPhase("listening");
+      setPartial(e.payload);
+      if (e.payload) setStatus(e.payload);
+    }).then((u) => unlisteners.push(u));
+    listen<string>("recording://processing", (e) => {
+      setPhase("processing");
+      setStatus(e.payload || "正在识别…");
+    }).then((u) => unlisteners.push(u));
+    listen<string>("recording://stopped", () => {
+      // 先触发淡出动画，原生侧随后 hide 窗口；这里复位文案，不 close 窗口。
+      setLeaving(true);
+      setPhase("idle");
+      setPartial("");
+      setStatus("");
+      setError(null);
     }).then((u) => unlisteners.push(u));
     listen<string>("recording://error", (e) => {
       logger.error("录音错误事件:", e.payload);
       setError(e.payload);
-      setRecording(false);
+      setPhase("error");
     }).then((u) => unlisteners.push(u));
 
     return () => unlisteners.forEach((u) => u());
   }, []);
 
+  const active = phase === "listening" || phase === "processing";
+  const text = error
+    ? error
+    : partial || status || (active ? "正在聆听…" : "…");
+
   return (
-    <div className={`overlay ${recording ? "rec" : "idle"}`}>
+    <div
+      className={`overlay ${active ? "rec" : phase === "error" ? "err" : "idle"}${
+        leaving ? " out" : ""
+      }`}
+    >
       <div className="dot" />
       <div className="overlay-text">
-        {error ? (
-          <span className="err">{error}</span>
-        ) : recording ? (
-          partial || "正在聆听…"
-        ) : (
-          ""
-        )}
+        {error ? <span className="err">{text}</span> : text}
       </div>
     </div>
   );

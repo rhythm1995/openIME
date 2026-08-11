@@ -9,6 +9,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ startDragging: vi.fn().mockResolvedValue(undefined) }),
+}));
 
 const bailianConfig = {
   active_provider: 0,
@@ -40,7 +43,7 @@ describe("App", () => {
     localStorage.clear();
   });
 
-  it("渲染侧边栏与设置页，权限已授予时不显示横幅", async () => {
+  it("渲染侧边栏与设置页", async () => {
     mockInvoke({
       ping: "在线",
       get_config: bailianConfig,
@@ -51,8 +54,8 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("设置")).toBeInTheDocument());
     expect(screen.getByText("openIME")).toBeInTheDocument();
     expect(screen.getByText("已就绪")).toBeInTheDocument();
-    // 权限横幅不显示
-    expect(screen.queryByText(/需要授权/)).not.toBeInTheDocument();
+    // 方案 C：不再有顶部授权横幅
+    expect(screen.queryByText(/需要授权才能完整使用/)).not.toBeInTheDocument();
   });
 
   it("侧边栏可切换到词典页", async () => {
@@ -81,7 +84,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("还没有录音记录")).toBeInTheDocument());
   });
 
-  it("权限未授予时显示授权横幅", async () => {
+  it("未授权时不显示顶部横幅，设置页仍有系统权限", async () => {
     mockInvoke({
       ping: "ok",
       get_config: bailianConfig,
@@ -89,8 +92,7 @@ describe("App", () => {
       list_hotwords: [],
     });
     render(<App />);
-    await waitFor(() =>
-      expect(screen.getByText(/需要授权才能完整使用/)).toBeInTheDocument()
-    );
+    await waitFor(() => expect(screen.getByText("系统权限")).toBeInTheDocument());
+    expect(screen.queryByText(/需要授权才能完整使用/)).not.toBeInTheDocument();
   });
 });

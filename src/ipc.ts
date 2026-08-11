@@ -3,7 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppConfig,
   Hotword,
+  LocalAsrModelEntry,
   LocalModelStatus,
+  Persona,
+  PolishModelStatus,
   ProviderConfig,
   SessionSummary,
   UtteranceRecord,
@@ -54,10 +57,15 @@ export const ipc = {
   setLaunchAtLogin: (enabled: boolean) =>
     invoke<void>("set_launch_at_login", { enabled }),
   // 本地模型（sherpa-onnx）
+  listLocalAsrModels: () => invoke<LocalAsrModelEntry[]>("list_local_asr_models"),
   getLocalModelStatus: (mode?: string) =>
     invoke<LocalModelStatus>("get_local_model_status", { mode }),
   installLocalModel: (mode?: string) =>
     invoke<void>("install_local_model", { mode }),
+  // 二期：AI 润色
+  getPolishModelStatus: () => invoke<PolishModelStatus>("get_polish_model_status"),
+  installPolishModel: () => invoke<void>("install_polish_model"),
+  listPersonas: () => invoke<Persona[]>("list_personas"),
   // 热词词典
   listHotwords: () => invoke<Hotword[]>("list_hotwords"),
   addHotword: (word: string, weight: number) =>
