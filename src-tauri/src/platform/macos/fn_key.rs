@@ -1,13 +1,22 @@
-//! Fn（🌐 Globe）键监听 + 前台 app 焦点管理。
+//! Fn（🌐 Globe）键监听 + 前台 app 焦点管理 + overlay 无激活显示。
 
 use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 extern "C" {
     fn openime_install_fn_monitor_objc();
     fn openime_frontmost_bundle_id() -> *const c_char;
     fn openime_activate_app(bundle_id: *const c_char) -> i32;
+    fn openime_prepare_overlay_window(ns_window: *mut c_void);
+    fn openime_show_window_without_activating(ns_window: *mut c_void);
+    fn openime_show_overlay_preserving_focus(
+        ns_window: *mut c_void,
+        x: f64,
+        y: f64,
+        restore_bundle_id: *const c_char,
+    );
+    fn openime_hide_window_without_activating(ns_window: *mut c_void);
 }
 
 static mut EDGE_CALLBACK: Option<fn(pressed: bool)> = None;
@@ -50,13 +59,60 @@ pub fn frontmost_bundle_id() -> Option<String> {
     }
 }
 
-/// 按 bundle ID 激活 app（录音结束后、enigo 输入前调用）。
+/// 按 bundle ID 激活 app（录音结束后、enigo 输入前调用；也可在 overlay 显示后立即还焦）。
 pub fn activate_app(bundle_id: &str) -> bool {
     let c = match CString::new(bundle_id) {
         Ok(c) => c,
         Err(_) => return false,
     };
     unsafe { openime_activate_app(c.as_ptr()) != 0 }
+}
+
+/// 配置 overlay 为 HUD 风格（鼠标穿透、不进窗口循环）。
+pub fn prepare_overlay_window(ns_window: *mut c_void) {
+    if ns_window.is_null() {
+        return;
+    }
+    unsafe { openime_prepare_overlay_window(ns_window) };
+}
+
+/// 显示窗口但不激活本 app / 不抢 key（保留用户输入框光标）。
+pub fn show_window_without_activating(ns_window: *mut c_void) {
+    if ns_window.is_null() {
+        return;
+    }
+    unsafe { openime_show_window_without_activating(ns_window) };
+}
+
+/// 显示录音 overlay，并尽量保留调用前的焦点/光标。
+///
+/// - `x`/`y`：AppKit 坐标（左下角原点）下的窗口原点
+/// - `restore_bundle_id`：显示前的前台 app；用于误抢激活时还焦
+pub fn show_overlay_preserving_focus(
+    ns_window: *mut c_void,
+    x: f64,
+    y: f64,
+    restore_bundle_id: Option<&str>,
+) {
+    if ns_window.is_null() {
+        return;
+    }
+    let c_bid = restore_bundle_id.and_then(|s| CString::new(s).ok());
+    let ptr = c_bid
+        .as_ref()
+        .map(|c| c.as_ptr())
+        .unwrap_or(std::ptr::null());
+    unsafe {
+        openime_show_overlay_preserving_focus(ns_window, x, y, ptr);
+    }
+}
+
+/// 隐藏窗口且不触发激活切换。
+pub fn hide_window_without_activating(ns_window: *mut c_void) {
+    if ns_window.is_null() {
+        return;
+    }
+    unsafe { openime_hide_window_without_activating(ns_window) };
 }
 
 extern "C" {

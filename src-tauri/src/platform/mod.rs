@@ -58,5 +58,21 @@ pub mod current {
         pub fn is_fn_registered() -> bool {
             false
         }
+        pub fn frontmost_bundle_id() -> Option<String> {
+            None
+        }
+        pub fn activate_app(_bundle_id: &str) -> bool {
+            false
+        }
+        pub fn prepare_overlay_window(_ns_window: *mut std::ffi::c_void) {}
+        pub fn show_window_without_activating(_ns_window: *mut std::ffi::c_void) {}
+        pub fn show_overlay_preserving_focus(
+            _ns_window: *mut std::ffi::c_void,
+            _x: f64,
+            _y: f64,
+            _restore_bundle_id: Option<&str>,
+        ) {
+        }
+        pub fn hide_window_without_activating(_ns_window: *mut std::ffi::c_void) {}
     }
 }

@@ -16,18 +16,20 @@
       {
         "label": "main",
         "title": "openIME",
-        "width": 720,
-        "height": 520,
+        "width": 1200,
+        "height": 800,
+        "minWidth": 880,
+        "minHeight": 600,
         "resizable": true,
         "visible": false,
         "hiddenTitle": true,
         "titleBarStyle": "Overlay"
       },
 {
- "label": "overlay",
- "title": "",
- "width": 190,
- "height": 70,
+        "label": "overlay",
+        "title": "",
+        "width": 220,
+        "height": 40,
         "resizable": false,
         "decorations": false,
         "transparent": true,
@@ -35,6 +37,8 @@
         "skipTaskbar": true,
         "shadow": false,
         "visible": false,
+        "focus": false,
+        "focusable": false,
         "x": 16,
         "y": 99999,
         "url": "index.html#overlay"
@@ -51,7 +55,8 @@
     "category": "Productivity",
     "macOS": {
       "minimumSystemVersion": "12.0",
-      "hardenedRuntime": false
+      "hardenedRuntime": false,
+      "signingIdentity": "openIME Local Dev"
     }
   }
 }

@@ -35,11 +35,14 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 
 [features]
-# 默认走自定义协议（生产）；开发时 tauri 会注入 devUrl
-default = ["custom-protocol"]
+# 默认走自定义协议（生产）+ 本地 sherpa-onnx；开发时 tauri 会注入 devUrl
+# llm（本地 GGUF 润色）需系统 cmake + Metal；有环境时：cargo build -p openime --features llm
+default = ["custom-protocol", "sherpa"]
 custom-protocol = ["tauri/custom-protocol"]
-# 本地 sherpa-onnx 引擎（转发到 voice-core）：WITH_SHERPA=1 ./scripts/build.sh
+# 本地 sherpa-onnx 引擎（转发到 voice-core）；默认开启。关闭：--no-default-features --features custom-protocol
 sherpa = ["voice-core/sherpa"]
+# 本地 GGUF 润色（llama.cpp，需 cmake）
+llm = ["voice-core/llm"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # macOS 权限：辅助功能 + 麦克风授权状态

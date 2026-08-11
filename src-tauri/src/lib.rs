@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tauri::menu::{Menu, MenuItem};
-use tauri::{Emitter, Manager};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use voice_core::SqliteStore;
 
@@ -91,10 +91,16 @@ pub fn run() {
             let _ = APP_HANDLE.set(app.handle().clone());
 
             // 托盘菜单（失败不阻塞启动：菜单栏 App 至少要能跑）。
-            let show_main = MenuItem::with_id(app, "show_main", "设置/历史", true, None::<&str>)?;
+            let open_main =
+                MenuItem::with_id(app, "open_main", "打开主窗口", true, None::<&str>)?;
             let history = MenuItem::with_id(app, "history", "历史记录", true, None::<&str>)?;
+            let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+            let sep = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "退出 openIME", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_main, &history, &quit])?;
+            let menu = Menu::with_items(
+                app,
+                &[&open_main, &history, &settings, &sep, &quit],
+            )?;
             log_info!("托盘菜单已创建");
             // 菜单栏图标：用单色 template image（声波剪影），macOS 会随明暗模式自动反色。
             // 失败则退回 default_window_icon（彩色 app icon），最坏退回无图标。
@@ -114,19 +120,23 @@ pub fn run() {
                     "无（托盘可能不可见！）"
                 }
             );
+            // 左键点击托盘图标 = 弹出菜单（macOS 标准行为）。右键同样弹菜单。
             let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("main-tray")
                 .tooltip("openIME")
-                // template image：macOS 自动按状态栏明暗反色（白底显黑、黑底显白）。
                 .icon_as_template(true)
-                .show_menu_on_left_click(true)
+                .menu_on_left_click(true)
                 .menu(&menu)
                 .on_menu_event(|app, event| {
                     log_info!("托盘菜单点击：{}", event.id.as_ref());
                     match event.id.as_ref() {
-                        "show_main" => show_main_window(app),
+                        "open_main" | "show_main" => show_main_window(app),
                         "history" => {
                             show_main_window(app);
                             let _ = app.emit("nav://goto", "history");
+                        }
+                        "settings" => {
+                            show_main_window(app);
+                            let _ = app.emit("nav://goto", "settings");
                         }
                         "quit" => {
                             log_info!("收到退出指令");
@@ -141,6 +151,33 @@ pub fn run() {
             match tray_builder.build(app) {
                 Ok(_) => log_info!("托盘创建成功"),
                 Err(e) => log_warn!("托盘创建失败（忽略，继续启动）：{e}"),
+            }
+
+            // 关闭主窗口 = 隐藏回菜单栏（不退出）；并恢复 Accessory，避免 Dock 再挂一个图标。
+            if let Some(main) = app.get_webview_window("main") {
+                let app_handle = app.handle().clone();
+                main.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        if let Some(win) = app_handle.get_webview_window("main") {
+                            let _ = win.hide();
+                        }
+                        // 回到菜单栏常驻形态，Dock 图标消失。
+                        let _ = app_handle
+                            .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                        log_info!("main 窗口关闭请求 → 隐藏并恢复 Accessory");
+                    }
+                });
+            }
+
+            // overlay 启动即配成 HUD（不可聚焦/鼠标穿透），避免首次 Fn 才配置时闪一下焦点。
+            if let Some(overlay) = app.get_webview_window("overlay") {
+                let _ = overlay.set_focusable(false);
+                let _ = overlay.set_ignore_cursor_events(true);
+                #[cfg(target_os = "macos")]
+                if let Ok(ns) = overlay.ns_window() {
+                    crate::platform::current::fn_key::prepare_overlay_window(ns);
+                }
             }
 
             // 录音快捷键（默认 Fn；设置里可改，保存后立即生效）。
@@ -164,6 +201,18 @@ pub fn run() {
             log_info!("autostarted = {autostarted}");
             match app.get_webview_window("main") {
                 Some(win) => {
+                    // 默认约 1200×800：够大但多数 Mac 上不会一进来就近全屏
+                    // （原先 1800×1200 在 14/16" 逻辑分辨率下常被裁到几乎铺满）
+                    const DEFAULT_W: f64 = 1200.0;
+                    const DEFAULT_H: f64 = 800.0;
+                    if let Err(e) = win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+                        DEFAULT_W, DEFAULT_H,
+                    ))) {
+                        log_warn!("设置 main 默认尺寸失败：{e}");
+                    } else {
+                        log_info!("main 窗口尺寸设为 {DEFAULT_W}x{DEFAULT_H}");
+                    }
+                    let _ = win.center();
                     if autostarted {
                         log_info!("开机自启：main 窗口保持隐藏，常驻菜单栏");
                     } else {
@@ -206,29 +255,35 @@ pub fn run() {
             commands::frontend_log,
             commands::set_launch_at_login,
             commands::get_launch_at_login,
+            commands::list_local_asr_models,
             commands::get_local_model_status,
             commands::install_local_model,
+            commands::get_polish_model_status,
+            commands::install_polish_model,
+            commands::list_personas,
         ])
         .build(tauri::generate_context!())
         .expect("构建 Tauri 应用失败");
 
     log_info!("进入事件循环");
 
-    // 设为 Accessory：不显示 Dock 图标、不抢前台焦点。
-    // 这样 overlay show 不会把 openIME 激活到前台，用户的目标输入框保持焦点。
+    // 默认 Accessory：不抢焦点、录音 HUD 不抢前台。
+    // 若 setup 已显示主窗口（非开机自启），再切回 Regular，否则会出现
+    // 「启动后主窗口在但点不进 / Dock 与菜单栏像装了两份」的错觉。
     app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-    log_info!("已设置为 Accessory 激活策略");
+    if let Some(main) = app.get_webview_window("main") {
+        if main.is_visible().unwrap_or(false) {
+            let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            log_info!("主窗口可见 → Regular 激活策略");
+        } else {
+            log_info!("主窗口隐藏 → Accessory（菜单栏常驻）");
+        }
+    }
     app.run(|app_handle, event| {
-        // Dock 图标点击：若当前没有可见窗口，重新显示主面板。
-        if let tauri::RunEvent::Reopen {
-            has_visible_windows,
-            ..
-        } = event
-        {
-            log_info!("Reopen（Dock 点击）：has_visible_windows={has_visible_windows}");
-            if !has_visible_windows {
-                show_main_window(app_handle);
-            }
+        // Dock 图标点击：始终拉起主面板（即使 has_visible_windows 因 overlay 为 true）。
+        if let tauri::RunEvent::Reopen { .. } = event {
+            log_info!("Reopen（Dock 点击）→ 打开主窗口");
+            show_main_window(app_handle);
         }
     });
     log_info!("Tauri 事件循环结束，进程退出");
@@ -239,44 +294,103 @@ fn on_hotkey(app: &tauri::AppHandle, _shortcut: &Shortcut) {
     trigger_toggle(app);
 }
 
-fn show_overlay(app: &tauri::AppHandle) {
+/// 显示录音 overlay，尽量不抢走用户当前输入框的焦点/光标。
+/// `frontmost`：显示**前**捕获的前台 app。
+///
+/// 注意：不要在这里调用 Tauri 的 set_focus / set_position / show——它们常会
+/// makeKey 或激活 openIME，导致 input caret 消失。定位与显示全部走 ObjC HUD 路径。
+fn show_overlay(app: &tauri::AppHandle, frontmost: Option<&str>) {
     match app.get_webview_window("overlay") {
         Some(win) => {
-            // 不抢焦点：overlay 仅作显示，不激活应用。
-            // macOS 上 show() 默认会激活窗口；用 set_ignore_cursor_events 让窗口
-            // 不接受鼠标事件（纯展示），减少对前台应用的干扰。
+            // 仅设置忽略鼠标（Tauri）；失败忽略，ObjC 侧也会设 ignoresMouseEvents。
             let _ = win.set_ignore_cursor_events(true);
+            let _ = win.set_focusable(false);
 
-            // 定位到屏幕左下角（不引人注意）。
-            if let Ok(monitor) = win.current_monitor() {
-                if let Some(monitor) = monitor {
-                    let size = monitor.size();
-                    let scale = monitor.scale_factor();
-                    let logical_h = size.height as f64 / scale;
-                    let win_h = win.outer_size().map(|s| s.height as f64).unwrap_or(36.0);
-                    let y = logical_h - win_h - 60.0;
-                    let _ = win.set_position(tauri::Position::Logical(
-                        tauri::LogicalPosition::new(16.0, y.max(0.0)),
-                    ));
+            #[cfg(target_os = "macos")]
+            {
+                // AppKit 坐标：原点在屏幕左下。算左下角偏上一点的位置。
+                let (x, y) = match win.current_monitor() {
+                    Ok(Some(monitor)) => {
+                        let size = monitor.size();
+                        let scale = monitor.scale_factor();
+                        let logical_h = size.height as f64 / scale;
+                        let win_h = win
+                            .outer_size()
+                            .map(|s| s.height as f64 / scale)
+                            .unwrap_or(40.0);
+                        // 物理→逻辑后，y 从底部往上 60pt。
+                        let y = (logical_h - win_h - 60.0).max(0.0);
+                        (16.0, y)
+                    }
+                    _ => (16.0, 60.0),
+                };
+
+                match win.ns_window() {
+                    Ok(ns) => {
+                        crate::platform::current::fn_key::show_overlay_preserving_focus(
+                            ns, x, y, frontmost,
+                        );
+                        log_debug!(
+                            "overlay HUD 显示（preserve focus），frontmost={frontmost:?} pos=({x:.0},{y:.0})"
+                        );
+                    }
+                    Err(e) => {
+                        // 最后手段：尽量不 set_focus。
+                        log_warn!("获取 overlay ns_window 失败，降级 show：{e}");
+                        let _ = win.set_position(tauri::Position::Logical(
+                            tauri::LogicalPosition::new(x, y),
+                        ));
+                        if let Err(e) = win.show() {
+                            log_error!("overlay show 失败：{e}");
+                        }
+                        if let Some(bid) = frontmost {
+                            if bid != "com.openime.desktop" {
+                                let ok = crate::platform::current::fn_key::activate_app(bid);
+                                log_debug!("降级路径还焦 {bid}：{ok}");
+                            }
+                            // 同 app：禁止 set_focus(main)，会弄掉 textarea caret。
+                        }
+                    }
                 }
             }
-            if let Err(e) = win.show() {
-                log_error!("overlay show 失败：{e}");
+            #[cfg(not(target_os = "macos"))]
+            {
+                if let Err(e) = win.show() {
+                    log_error!("overlay show 失败：{e}");
+                }
             }
-            log_debug!("overlay 已显示（左下角，不抢焦点）");
         }
         None => log_warn!("overlay 窗口不存在"),
     }
 }
 
+/// 显示主窗口（设置/历史）。Accessory 菜单栏 App 必须切到 Regular 并真正 activate，
+/// 否则会出现「点了菜单/托盘却看不到窗口」的间歇问题。
 fn show_main_window(app: &tauri::AppHandle) {
     match app.get_webview_window("main") {
         Some(win) => {
-            // Accessory 模式下显示主窗口需临时切回 Regular 才能激活。
-            let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            // 1) 允许出现在 Dock 并参与激活（仅展示主面板期间）。
+            if let Err(e) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
+                log_warn!("切换 Regular 激活策略失败：{e}");
+            }
+            // 2) 取消最小化 / 显示 / 聚焦。
+            let _ = win.unminimize();
             if let Err(e) = win.show() {
                 log_error!("main show 失败：{e}");
             }
+            // 若窗口跑到屏幕外（多显示器热拔等），拉回主屏中心。
+            if let Ok(false) = win.is_visible() {
+                let _ = win.center();
+                let _ = win.show();
+            }
+            let _ = win.set_focus();
+            // 3) 强制把本进程激活到前台（Accessory→Regular 后偶发不激活）。
+            #[cfg(target_os = "macos")]
+            {
+                let ok = crate::platform::current::fn_key::activate_app("com.openime.desktop");
+                log_info!("激活 openIME 自身：{ok}");
+            }
+            // 再 focus 一次，避免 activate 抢跑后焦点落空。
             let _ = win.set_focus();
             log_info!("main 窗口已显示");
         }
@@ -445,7 +559,8 @@ fn on_fn_edge(pressed: bool) {
         LAST_TRIGGER_MS.store(now_ms, Ordering::SeqCst);
         trigger_toggle(app);
     } else {
-        // 松开：立即停止录音（离线模式在此刻触发解码；实时模式结束流式识别）。
+        // 松开：停止录音并提示「识别中」；HUD 保持到文字上屏后再收。
+        let _ = app.emit("recording://processing", "正在识别…");
         let state = app.state::<AppState>().clone();
         tauri::async_runtime::spawn(async move {
             state.request_stop();
@@ -456,16 +571,51 @@ fn on_fn_edge(pressed: bool) {
 /// 切换录音 + 显示 overlay（快捷键与 Fn 共用入口）。
 fn trigger_toggle(app: &tauri::AppHandle) {
     log_info!("录音快捷键触发");
-    // 必须在 overlay 显示前记录前台 app：overlay 一显示就会抢走键盘焦点，
-    // 录音结束后要把焦点还回原 app，enigo 才能插入到用户输入框。
+    // 必须在 overlay 显示前记录前台 app：随后立刻还焦，录音过程中 caret 不消失；
+    // 录音结束再次还焦，保证 enigo 插入到用户输入框。
     let frontmost = crate::platform::current::fn_key::frontmost_bundle_id();
     let app_clone = app.clone();
+    let frontmost_for_cmd = frontmost.clone();
+    // 仅在「即将开始录音」时显示 HUD；已在录音中则由松开/停止路径处理，避免闪一下。
+    let already = app
+        .try_state::<AppState>()
+        .map(|s| s.recording.blocking_read().clone())
+        .unwrap_or(false);
+    if !already {
+        show_overlay(app, frontmost.as_deref());
+        let _ = app.emit("recording://started", ());
+    }
     tauri::async_runtime::spawn(async move {
         let state = app_clone.state::<AppState>();
-        match commands::toggle_recording(app_clone.clone(), state.clone(), frontmost).await {
-            Ok(started) => log_info!("toggle_recording 结果：started={started}"),
-            Err(e) => log_error!("toggle_recording 失败：{e}"),
+        match commands::toggle_recording(app_clone.clone(), state.clone(), frontmost_for_cmd)
+            .await
+        {
+            Ok(started) => {
+                log_info!("toggle_recording 结果：started={started}");
+                if !started {
+                    // 已在录音 → 请求停止：提示识别中，HUD 保持到文字上屏。
+                    let _ = app_clone.emit("recording://processing", "正在识别…");
+                }
+            }
+            Err(e) => {
+                log_error!("toggle_recording 失败：{e}");
+                // 启动失败：收起 HUD，避免残留。
+                if let Some(win) = app_clone.get_webview_window("overlay") {
+                    #[cfg(target_os = "macos")]
+                    {
+                        if let Ok(ns) = win.ns_window() {
+                            crate::platform::current::fn_key::hide_window_without_activating(ns);
+                        } else {
+                            let _ = win.hide();
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let _ = win.hide();
+                    }
+                }
+                let _ = app_clone.emit("recording://error", e.to_string());
+            }
         }
     });
-    show_overlay(app);
 }
