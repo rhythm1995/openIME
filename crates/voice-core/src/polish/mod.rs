@@ -6,6 +6,7 @@ mod correction;
 mod itn;
 mod local;
 mod prompts;
+mod punct;
 mod router;
 mod sanitize;
 
@@ -14,5 +15,6 @@ pub use correction::{correct_l0, L0Result};
 pub use itn::normalize_itn;
 pub use local::LocalGgufPolish;
 pub use prompts::build_messages;
+pub use punct::full_to_half_punct;
 pub use router::{PolishRouter, PolishRouterConfig};
 pub use sanitize::{dedupe_consecutive_finals, sanitize_polish_output};

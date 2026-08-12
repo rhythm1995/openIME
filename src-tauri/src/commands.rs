@@ -784,8 +784,27 @@ pub async fn toggle_recording(
                 restore_frontmost_focus(&app_handle, frontmost.as_deref());
                 tokio::time::sleep(std::time::Duration::from_millis(120)).await;
 
+                // B5：按前台 app 的半角标点偏好转换 finals（IM 场景）。
+                let finals: Vec<String> = {
+                    let app_state = app_handle.state::<AppState>();
+                    let cfg = app_state.config.read().await;
+                    let half = cfg.punct_half_width_apps.iter().any(|kw| {
+                        frontmost
+                            .as_deref()
+                            .map(|f| f.contains(kw.as_str()))
+                            .unwrap_or(false)
+                    });
+                    if half {
+                        r.utterances
+                            .iter()
+                            .map(|t| voice_core::polish::full_to_half_punct(t))
+                            .collect()
+                    } else {
+                        r.utterances.clone()
+                    }
+                };
                 if let Err(e) = pipeline
-                    .insert_finals_with_polish(&r.session_id, &r.utterances, &polish_ctx)
+                    .insert_finals_with_polish(&r.session_id, &finals, &polish_ctx)
                     .await
                 {
                     log_error!("插入文本失败：{e}");
@@ -798,7 +817,7 @@ pub async fn toggle_recording(
                 hide_overlay_only(&app_handle);
                 // stopped 事件 payload 给功能测试框/历史用：需先去重，否则
                 // 同一句的 endpoint+flush 两条 final 会被 join 成重复串。
-                let deduped = voice_core::polish::dedupe_consecutive_finals(&r.utterances);
+                let deduped = voice_core::polish::dedupe_consecutive_finals(&finals);
                 let _ = app_handle.emit("recording://stopped", deduped.join(""));
             }
             Err(e) => {

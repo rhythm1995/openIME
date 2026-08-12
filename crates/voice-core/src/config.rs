@@ -136,6 +136,10 @@ pub struct AppConfig {
     /// 单次润色超时（毫秒）。
     #[serde(default = "default_polish_timeout_ms")]
     pub polish_timeout_ms: u32,
+    /// 半角标点偏好 app 关键字（B5）：前台 app bundle id 含其中任一关键字时，
+    /// 上屏文本的全角标点转半角（适合 IM）。空 = 不转换。
+    #[serde(default)]
+    pub punct_half_width_apps: Vec<String>,
 
     /// 默认识别语言：`zh` / `en` / `yue` / `auto`。默认 `zh`。
     #[serde(default = "default_local_language")]
@@ -191,6 +195,7 @@ impl Default for AppConfig {
             polish_mode: PolishMode::Off,
             active_style_pack_id: None,
             polish_timeout_ms: 800,
+            punct_half_width_apps: Vec::new(),
         }
     }
 }
