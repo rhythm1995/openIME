@@ -421,6 +421,36 @@ impl SqliteStore {
         Ok(out)
     }
 
+    /// D1：导出所有录音为 Markdown 日记（按日期分组，每条含时间+文本）。
+    pub fn export_diary_markdown(&self) -> Result<String> {
+        use std::collections::BTreeMap;
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare("SELECT final_text, created_at FROM utterances ORDER BY created_at ASC")
+            .map_err(|e| Error::Store(format!("export_diary prepare 失败: {e}")))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| Error::Store(format!("export_diary query 失败: {e}")))?;
+        let mut by_day: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+        for row in rows {
+            let (text, ts) = row.map_err(|e| Error::Store(format!("读取日记行失败: {e}")))?;
+            let date = ts.get(..10).unwrap_or("").to_string();
+            by_day.entry(date).or_default().push((text, ts));
+        }
+        let mut md = String::from("# openIME 日记\n\n");
+        for (date, items) in &by_day {
+            if !date.is_empty() {
+                md.push_str(&format!("## {date}\n\n"));
+            }
+            for (text, ts) in items {
+                let time = ts.get(11..19).unwrap_or("");
+                md.push_str(&format!("- {time} {text}\n"));
+            }
+            md.push('\n');
+        }
+        Ok(md)
+    }
+
     // ── 风格包（F1）──
 
     pub fn list_style_packs(&self) -> Result<Vec<StylePack>> {
@@ -480,9 +510,24 @@ impl SqliteStore {
             return Ok(());
         }
         let builtins = [
-            ("builtin-formal", "正式", "请用正式、简洁的书面语输出，适合工作消息。", 0),
-            ("builtin-casual", "口语", "请保持口语自然，略作通顺即可，不要过于书面。", 1),
-            ("builtin-commit", "commit message", "请把内容整理成简洁的 git commit message（动词开头、祈使句、不超 50 字）。", 2),
+            (
+                "builtin-formal",
+                "正式",
+                "请用正式、简洁的书面语输出，适合工作消息。",
+                0,
+            ),
+            (
+                "builtin-casual",
+                "口语",
+                "请保持口语自然，略作通顺即可，不要过于书面。",
+                1,
+            ),
+            (
+                "builtin-commit",
+                "commit message",
+                "请把内容整理成简洁的 git commit message（动词开头、祈使句、不超 50 字）。",
+                2,
+            ),
         ];
         for (id, name, prompt, ord) in builtins {
             self.upsert_style_pack(&StylePack {

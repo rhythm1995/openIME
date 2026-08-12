@@ -1058,5 +1058,14 @@ pub async fn transcribe_file(
     })
 }
 
+/// D1：导出所有录音为 Markdown 日记（按日期分组）。
+#[tauri::command]
+pub fn export_diary(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .store
+        .export_diary_markdown()
+        .map_err(|e| e.to_string())
+}
+
 #[allow(dead_code)]
 fn _ensure_arc(_a: &Arc<()>) {}

@@ -284,6 +284,7 @@ pub fn run() {
             commands::delete_style_pack,
             commands::get_selection,
             commands::transcribe_file,
+            commands::export_diary,
             commands::frontend_log,
             commands::set_launch_at_login,
             commands::get_launch_at_login,

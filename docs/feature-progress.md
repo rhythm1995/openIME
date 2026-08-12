@@ -15,6 +15,7 @@
 - [x] **H2 凭据钥匙串** — keyring crate，API key 存 keychain 不落明文 JSON
 - [x] **F4 选区注入** — macOS AX 直读 AXSelectedText（不碰剪贴板），get_selection 命令
 - [x] **D3 文件转录** — symphonia 解码 + 重采样 16k + sherpa 整段 + srt + 前端选择/导出
+- [x] **D1 日记归档** — store.export_diary_markdown 按日期分组 + export_diary 命令
 
 ## ⚠️ 不适用（架构原因）
 - C2 剪贴板恢复 — enigo 逐字输入不碰剪贴板
@@ -32,4 +33,3 @@
 ### 大工程（周级）
 - [ ] **C1 流式逐字重做**（OpenLess 三态机 + Unicode 边界）
 - [ ] **B2 音素热词完整 RAG**（CapsWriter 两阶段 + 模糊音权重）
-- [ ] **D1 日记归档**（Markdown + 音频回放链接）

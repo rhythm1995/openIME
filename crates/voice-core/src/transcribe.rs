@@ -4,6 +4,7 @@
 use std::path::Path;
 
 /// 线性插值重采样（f32，src_sr → dst_sr）。轻量，文件转录够用。
+#[allow(dead_code)]
 fn resample_linear(samples: &[f32], src_sr: u32, dst_sr: u32) -> Vec<f32> {
     if src_sr == dst_sr || samples.is_empty() {
         return samples.to_vec();
