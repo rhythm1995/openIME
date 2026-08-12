@@ -120,6 +120,9 @@ pub struct AppConfig {
     /// 快捷键模式（A1）：Toggle（默认）/ Hold（按住说话）。
     #[serde(default)]
     pub hotkey_mode: HotkeyMode,
+    /// 风格包循环切换快捷键（F1，可选，如 Ctrl+Shift+P；None=不启用）。
+    #[serde(default)]
+    pub style_switch_hotkey: Option<String>,
     /// 录音时是否静音其他应用音频（一期可固定 false）。
     pub mute_other_audio: bool,
     /// 开机自启（macOS Login Items）。开机自启时应用静默常驻菜单栏，不弹面板。
@@ -207,6 +210,7 @@ impl Default for AppConfig {
             }],
             hotkey: "Fn".to_string(),
             hotkey_mode: HotkeyMode::Toggle,
+            style_switch_hotkey: None,
             mute_other_audio: false,
             launch_at_login: false,
             // local_mode 与默认 ASR（Zipformer 流式）对齐；新逻辑以 local_asr_model 为准。

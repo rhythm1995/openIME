@@ -1076,6 +1076,19 @@ export default function Settings() {
               <option value="hold">按住说话（松开停止）</option>
             </select>
           </div>
+          <div style={{ marginTop: 10 }}>
+            <label className="field-label">风格包切换快捷键（F1，可选）</label>
+            <input
+              value={config.style_switch_hotkey ?? ""}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  style_switch_hotkey: e.target.value || null,
+                })
+              }
+              placeholder="如 Ctrl+Shift+P（留空不启用）"
+            />
+          </div>
           {config.hotkey.trim().toLowerCase() === "fn" && (
             <span
               className="field-hint"

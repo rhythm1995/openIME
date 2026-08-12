@@ -320,9 +320,54 @@ pub fn run() {
     log_info!("Tauri 事件循环结束，进程退出");
 }
 
-/// 全局快捷键（插件路径）：切换录音 + 显示 overlay。
-fn on_hotkey(app: &tauri::AppHandle, _shortcut: &Shortcut) {
+/// 全局快捷键：若是风格包切换键则循环切风格包（F1），否则切换录音。
+fn on_hotkey(app: &tauri::AppHandle, shortcut: &Shortcut) {
+    let style_sc = app
+        .state::<AppState>()
+        .config
+        .try_read()
+        .ok()
+        .and_then(|c| {
+            c.style_switch_hotkey
+                .as_ref()
+                .and_then(|s| parse_shortcut(s))
+        });
+    if style_sc.as_ref() == Some(shortcut) {
+        cycle_style_pack(app);
+        return;
+    }
     trigger_toggle(app);
+}
+
+/// F1：循环切换风格包（None → 第一个 → ... → 末尾 → None/默认 Heavy）。
+fn cycle_style_pack(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let packs = state.store.list_style_packs().unwrap_or_default();
+    if packs.is_empty() {
+        let _ = app.emit("style://switched", "无风格包");
+        return;
+    }
+    let current = state.config.blocking_read().active_style_pack_id.clone();
+    let next = match current.as_deref() {
+        None => Some(packs[0].id.clone()),
+        Some(id) => match packs.iter().position(|p| p.id == id) {
+            Some(idx) if idx + 1 < packs.len() => Some(packs[idx + 1].id.clone()),
+            _ => None, // 末尾或未找到 → 回到默认 Heavy
+        },
+    };
+    {
+        let mut cfg = state.config.blocking_write();
+        cfg.active_style_pack_id = next.clone();
+        if let Err(e) = state::save_config(&state.store, &cfg) {
+            log_warn!("风格包切换持久化失败：{e}");
+        }
+    }
+    let label = next
+        .as_deref()
+        .and_then(|id| packs.iter().find(|p| p.id == id).map(|p| p.name.as_str()))
+        .unwrap_or("默认 Heavy");
+    log_info!("风格包切换：{label}");
+    let _ = app.emit("style://switched", label);
 }
 
 /// 显示录音 overlay，尽量不抢走用户当前输入框的焦点/光标。
@@ -483,27 +528,40 @@ fn single_instance_check(app: tauri::AppHandle, sock_path: &std::path::Path) -> 
 // ──────────────── 录音快捷键 ────────────────
 
 /// 应用快捷键配置："Fn" 走原生监听；其他走 global-shortcut 插件。
-/// 先清掉旧的插件快捷键，避免改键后残留。
+/// 先清掉旧的插件快捷键，避免改键后残留。同时注册 F1 风格包切换快捷键（可选）。
 fn apply_hotkey(app: &tauri::AppHandle, hotkey: &str) {
+    let _ = app.global_shortcut().unregister_all();
     let trimmed = hotkey.trim();
     if trimmed.eq_ignore_ascii_case("fn") {
         // Fn 是修饰键，global-shortcut 无法注册，用原生 NSEvent 监听。
-        if let Err(e) = app.global_shortcut().unregister_all() {
-            log_debug!("unregister_all 失败（忽略）：{e}");
-        }
         crate::platform::current::fn_key::install_fn_monitor(on_fn_edge);
         log_info!("录音快捷键：Fn（原生监听）");
-        return;
+    } else {
+        match parse_shortcut(trimmed) {
+            Some(sc) => match app.global_shortcut().register(sc) {
+                Ok(_) => log_info!("全局快捷键已注册：{trimmed}"),
+                Err(e) => log_warn!("快捷键 {trimmed} 注册失败：{e}"),
+            },
+            None => {
+                log_warn!("无法解析快捷键 {trimmed:?}，回退 {DEFAULT_HOTKEY}");
+                if let Some(sc) = parse_shortcut(DEFAULT_HOTKEY) {
+                    let _ = app.global_shortcut().register(sc);
+                }
+            }
+        }
     }
-    match parse_shortcut(trimmed) {
-        Some(sc) => match app.global_shortcut().register(sc) {
-            Ok(_) => log_info!("全局快捷键已注册：{trimmed}"),
-            Err(e) => log_warn!("快捷键 {trimmed} 注册失败：{e}"),
-        },
-        None => {
-            log_warn!("无法解析快捷键 {trimmed:?}，回退 {DEFAULT_HOTKEY}");
-            if let Some(sc) = parse_shortcut(DEFAULT_HOTKEY) {
-                let _ = app.global_shortcut().register(sc);
+    // F1：风格包循环切换快捷键（与录音快捷键独立，两模式都注册）。
+    let style_hk = app
+        .state::<AppState>()
+        .config
+        .try_read()
+        .ok()
+        .and_then(|c| c.style_switch_hotkey.clone());
+    if let Some(s) = style_hk {
+        if let Some(sc) = parse_shortcut(&s) {
+            match app.global_shortcut().register(sc) {
+                Ok(_) => log_info!("风格包切换快捷键已注册：{s}"),
+                Err(e) => log_warn!("风格包快捷键 {s} 注册失败：{e}"),
             }
         }
     }

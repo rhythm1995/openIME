@@ -29,6 +29,8 @@ export interface AppConfig {
   providers: ProviderConfig[];
   hotkey: string;
   hotkey_mode?: HotkeyMode;
+  /** 风格包循环切换快捷键（F1，可选，如 Ctrl+Shift+P） */
+  style_switch_hotkey?: string | null;
   mute_other_audio: boolean;
   /** 开机自启（macOS Login Items）；开机自启时应用静默常驻菜单栏 */
   launch_at_login?: boolean;
