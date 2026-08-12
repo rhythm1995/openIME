@@ -133,6 +133,7 @@ mod tests {
         PolishRequest {
             text: text.into(),
             mode: PolishMode::Light,
+            style_prompt: None,
             hotwords: vec![],
             timeout: Duration::from_secs(1),
         }

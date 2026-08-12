@@ -55,7 +55,12 @@ impl TextPolishProvider for LocalGgufPolish {
         let path = self.model_path.clone();
         let n_ctx = self.n_ctx;
         let n_predict = self.n_predict;
-        let messages = build_messages(&req.text, req.mode, &req.hotwords);
+        let messages = build_messages(
+            &req.text,
+            req.mode,
+            &req.hotwords,
+            req.style_prompt.as_deref(),
+        );
         let timeout = req.timeout;
 
         // llama.cpp 绑定非 async：丢到 blocking 线程，再套超时。

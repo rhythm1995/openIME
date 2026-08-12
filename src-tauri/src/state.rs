@@ -51,6 +51,7 @@ impl AppState {
                 p.model = "sherpa-onnx-streaming-paraformer-bilingual-zh-en".to_string();
             }
         }
+        let _ = store.seed_builtin_style_packs_if_empty();
         let store_arc: Arc<SqliteStore> = Arc::new(store);
         Ok(Self {
             store: store_arc,
@@ -158,6 +159,17 @@ impl AppState {
             PolishMode::Off
         };
 
+        let style_prompt = if mode == PolishMode::Off {
+            None
+        } else {
+            cfg.active_style_pack_id.as_deref().and_then(|id| {
+                self.store
+                    .list_style_packs()
+                    .ok()
+                    .and_then(|ps| ps.into_iter().find(|p| p.id == id).map(|p| p.system_prompt))
+            })
+        };
+
         let hotwords = self
             .store
             .list_hotwords()
@@ -169,6 +181,7 @@ impl AppState {
         PolishContext {
             enabled: mode != PolishMode::Off,
             mode,
+            style_prompt,
             hotwords,
             timeout_ms: cfg.polish_timeout_ms.max(100),
         }

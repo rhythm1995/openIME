@@ -164,6 +164,8 @@ pub enum PolishMode {
 pub struct PolishRequest {
     pub text: String,
     pub mode: PolishMode,
+    /// 风格包 system_prompt（F1，Heavy 模式生效；None = 默认 Heavy prompt）。
+    pub style_prompt: Option<String>,
     /// 热词：提示模型保留写法。
     pub hotwords: Vec<String>,
     /// 超时；超时后 router 可回退原文/云端。

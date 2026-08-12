@@ -921,5 +921,45 @@ pub fn import_hotwords_csv(
     })
 }
 
+// ── 风格包（F1）──
+
+#[tauri::command]
+pub fn list_style_packs(state: State<'_, AppState>) -> Result<Vec<voice_core::StylePack>, String> {
+    state.store.list_style_packs().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_active_style_pack(state: State<'_, AppState>, id: Option<String>) -> Result<(), String> {
+    log_info!("切换风格包：{:?}", id);
+    {
+        let mut cfg = state.config.blocking_write();
+        cfg.active_style_pack_id = id;
+        if let Err(e) = crate::state::save_config(&state.store, &cfg) {
+            return Err(format!("保存配置失败：{e}"));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn upsert_style_pack(
+    state: State<'_, AppState>,
+    pack: voice_core::StylePack,
+) -> Result<voice_core::StylePack, String> {
+    state
+        .store
+        .upsert_style_pack(&pack)
+        .map_err(|e| e.to_string())?;
+    Ok(pack)
+}
+
+#[tauri::command]
+pub fn delete_style_pack(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state
+        .store
+        .delete_style_pack(&id)
+        .map_err(|e| e.to_string())
+}
+
 #[allow(dead_code)]
 fn _ensure_arc(_a: &Arc<()>) {}

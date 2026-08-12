@@ -8,9 +8,19 @@ use crate::traits::PolishMode;
 /// - Light：只纠 ASR 错，不改措辞（含 no-op 直通示例抑制过度纠正）。
 /// - Heavy：允许改写润色通顺、调整语序，但保留原意、不扩写。
 /// - hotwords：专有名词保留写法。
-pub fn build_messages(text: &str, mode: PolishMode, hotwords: &[String]) -> Vec<(String, String)> {
+pub fn build_messages(
+    text: &str,
+    mode: PolishMode,
+    hotwords: &[String],
+    style_prompt: Option<&str>,
+) -> Vec<(String, String)> {
     let mut system = if mode == PolishMode::Heavy {
-        heavy_system().to_string()
+        // F1：Heavy 模式下，若选中风格包，用其 system_prompt 替代默认 Heavy prompt。
+        style_prompt
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| heavy_system().to_string())
     } else {
         light_system().to_string()
     };
@@ -63,44 +73,56 @@ mod tests {
 
     #[test]
     fn light_is_correction_strict() {
-        let msgs = build_messages("你好", PolishMode::Light, &[]);
+        let msgs = build_messages("你好", PolishMode::Light, &[], None);
         let sys = &msgs[0].1;
         assert!(sys.contains("纠错") || sys.contains("修正"));
-        // Light 不含 Heavy 的"通顺化"改写语义
         assert!(!sys.contains("通顺化"));
-        // no-op 直通示例（抑制过度纠正）
         assert!(sys.contains("今天天气挺好的"));
     }
 
     #[test]
     fn light_user_is_correction() {
-        let msgs = build_messages("你好", PolishMode::Light, &[]);
+        let msgs = build_messages("你好", PolishMode::Light, &[], None);
         assert!(msgs[1].1.contains("纠错"));
     }
 
     #[test]
     fn heavy_is_rewrite_smooth() {
-        let msgs = build_messages("你好", PolishMode::Heavy, &[]);
+        let msgs = build_messages("你好", PolishMode::Heavy, &[], None);
         let sys = &msgs[0].1;
         assert!(sys.contains("润色") && sys.contains("通顺化"));
         assert!(sys.contains("保留原意"));
-        // user 文案按模式区分
         assert!(msgs[1].1.contains("润色"));
     }
 
     #[test]
     fn hotwords_appended_to_system() {
         let hw = vec!["openIME".into(), "Paraformer".into()];
-        let msgs = build_messages("你好", PolishMode::Light, &hw);
+        let msgs = build_messages("你好", PolishMode::Light, &hw, None);
         assert!(msgs[0].1.contains("专有名词"));
         assert!(msgs[0].1.contains("openIME"));
         assert!(msgs[0].1.contains("Paraformer"));
     }
 
     #[test]
+    fn heavy_uses_style_prompt() {
+        // F1：Heavy 模式下，style_prompt 替代默认 Heavy system。
+        let msgs = build_messages(
+            "你好",
+            PolishMode::Heavy,
+            &[],
+            Some("你是一个 commit message 生成器"),
+        );
+        assert!(
+            msgs[0].1.contains("commit message 生成器"),
+            "Heavy 应使用 style_prompt，得到 {}",
+            msgs[0].1
+        );
+    }
+
+    #[test]
     fn off_mode_does_not_panic() {
-        // Off 模式调用方应跳过；此处不应 panic，退回 Light 文案。
-        let msgs = build_messages("你好", PolishMode::Off, &[]);
+        let msgs = build_messages("你好", PolishMode::Off, &[], None);
         assert_eq!(msgs.len(), 2);
     }
 }

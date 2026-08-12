@@ -130,6 +130,9 @@ pub struct AppConfig {
     /// 润色程度：Off（保持原样）/ Light（中度，仅校对）/ Heavy（高度，改写润色）。
     #[serde(default)]
     pub polish_mode: PolishMode,
+    /// 当前选中的风格包 id（F1，仅 Heavy 模式生效；None = 用默认 Heavy prompt）。
+    #[serde(default)]
+    pub active_style_pack_id: Option<String>,
     /// 单次润色超时（毫秒）。
     #[serde(default = "default_polish_timeout_ms")]
     pub polish_timeout_ms: u32,
@@ -186,6 +189,7 @@ impl Default for AppConfig {
             polish_local_model: POLISH_DEFAULT_LOCAL_MODEL.to_string(),
             polish_cloud_model: "qwen-turbo".to_string(),
             polish_mode: PolishMode::Off,
+            active_style_pack_id: None,
             polish_timeout_ms: 800,
         }
     }

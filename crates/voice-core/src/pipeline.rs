@@ -34,6 +34,7 @@ pub struct PipelineDeps {
 pub struct PolishContext {
     pub enabled: bool,
     pub mode: PolishMode,
+    pub style_prompt: Option<String>,
     pub hotwords: Vec<String>,
     pub timeout_ms: u32,
 }
@@ -256,6 +257,7 @@ impl Pipeline {
         let req = PolishRequest {
             text: l0.text.clone(),
             mode: ctx.mode,
+            style_prompt: ctx.style_prompt.clone(),
             hotwords: ctx.hotwords.clone(),
             timeout: std::time::Duration::from_millis(ctx.timeout_ms.max(100) as u64),
         };
@@ -589,6 +591,7 @@ mod tests {
         PolishContext {
             enabled: true,
             mode,
+            style_prompt: None,
             hotwords: vec![],
             timeout_ms: 1000,
         }
@@ -611,10 +614,7 @@ mod tests {
             out.contains("今天天气不错"),
             "L0 应去掉首部填充词，得到 {out}"
         );
-        assert!(
-            !out.ends_with('。'),
-            "B4：单句输入不应补句号，得到 {out}"
-        );
+        assert!(!out.ends_with('。'), "B4：单句输入不应补句号，得到 {out}");
     }
 
     #[tokio::test]
