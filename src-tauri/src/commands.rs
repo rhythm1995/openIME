@@ -778,7 +778,15 @@ pub async fn toggle_recording(
             let _ = app_for_cb.emit("recording://partial", text.to_string());
         });
 
-        // 录音 + 收集 finals（不在内部插入——插入需在焦点恢复后进行）。
+        // C1：流式引擎（百炼）边说边逐字上屏；离线引擎录完一次性插入。
+        let streaming = provider_cfg.kind == voice_core::ProviderKind::Bailian;
+        // 流式模式：录音期间就上屏，先还焦。
+        if streaming {
+            restore_frontmost_focus(&app_handle, frontmost.as_deref());
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        }
+
+        // 录音 + 收集 finals（流式模式下 finals 已在内部逐字上屏）。
         let result = pipeline
             .record_and_collect(
                 audio,
@@ -786,53 +794,58 @@ pub async fn toggle_recording(
                 meta,
                 Some(on_partial),
                 Some(stop_flag),
+                streaming,
             )
             .await;
 
         match result {
             Ok(r) => {
-                // 识别结束 → 上屏前：还焦，但 HUD 仍可见，提示正在输入。
                 let _ = app_handle.emit("recording://processing", "正在输入…");
-                restore_frontmost_focus(&app_handle, frontmost.as_deref());
-                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                if streaming {
+                    // C1：已逐字上屏，只落库（不重复插入、不润色——流式模式优先实时性）。
+                    if let Err(e) = pipeline.persist_finals(&r.session_id, &r.utterances).await {
+                        log_error!("流式结果落库失败：{e}");
+                    }
+                } else {
+                    // 离线：录完还焦 + 一次性润色上屏。
+                    restore_frontmost_focus(&app_handle, frontmost.as_deref());
+                    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
 
-                // B5+B6：按前台 app 半角标点偏好 + 繁简偏好转换 finals。
-                let finals: Vec<String> = {
-                    let app_state = app_handle.state::<AppState>();
-                    let cfg = app_state.config.read().await;
-                    let half = cfg.punct_half_width_apps.iter().any(|kw| {
-                        frontmost
-                            .as_deref()
-                            .map(|f| f.contains(kw.as_str()))
-                            .unwrap_or(false)
-                    });
-                    let script = cfg.chinese_script_preference;
-                    r.utterances
-                        .iter()
-                        .map(|t| {
-                            let mut s = voice_core::polish::convert_script(t, script);
-                            if half {
-                                s = voice_core::polish::full_to_half_punct(&s);
-                            }
-                            s
-                        })
-                        .collect()
-                };
-                if let Err(e) = pipeline
-                    .insert_finals_with_polish(&r.session_id, &finals, &polish_ctx)
-                    .await
-                {
-                    log_error!("插入文本失败：{e}");
-                    let _ = app_handle.emit("recording://error", e.to_string());
-                }
+                    // B5+B6：按前台 app 半角标点偏好 + 繁简偏好转换 finals。
+                    let finals: Vec<String> = {
+                        let app_state = app_handle.state::<AppState>();
+                        let cfg = app_state.config.read().await;
+                        let half = cfg.punct_half_width_apps.iter().any(|kw| {
+                            frontmost
+                                .as_deref()
+                                .map(|f| f.contains(kw.as_str()))
+                                .unwrap_or(false)
+                        });
+                        let script = cfg.chinese_script_preference;
+                        r.utterances
+                            .iter()
+                            .map(|t| {
+                                let mut s = voice_core::polish::convert_script(t, script);
+                                if half {
+                                    s = voice_core::polish::full_to_half_punct(&s);
+                                }
+                                s
+                            })
+                            .collect()
+                    };
+                    if let Err(e) = pipeline
+                        .insert_finals_with_polish(&r.session_id, &finals, &polish_ctx)
+                        .await
+                    {
+                        log_error!("插入文本失败：{e}");
+                        let _ = app_handle.emit("recording://error", e.to_string());
+                    }
+                } // 闭合 else（非流式分支）
 
                 *recording.write().await = false;
                 guard.store(false, std::sync::atomic::Ordering::SeqCst);
-                // 文字已上屏后再收起 HUD。
                 hide_overlay_only(&app_handle);
-                // stopped 事件 payload 给功能测试框/历史用：需先去重，否则
-                // 同一句的 endpoint+flush 两条 final 会被 join 成重复串。
-                let deduped = voice_core::polish::dedupe_consecutive_finals(&finals);
+                let deduped = voice_core::polish::dedupe_consecutive_finals(&r.utterances);
                 let _ = app_handle.emit("recording://stopped", deduped.join(""));
             }
             Err(e) => {

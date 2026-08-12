@@ -85,7 +85,7 @@ impl Pipeline {
         stop_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> crate::Result<SessionResult> {
         let result = self
-            .record_and_collect(audio, cfg, meta, on_partial, stop_flag)
+            .record_and_collect(audio, cfg, meta, on_partial, stop_flag, false)
             .await?;
         self.insert_finals(&result.session_id, &result.utterances)
             .await?;
@@ -103,6 +103,7 @@ impl Pipeline {
         meta: SessionMeta,
         on_partial: Option<PartialCallback>,
         stop_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        streaming_insert: bool,
     ) -> crate::Result<SessionResult> {
         let session_id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
@@ -127,7 +128,12 @@ impl Pipeline {
         let deltas = asr.deltas();
 
         // reader：消费 deltas，收集 final，partial 走回调。
+        // C1 streaming_insert=true 时，partial/final 经 diff_prefix 增量上屏（Unicode 安全）。
         let partial_cb = on_partial;
+        let inserter = self.deps.inserter.clone();
+        let inserted: std::sync::Arc<std::sync::Mutex<String>> =
+            std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let streaming = streaming_insert;
         let reader = tokio::spawn(async move {
             let mut finals: Vec<String> = Vec::new();
             let mut deltas = deltas;
@@ -138,8 +144,30 @@ impl Pipeline {
                             if let Some(cb) = &partial_cb {
                                 cb(&d.text);
                             }
+                            if streaming {
+                                let delta = {
+                                    let mut s = inserted.lock().unwrap();
+                                    let delta = crate::insert::diff_prefix(&s, &d.text).to_string();
+                                    *s = d.text.clone();
+                                    delta
+                                };
+                                if !delta.is_empty() {
+                                    let _ = inserter.insert(&delta).await;
+                                }
+                            }
                         }
                         TranscriptKind::Final => {
+                            if streaming {
+                                let delta = {
+                                    let mut s = inserted.lock().unwrap();
+                                    let delta = crate::insert::diff_prefix(&s, &d.text).to_string();
+                                    s.clear(); // 句末：下一句从零开始
+                                    delta
+                                };
+                                if !delta.is_empty() {
+                                    let _ = inserter.insert(&delta).await;
+                                }
+                            }
                             finals.push(d.text.clone());
                         }
                     },
@@ -218,6 +246,31 @@ impl Pipeline {
                     created_at: chrono::Utc::now(),
                 })
                 .await?;
+        }
+        Ok(())
+    }
+
+    /// C1：流式模式专用——finals 已在录音期间逐字上屏，只去重+落库，不重复插入。
+    pub async fn persist_finals(&self, session_id: &str, finals: &[String]) -> crate::Result<()> {
+        let finals = crate::polish::dedupe_consecutive_finals(finals);
+        let mut last = String::new();
+        for (seq, text) in finals.iter().enumerate() {
+            let text = text.trim();
+            if text.is_empty() || text == last {
+                continue;
+            }
+            self.deps
+                .store
+                .save_utterance(&UtteranceRecord {
+                    id: Uuid::new_v4().to_string(),
+                    session_id: session_id.to_string(),
+                    seq: seq as u32,
+                    final_text: text.to_string(),
+                    audio_path: None,
+                    created_at: chrono::Utc::now(),
+                })
+                .await?;
+            last = text.to_string();
         }
         Ok(())
     }

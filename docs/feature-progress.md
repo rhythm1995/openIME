@@ -31,5 +31,4 @@
 - [x] **D2 搜索 UI**（前端搜索框 + 跨会话 LIKE 结果）
 - [x] **F1 风格包 CRUD + 快捷键**（自定义增删 + 全局快捷键运行时切换）
 
-### 大工程（周级）
-- [ ] **C1 流式逐字重做**（OpenLess 三态机 + Unicode 边界）
+- [x] **C1 流式逐字重做** — streaming_insert 恢复 + persist_finals + 百炼流式分支（OpenLess 三态机 + Unicode 边界）
