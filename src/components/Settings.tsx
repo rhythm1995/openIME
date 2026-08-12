@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   Monitor,
   Mic,
@@ -21,6 +22,7 @@ import type {
   ProviderConfig,
   StylePack,
   SystemInfo,
+  TranscribeResult,
 } from "../types";
 import { ipc, permissionLabel, type PermissionKind, type PermissionStatus } from "../ipc";
 
@@ -81,6 +83,9 @@ export default function Settings() {
   // 二期润色
   const [polishStatus, setPolishStatus] = useState<PolishModelStatus | null>(null);
   const [stylePacks, setStylePacks] = useState<StylePack[]>([]);
+  // D3 文件转录
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcribeResult, setTranscribeResult] = useState<TranscribeResult | null>(null);
   const [newStyleName, setNewStyleName] = useState("");
   const [newStylePrompt, setNewStylePrompt] = useState("");
 
@@ -1100,6 +1105,65 @@ export default function Settings() {
             </span>
           )}
         </div>
+      </div>
+
+      {/* D3 文件转录 */}
+      <div className="card">
+        <h2 className="card-title">文件转录</h2>
+        <button
+          className="btn"
+          disabled={transcribing}
+          onClick={async () => {
+            const selected = await open({
+              multiple: false,
+              filters: [{ name: "音频", extensions: ["mp3", "wav", "flac", "ogg", "m4a"] }],
+            });
+            const path = typeof selected === "string" ? selected : null;
+            if (!path) return;
+            setTranscribing(true);
+            setTranscribeResult(null);
+            try {
+              const r = await ipc.transcribeFile(path);
+              setTranscribeResult(r);
+            } catch (e) {
+              alert(`转录失败：${String(e)}`);
+            } finally {
+              setTranscribing(false);
+            }
+          }}
+        >
+          {transcribing ? "转录中…" : "选择音频文件转录"}
+        </button>
+        {transcribeResult && (
+          <>
+            <textarea
+              value={transcribeResult.text}
+              readOnly
+              rows={6}
+              style={{ marginTop: 12, fontSize: 13 }}
+            />
+            <button
+              className="btn"
+              style={{ marginTop: 8 }}
+              onClick={() => {
+                const blob = new Blob([transcribeResult.srt], {
+                  type: "text/plain",
+                });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = transcribeResult.file_name.replace(
+                  /\.[^.]+$/,
+                  ""
+                ) + ".srt";
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+            >
+              导出 SRT 字幕
+            </button>
+          </>
+        )}
       </div>
 
       {/* App 行为 */}

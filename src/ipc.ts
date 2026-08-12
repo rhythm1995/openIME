@@ -12,6 +12,7 @@ import type {
   StylePack,
   SessionSummary,
   SystemInfo,
+  TranscribeResult,
   UtteranceRecord,
 } from "./types";
 
@@ -88,6 +89,9 @@ export const ipc = {
   addHotword: (word: string, weight: number) =>
     invoke<Hotword>("add_hotword", { word, weight }),
   deleteHotword: (id: string) => invoke<void>("delete_hotword", { id }),
+  // D3 文件转录
+  transcribeFile: (path: string) =>
+    invoke<TranscribeResult>("transcribe_file", { path }),
   getHotwordLimit: () => invoke<HotwordLimit>("get_hotword_limit"),
   importHotwordsCsv: (content: string) =>
     invoke<HotwordImportResult>("import_hotwords_csv", { content }),

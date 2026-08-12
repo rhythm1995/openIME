@@ -155,6 +155,13 @@ export interface SystemInfo {
   collected_at: string;
 }
 
+/** D3 文件转录结果。 */
+export interface TranscribeResult {
+  text: string;
+  srt: string;
+  file_name: string;
+}
+
 /** 模型下载进度事件（model://download-progress）。 */
 export interface ModelDownloadProgress {
   phase: "downloading" | "verifying" | "done" | "error" | string;

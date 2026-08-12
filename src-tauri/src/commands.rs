@@ -1008,5 +1008,55 @@ pub fn get_selection() -> Result<Option<String>, String> {
     }
 }
 
+/// D3：文件转录结果（文本 + srt 字幕）。
+#[derive(serde::Serialize)]
+pub struct TranscribeResult {
+    pub text: String,
+    pub srt: String,
+    /// 音频文件名（前端展示用）。
+    pub file_name: String,
+}
+
+/// D3：转录音频文件 → (文本, srt)。用当前选中的本地 ASR 模型。
+#[tauri::command]
+pub async fn transcribe_file(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<TranscribeResult, String> {
+    let (model_id, lang, model_root) = {
+        let cfg = state.config.read().await;
+        (
+            cfg.resolved_local_asr_model(),
+            cfg.local_language.clone(),
+            state.model_root(),
+        )
+    };
+    let root = model_root.ok_or("未配置本地模型路径，请先下载模型")?;
+    let file_name = std::path::Path::new(&path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("audio")
+        .to_string();
+    log_info!("开始转录文件：{path}（模型 {model_id}）");
+    let path_clone = path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        voice_core::transcribe::transcribe_file_full(
+            std::path::Path::new(&path_clone),
+            &root,
+            &model_id,
+            &lang,
+        )
+    })
+    .await
+    .map_err(|e| format!("转录任务失败：{e}"))?
+    .map_err(|e| e.to_string())?;
+    log_info!("转录完成：{path}（{} 字）", result.0.chars().count());
+    Ok(TranscribeResult {
+        text: result.0,
+        srt: result.1,
+        file_name,
+    })
+}
+
 #[allow(dead_code)]
 fn _ensure_arc(_a: &Arc<()>) {}

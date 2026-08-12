@@ -116,8 +116,7 @@ pub fn transcribe_file_full(
     let duration = samples_16k.len() as f64 / 16000.0;
     let recognizer =
         crate::providers::sherpa::engine::build_offline_recognizer(model_root, model_id, lang)?;
-    let text =
-        crate::providers::sherpa::engine::transcribe_offline(&recognizer, &samples_16k);
+    let text = crate::providers::sherpa::engine::transcribe_offline(&recognizer, &samples_16k);
     let srt = text_to_srt(&text, duration);
     Ok((text, srt))
 }
