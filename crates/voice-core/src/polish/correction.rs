@@ -412,6 +412,15 @@ fn to_pinyin_plain(s: &str) -> String {
         .collect()
 }
 
+/// B2：模糊音归一（zh→z, sh→s, ch→c, eng→en, ing→in），用于近似匹配热词。
+fn normalize_fuzzy(py: &str) -> String {
+    py.replace("eng", "en")
+        .replace("ing", "in")
+        .replace("zh", "z")
+        .replace("sh", "s")
+        .replace("ch", "c")
+}
+
 /// 热词同音纠错：按热词字数滑窗取片段，拼音与热词相同（且片段本身不是该热词）
 /// 就替换为热词。覆盖 ASR 最常见的"专有名词被识别成同音常用字"（制谱→智谱）。
 ///
@@ -454,6 +463,14 @@ fn correct_hotword_homophones(text: &str, hotwords: &[String]) -> String {
                 let seg_py = to_pinyin_plain(&seg);
                 if seg_py == *hw_py {
                     // 同音：替换为热词。
+                    out.extend(hw.chars());
+                    i += n;
+                    matched = true;
+                    break;
+                }
+                // B2：模糊音匹配（z/zh, s/sh, c/ch, en/eng, in/ing 归一后相同）。
+                let seg_fuzzy = normalize_fuzzy(&seg_py);
+                if !seg_fuzzy.is_empty() && seg_fuzzy == normalize_fuzzy(hw_py) {
                     out.extend(hw.chars());
                     i += n;
                     matched = true;
@@ -817,5 +834,22 @@ mod tests {
             r.text
         );
         assert!(r.had_correction);
+    }
+
+    #[test]
+    fn hotword_fuzzy_pinyin_match() {
+        // B2：模糊音匹配 — "森正" 与热词"深圳"模糊音归一后相同（sen zheng → sen zen）。
+        assert_eq!(
+            correct_hotword_homophones("去森正了", &["深圳".into()]),
+            "去深圳了"
+        );
+    }
+
+    #[test]
+    fn normalize_fuzzy_basic() {
+        assert_eq!(normalize_fuzzy("shenzhen"), "senzen");
+        assert_eq!(normalize_fuzzy("senzheng"), "senzen");
+        assert_eq!(normalize_fuzzy("zhongguo"), "zongguo");
+        assert_eq!(normalize_fuzzy("chengdu"), "cendu");
     }
 }
