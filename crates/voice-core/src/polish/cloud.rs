@@ -127,11 +127,7 @@ impl CloudPolishProvider {
             .await?;
         let v: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|e| Error::Provider(format!("解析 OpenAI Chat JSON 失败: {e}")))?;
-        Ok(v["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .trim()
-            .to_string())
+        Ok(parse_openai_chat_text(&v))
     }
 
     /// 协议 2：Anthropic Messages API。
@@ -154,18 +150,7 @@ impl CloudPolishProvider {
             .await?;
         let v: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|e| Error::Provider(format!("解析 Anthropic JSON 失败: {e}")))?;
-        // response: { content: [{ type: "text", text: "..." }] }
-        let text = v["content"]
-            .as_array()
-            .and_then(|arr| {
-                arr.iter()
-                    .find(|b| b["type"].as_str() == Some("text"))
-                    .and_then(|b| b["text"].as_str())
-            })
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        Ok(text)
+        Ok(parse_anthropic_text(&v))
     }
 
     /// 协议 3：OpenAI Responses API。
@@ -194,22 +179,7 @@ impl CloudPolishProvider {
             .await?;
         let v: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|e| Error::Provider(format!("解析 Responses JSON 失败: {e}")))?;
-        // response: { output: [{ content: [{ type: "output_text", text: "..." }] }] }
-        let text = v["output"]
-            .as_array()
-            .and_then(|arr| {
-                arr.iter().find_map(|o| {
-                    o["content"].as_array().and_then(|c| {
-                        c.iter()
-                            .find(|b| b["type"].as_str() == Some("output_text"))
-                            .and_then(|b| b["text"].as_str())
-                    })
-                })
-            })
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        Ok(text)
+        Ok(parse_responses_text(&v))
     }
 
     /// 通用 POST JSON（按 auth 类型设 header）。
@@ -268,4 +238,90 @@ fn split_system(messages: &[(String, String)]) -> (String, Vec<serde_json::Value
         }
     }
     (system.trim().to_string(), chat)
+}
+
+// ── 响应解析（纯函数，可单测）────────────────────────────────
+
+/// OpenAI Chat：choices[0].message.content（string 或 array of text blocks）。
+fn parse_openai_chat_text(v: &serde_json::Value) -> String {
+    let content = &v["choices"][0]["message"]["content"];
+    if let Some(s) = content.as_str() {
+        return s.trim().to_string();
+    }
+    // content 可能是 array（content blocks）。
+    content
+        .as_array()
+        .and_then(|arr| arr.iter().find_map(|b| b["text"].as_str()))
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// Anthropic：{ content: [{ type: "text", text: "..." }] }。
+fn parse_anthropic_text(v: &serde_json::Value) -> String {
+    v["content"]
+        .as_array()
+        .and_then(|arr| {
+            arr.iter()
+                .find(|b| b["type"].as_str() == Some("text"))
+                .and_then(|b| b["text"].as_str())
+        })
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// OpenAI Responses：{ output: [{ content: [{ type: "output_text", text: "..." }] }] }。
+fn parse_responses_text(v: &serde_json::Value) -> String {
+    v["output"]
+        .as_array()
+        .and_then(|arr| {
+            arr.iter().find_map(|o| {
+                o["content"].as_array().and_then(|c| {
+                    c.iter()
+                        .find(|b| b["type"].as_str() == Some("output_text"))
+                        .and_then(|b| b["text"].as_str())
+                })
+            })
+        })
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_openai_chat_string_content() {
+        let v = json!({"choices": [{"message": {"content": "你好。"}}]});
+        assert_eq!(parse_openai_chat_text(&v), "你好。");
+    }
+
+    #[test]
+    fn parse_openai_chat_array_content() {
+        let v = json!({"choices": [{"message": {"content": [{"type": "text", "text": "你好"}]}}]});
+        assert_eq!(parse_openai_chat_text(&v), "你好");
+    }
+
+    #[test]
+    fn parse_anthropic_text_block() {
+        let v = json!({"content": [{"type": "text", "text": "你好。"}]});
+        assert_eq!(parse_anthropic_text(&v), "你好。");
+    }
+
+    #[test]
+    fn parse_responses_output_text() {
+        let v = json!({"output": [{"content": [{"type": "output_text", "text": "你好"}]}]});
+        assert_eq!(parse_responses_text(&v), "你好");
+    }
+
+    #[test]
+    fn parse_empty_responses() {
+        assert_eq!(parse_anthropic_text(&json!({})), "");
+        assert_eq!(parse_responses_text(&json!({})), "");
+        assert_eq!(parse_openai_chat_text(&json!({})), "");
+    }
 }
