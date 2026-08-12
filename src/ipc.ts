@@ -4,7 +4,6 @@ import type {
   AppConfig,
   Hotword,
   HotwordImportResult,
-  HotwordLimit,
   LocalAsrModelEntry,
   LocalModelStatus,
   PolishModelStatus,
@@ -93,7 +92,6 @@ export const ipc = {
   // D3 文件转录
   transcribeFile: (path: string) =>
     invoke<TranscribeResult>("transcribe_file", { path }),
-  getHotwordLimit: () => invoke<HotwordLimit>("get_hotword_limit"),
   importHotwordsCsv: (content: string) =>
     invoke<HotwordImportResult>("import_hotwords_csv", { content }),
 };

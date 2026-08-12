@@ -1,26 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { Lightbulb, Trash2, BookOpen, Search, AlertTriangle, Upload } from "lucide-react";
-import type { Hotword, HotwordLimit } from "../types";
+import type { Hotword } from "../types";
 import { ipc } from "../ipc";
 
-// 词典：自定义术语（热词），用于提升 Fun-ASR 对特定名词的识别准确率。
-// 添加人名、专业术语、产品名、缩写等，避免被误识别。
+// 词典：自定义术语（热词）。
+// 作用：L0 同音/模糊音纠错（把识别成同音常用字的专有名词改回热词写法）
+//       + 润色时让 LLM 保留这些专有名词的写法。
+// 注：本地 sherpa 模型非 transducer，无解码层热词偏置；纠音发生在识别后。
 export default function Dictionary() {
   const [words, setWords] = useState<Hotword[] | null>(null);
   const [newWord, setNewWord] = useState("");
   const [query, setQuery] = useState("");
-  const [limit, setLimit] = useState<HotwordLimit | null>(null);
   const [importing, setImporting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = async () => {
     try {
-      const [ws, lim] = await Promise.all([
-        ipc.listHotwords(),
-        ipc.getHotwordLimit().catch(() => null),
-      ]);
+      const ws = await ipc.listHotwords();
       setWords(ws);
-      if (lim) setLimit(lim);
     } catch {
       setWords([]);
     }
@@ -32,11 +29,7 @@ export default function Dictionary() {
       const text = await file.text();
       const res = await ipc.importHotwordsCsv(text);
       await refresh();
-      const capNote =
-        res.total > res.limit
-          ? `\n注意：当前模型仅前 ${res.limit} 个对识别生效（词典共 ${res.total} 个）。`
-          : "";
-      alert(`导入完成：新增 ${res.imported} 个，词典共 ${res.total} 个。${capNote}`);
+      alert(`导入完成：新增 ${res.imported} 个，词典共 ${res.total} 个。`);
     } catch (e) {
       alert(`导入失败：${String(e)}`);
     } finally {
@@ -146,16 +139,9 @@ export default function Dictionary() {
               e.target.value = "";
             }}
           />
-          {limit && (
-            <span className="field-hint">
-              当前模型「{limit.model_id}」热词上限 {limit.limit}，已有 {limit.current} 个
-              {limit.current > limit.limit && (
-                <strong style={{ color: "var(--warning)" }}>
-                  （仅前 {limit.limit} 个对识别生效）
-                </strong>
-              )}
-            </span>
-          )}
+          <span className="field-hint">
+            热词用于识别后纠音（同音/模糊音改回正确写法）+ 润色时保留专有名词
+          </span>
         </div>
       </div>
 

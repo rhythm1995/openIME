@@ -970,35 +970,13 @@ pub fn delete_hotword(state: State<'_, AppState>, id: String) -> Result<(), Stri
 }
 
 #[derive(serde::Serialize)]
-pub struct HotwordLimit {
-    pub limit: usize,
-    pub current: usize,
-    pub model_id: String,
-}
-
-#[derive(serde::Serialize)]
 pub struct HotwordImportResult {
     pub imported: usize,
     pub total: usize,
-    pub limit: usize,
-}
-
-/// 当前 ASR 模型的热词容量上限与已用数量（前端标注「仅前 N 个对识别生效」）。
-#[tauri::command]
-pub fn get_hotword_limit(state: State<'_, AppState>) -> Result<HotwordLimit, String> {
-    let cfg = state.config.blocking_read().clone();
-    let model_id = cfg.resolved_local_asr_model();
-    let limit = voice_core::asr_catalog::hotword_capacity(&model_id);
-    let current = state.store.list_hotwords().map(|v| v.len()).unwrap_or(0);
-    Ok(HotwordLimit {
-        limit,
-        current,
-        model_id,
-    })
 }
 
 /// 从 CSV 文本批量导入热词（每行一个词；支持「词,权重」取首列；忽略空行与重复）。
-/// 返回新增数、导入后总数、当前模型容量上限。
+/// 热词用于：L0 同音/模糊音纠错 + 润色 prompt 保留专有名词（本地 ASR 无解码层热词偏置）。
 #[tauri::command]
 pub fn import_hotwords_csv(
     state: State<'_, AppState>,
@@ -1012,14 +990,8 @@ pub fn import_hotwords_csv(
         .store
         .add_hotwords_batch(&words)
         .map_err(|e| e.to_string())?;
-    let model_id = state.config.blocking_read().resolved_local_asr_model();
-    let limit = voice_core::asr_catalog::hotword_capacity(&model_id);
     let total = state.store.list_hotwords().map(|v| v.len()).unwrap_or(0);
-    Ok(HotwordImportResult {
-        imported,
-        total,
-        limit,
-    })
+    Ok(HotwordImportResult { imported, total })
 }
 
 // ── 风格包（F1）──

@@ -105,18 +105,10 @@ export interface Hotword {
   weight: number;
 }
 
-/** 当前 ASR 模型的热词容量上限与已用数量（get_hotword_limit）。 */
-export interface HotwordLimit {
-  limit: number;
-  current: number;
-  model_id: string;
-}
-
 /** 热词 CSV 导入结果（import_hotwords_csv）。 */
 export interface HotwordImportResult {
   imported: number;
   total: number;
-  limit: number;
 }
 
 /** 本地引擎安装状态（get_local_model_status）。 */

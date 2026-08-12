@@ -27,7 +27,7 @@ impl AsrProvider for OpenAiAsrProvider {
         Ok(Box::new(OpenAiAsrSession {
             samples: Vec::new(),
             cfg: cfg.clone(),
-            dtx,
+            dtx: Some(dtx),
             deltas_rx: Some(drx),
             finished: false,
         }))
@@ -37,7 +37,7 @@ impl AsrProvider for OpenAiAsrProvider {
 struct OpenAiAsrSession {
     samples: Vec<f32>,
     cfg: ProviderConfig,
-    dtx: mpsc::UnboundedSender<Result<TranscriptDelta>>,
+    dtx: Option<mpsc::UnboundedSender<Result<TranscriptDelta>>>,
     deltas_rx: Option<mpsc::UnboundedReceiver<Result<TranscriptDelta>>>,
     finished: bool,
 }
@@ -64,7 +64,7 @@ impl AsrSession for OpenAiAsrSession {
         self.finished = true;
         let samples = std::mem::take(&mut self.samples);
         let cfg = self.cfg.clone();
-        let dtx = self.dtx.clone();
+        let dtx = self.dtx.take().expect("deltas channel sender 已取走");
         Box::pin(async move {
             if samples.is_empty() {
                 let _ = dtx.send(Ok(TranscriptDelta::final_("", 0)));

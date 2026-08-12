@@ -277,7 +277,6 @@ pub fn run() {
             commands::list_hotwords,
             commands::add_hotword,
             commands::delete_hotword,
-            commands::get_hotword_limit,
             commands::import_hotwords_csv,
             commands::list_style_packs,
             commands::set_active_style_pack,
