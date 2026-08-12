@@ -81,6 +81,8 @@ export default function Settings() {
   // 二期润色
   const [polishStatus, setPolishStatus] = useState<PolishModelStatus | null>(null);
   const [stylePacks, setStylePacks] = useState<StylePack[]>([]);
+  const [newStyleName, setNewStyleName] = useState("");
+  const [newStylePrompt, setNewStylePrompt] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -391,6 +393,83 @@ export default function Settings() {
                 <span className="field-hint">
                   Heavy 模式下，用所选风格包的指令替代默认润色（F1）
                 </span>
+              </div>
+            )}
+
+            {(config.polish_mode ?? "off") === "heavy" && (
+              <div className="field" style={{ marginTop: 14 }}>
+                <label className="field-label">管理风格包</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {stylePacks.map((p) => (
+                    <div
+                      key={p.id}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        fontSize: 13,
+                      }}
+                    >
+                      <span>
+                        {p.name}
+                        {p.is_builtin ? "（内置）" : ""}
+                      </span>
+                      {!p.is_builtin && (
+                        <button
+                          className="btn"
+                          style={{ fontSize: 12, padding: "2px 8px" }}
+                          onClick={async () => {
+                            await ipc.deleteStylePack(p.id);
+                            ipc
+                              .listStylePacks()
+                              .then(setStylePacks)
+                              .catch(() => {});
+                          }}
+                        >
+                          删除
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                    marginTop: 8,
+                  }}
+                >
+                  <input
+                    placeholder="风格包名称（如：客服回复）"
+                    value={newStyleName}
+                    onChange={(e) => setNewStyleName(e.target.value)}
+                  />
+                  <textarea
+                    placeholder="system prompt 指令（如：请把内容改写成礼貌的客服回复）"
+                    value={newStylePrompt}
+                    onChange={(e) => setNewStylePrompt(e.target.value)}
+                    rows={2}
+                  />
+                  <button
+                    className="btn"
+                    disabled={!newStyleName.trim() || !newStylePrompt.trim()}
+                    onClick={async () => {
+                      await ipc.upsertStylePack({
+                        id: `user-${Date.now()}`,
+                        name: newStyleName.trim(),
+                        system_prompt: newStylePrompt.trim(),
+                        is_builtin: false,
+                        ord: 100,
+                      });
+                      setNewStyleName("");
+                      setNewStylePrompt("");
+                      ipc.listStylePacks().then(setStylePacks).catch(() => {});
+                    }}
+                  >
+                    添加风格包
+                  </button>
+                </div>
               </div>
             )}
 

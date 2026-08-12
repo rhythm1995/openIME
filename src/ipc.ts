@@ -78,6 +78,9 @@ export const ipc = {
   listStylePacks: () => invoke<StylePack[]>("list_style_packs"),
   setActiveStylePack: (id: string | null) =>
     invoke<void>("set_active_style_pack", { id }),
+  upsertStylePack: (pack: StylePack) =>
+    invoke<StylePack>("upsert_style_pack", { pack }),
+  deleteStylePack: (id: string) => invoke<void>("delete_style_pack", { id }),
   // 热词词典
   listHotwords: () => invoke<Hotword[]>("list_hotwords"),
   addHotword: (word: string, weight: number) =>
