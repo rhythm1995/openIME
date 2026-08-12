@@ -6,7 +6,6 @@
 //! - 录音控制：toggle_recording / get_recording_state
 
 use std::sync::Arc;
-
 use tauri::{AppHandle, Emitter, Manager, State};
 use voice_core::audio::CpalAudioSource;
 use voice_core::permissions::{PermissionChecker, PermissionKind, PermissionStatus};
@@ -1134,6 +1133,3 @@ pub fn export_diary(state: State<'_, AppState>) -> Result<String, String> {
         .export_diary_markdown()
         .map_err(|e| e.to_string())
 }
-
-#[allow(dead_code)]
-fn _ensure_arc(_a: &Arc<()>) {}

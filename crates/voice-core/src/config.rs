@@ -129,19 +129,16 @@ pub enum PolishCloudProtocol {
     OpenAiResponses,
 }
 
-/// 二期文本润色路由策略（与 ASR PreferLocal 对称）。
+/// 润色路由策略。已简化为两态：本地优先（默认）/ 关闭。
+/// 旧配置中的 prefer_cloud / local_only / cloud_only 经 serde alias 归一为 PreferLocal。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PolishPolicy {
+    /// 本地 GGUF 优先，失败/未装自动回退云端。
     #[default]
+    #[serde(alias = "prefer_cloud", alias = "local_only", alias = "cloud_only")]
     PreferLocal,
-    /// 优先云端 chat。
-    PreferCloud,
-    /// 仅本地。
-    LocalOnly,
-    /// 仅云端。
-    CloudOnly,
-    /// 强制关闭润色（等同 polish_enabled=false）。
+    /// 强制关闭润色（等同 polish_mode=Off）。
     Off,
 }
 
@@ -337,6 +334,17 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_policy_variants_map_to_prefer_local() {
+        // 旧配置里的 prefer_cloud / local_only / cloud_only 归一为 PreferLocal。
+        let p: PolishPolicy = serde_json::from_str("\"prefer_cloud\"").unwrap();
+        assert_eq!(p, PolishPolicy::PreferLocal);
+        let p: PolishPolicy = serde_json::from_str("\"local_only\"").unwrap();
+        assert_eq!(p, PolishPolicy::PreferLocal);
+        let p: PolishPolicy = serde_json::from_str("\"cloud_only\"").unwrap();
+        assert_eq!(p, PolishPolicy::PreferLocal);
+    }
 
     #[test]
     fn provider_kind_serde_roundtrip_snake() {

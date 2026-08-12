@@ -145,19 +145,10 @@ pub fn pcm_f32_to_wav_pub(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&(data_size as u32).to_le_bytes());
     for s in samples {
-        let clamped = s.clamp(-1.0, 1.0);
-        wav.extend_from_slice(&(clamped * 32767.0).to_le_i16().to_le_bytes());
+        let clamped = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+        wav.extend_from_slice(&clamped.to_le_bytes());
     }
     wav
-}
-
-trait F32ToI16 {
-    fn to_le_i16(self) -> i16;
-}
-impl F32ToI16 for f32 {
-    fn to_le_i16(self) -> i16 {
-        (self.clamp(-1.0, 1.0) * 32767.0) as i16
-    }
 }
 
 /// 测试连接：发 1 秒静音 WAV → POST → 看 HTTP 200。

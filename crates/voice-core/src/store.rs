@@ -381,16 +381,6 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// 导出为 sherpa-onnx hotwords.txt 格式（每行：词 权重）。
-    pub fn export_hotwords_sherpa(&self) -> Result<String> {
-        let words = self.list_hotwords()?;
-        let mut out = String::new();
-        for w in words {
-            out.push_str(&format!("{} {}\n", w.word, w.weight));
-        }
-        Ok(out)
-    }
-
     /// 跨会话搜索录音文本（D2 历史搜索）：LIKE 模糊匹配，按时间倒序，限 200 条。
     pub fn search_utterances(&self, query: &str) -> Result<Vec<UtteranceRecord>> {
         let conn = self.conn()?;

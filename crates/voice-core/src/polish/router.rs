@@ -1,4 +1,4 @@
-//! 润色路由：PreferLocal / PreferCloud / LocalOnly / CloudOnly / Off。
+//! 润色路由：本地优先 / 关闭（PreferLocal / Off）。
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -66,13 +66,13 @@ impl TextPolishProvider for PolishRouter {
         };
 
         let result = match self.cfg.policy {
+            // Off 已在上面的短路返回里处理，这里理论上到不了，保留防御。
             PolishPolicy::Off => Ok(PolishResponse {
                 text: req.text.clone(),
                 provider: "passthrough".into(),
                 latency_ms: 0,
             }),
-            PolishPolicy::LocalOnly => try_local.await,
-            PolishPolicy::CloudOnly => try_cloud.await,
+            // 唯一策略：本地优先，失败回退云端，双失败原文直出（不报错）。
             PolishPolicy::PreferLocal => match try_local.await {
                 Ok(r) => Ok(r),
                 Err(e_local) => match try_cloud.await {
@@ -80,20 +80,6 @@ impl TextPolishProvider for PolishRouter {
                     Err(_) => {
                         // 双失败：原文直出，不阻断上屏。
                         tracing::warn!("润色失败，回退原文：{e_local}");
-                        Ok(PolishResponse {
-                            text: req.text.clone(),
-                            provider: "passthrough-fallback".into(),
-                            latency_ms: t0.elapsed().as_millis() as u32,
-                        })
-                    }
-                },
-            },
-            PolishPolicy::PreferCloud => match try_cloud.await {
-                Ok(r) => Ok(r),
-                Err(e_cloud) => match try_local.await {
-                    Ok(r) => Ok(r),
-                    Err(_) => {
-                        tracing::warn!("润色失败，回退原文：{e_cloud}");
                         Ok(PolishResponse {
                             text: req.text.clone(),
                             provider: "passthrough-fallback".into(),
