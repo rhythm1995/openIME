@@ -983,5 +983,18 @@ pub fn delete_style_pack(state: State<'_, AppState>, id: String) -> Result<(), S
         .map_err(|e| e.to_string())
 }
 
+/// F4：读前台 app 当前选中的文字（macOS AX 直读，不碰剪贴板）。
+#[tauri::command]
+pub fn get_selection() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(crate::platform::current::fn_key::get_selection())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(None)
+    }
+}
+
 #[allow(dead_code)]
 fn _ensure_arc(_a: &Arc<()>) {}

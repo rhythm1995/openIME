@@ -13,6 +13,7 @@
 - [x] **B6 繁简转换** — ferrous-opencc（纯 Rust OpenCC），按偏好简↔繁转换上屏
 - [x] **A1 按住说话 PTT** — HotkeyMode（Toggle/Hold），Hold 模式 press 只开始不切换停
 - [x] **H2 凭据钥匙串** — keyring crate，API key 存 keychain 不落明文 JSON
+- [x] **F4 选区注入** — macOS AX 直读 AXSelectedText（不碰剪贴板），get_selection 命令
 
 ## ⚠️ 不适用（架构原因）
 - C2 剪贴板恢复 — enigo 逐字输入不碰剪贴板
@@ -21,7 +22,7 @@
 ## 📋 待做
 
 ### 轻量后端
-- [ ] **F4 选区注入**（macOS AX 直读选中文字）
+（全部完成 ✅）
 
 ### 前端补全
 - [ ] **D2 搜索 UI**（前端搜索框 + 列表）

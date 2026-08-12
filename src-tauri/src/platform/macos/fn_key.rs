@@ -16,6 +16,7 @@ extern "C" {
         restore_bundle_id: *const c_char,
     );
     fn openime_hide_window_without_activating(ns_window: *mut c_void);
+    fn openime_get_selection() -> *const c_char;
 }
 
 static mut EDGE_CALLBACK: Option<fn(pressed: bool)> = None;
@@ -42,6 +43,19 @@ pub fn install_fn_monitor(on_edge: fn(pressed: bool)) {
     }
     unsafe {
         openime_install_fn_monitor_objc();
+    }
+}
+
+/// F4：读系统当前选中文字（macOS AX，不碰剪贴板）。无选中返回 None。
+pub fn get_selection() -> Option<String> {
+    unsafe {
+        let ptr = openime_get_selection();
+        if ptr.is_null() {
+            return None;
+        }
+        let s = CStr::from_ptr(ptr).to_string_lossy().into_owned();
+        libc_free(ptr as *mut _);
+        Some(s)
     }
 }
 

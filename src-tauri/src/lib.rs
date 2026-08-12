@@ -281,6 +281,7 @@ pub fn run() {
             commands::set_active_style_pack,
             commands::upsert_style_pack,
             commands::delete_style_pack,
+            commands::get_selection,
             commands::frontend_log,
             commands::set_launch_at_login,
             commands::get_launch_at_login,

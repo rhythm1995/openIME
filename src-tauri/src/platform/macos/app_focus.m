@@ -7,6 +7,7 @@
 // 3) 若仍误抢了 key window，立刻把 key + firstResponder 还回去。
 
 #import <AppKit/AppKit.h>
+#import <ApplicationServices/ApplicationServices.h>
 #import <dispatch/dispatch.h>
 #import <objc/runtime.h>
 
@@ -194,4 +195,24 @@ void openime_hide_window_without_activating(void *ns_window) {
         NSWindow *w = (__bridge NSWindow *)ns_window;
         [w orderOut:nil];
     });
+}
+
+// F4：返回系统当前选中的文字（malloc UTF-8，调用方 free；无选中返回 NULL）。
+// 通过 AXUIElement 的 kAXSelectedTextAttribute 直读，不碰剪贴板（需辅助功能权限）。
+const char* openime_get_selection(void) {
+    __block const char *out = NULL;
+    openime_on_main(^{
+        AXUIElementRef systemWide = AXUIElementCreateSystemWide();
+        CFTypeRef selectedText = NULL;
+        AXError err = AXUIElementCopyAttributeValue(systemWide, kAXSelectedTextAttribute, &selectedText);
+        CFRelease(systemWide);
+        if (err == kAXErrorSuccess && selectedText) {
+            NSString *ns = (__bridge_transfer NSString *)selectedText;
+            const char *cstr = [ns UTF8String];
+            if (cstr) out = strdup(cstr);
+        } else if (selectedText) {
+            CFRelease(selectedText);
+        }
+    });
+    return out;
 }
