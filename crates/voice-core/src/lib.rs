@@ -27,6 +27,7 @@ pub mod providers;
 pub mod store;
 pub mod system;
 pub mod traits;
+pub mod transcribe;
 
 pub use asr_catalog::{
     asr_model_by_id, asr_model_catalog, asr_model_files, default_asr_model_id,

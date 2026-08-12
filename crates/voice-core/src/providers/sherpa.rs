@@ -279,7 +279,7 @@ impl AsrProvider for SherpaProvider {
 // ──────────────── feature = "sherpa"：真实推理 ────────────────
 
 #[cfg(feature = "sherpa")]
-mod engine {
+pub(crate) mod engine {
     use super::*;
     use crate::traits::TranscriptKind;
     use sherpa_onnx::{
@@ -590,6 +590,97 @@ mod engine {
         cfg.feat_config.feature_dim = 80;
         let _ = OfflineModelConfig::default(); // 抑制未用 import 警告
         cfg
+    }
+
+    // ── D3 文件转录：独立 OfflineRecognizer（不走 session/audio channel）──
+
+    /// 按 model_id 构建 OfflineRecognizer 配置（复用 connect_offline 的路径逻辑）。
+    #[cfg(feature = "sherpa")]
+    pub(crate) fn build_offline_config(
+        model_root: &Path,
+        model_id: &str,
+        lang: &str,
+    ) -> crate::Result<OfflineRecognizerConfig> {
+        use crate::asr_catalog::{
+            ASR_MODEL_FIRERED_LARGE, ASR_MODEL_FUNASR_NANO_FP16, ASR_MODEL_FUNASR_NANO_INT8,
+            ASR_MODEL_SENSEVOICE, FIRERED_LARGE_DIR, FUNASR_NANO_FP16_DIR, FUNASR_NANO_INT8_DIR,
+        };
+        use crate::model_download::SENSEVOICE_MODEL_NAME;
+
+        let cfg = if model_id == ASR_MODEL_SENSEVOICE {
+            let sv = super::SenseVoicePaths::from_dirs(&model_root.join(SENSEVOICE_MODEL_NAME));
+            sv.validate()?;
+            build_sensevoice_config(&sv, lang)
+        } else if model_id == ASR_MODEL_FIRERED_LARGE {
+            let fr = super::FireRedAsrPaths::from_dirs(&model_root.join(FIRERED_LARGE_DIR));
+            fr.validate()?;
+            build_firered_config(&fr)
+        } else if model_id == ASR_MODEL_FUNASR_NANO_INT8 || model_id == ASR_MODEL_FUNASR_NANO_FP16 {
+            let dir = if model_id == ASR_MODEL_FUNASR_NANO_INT8 {
+                FUNASR_NANO_INT8_DIR
+            } else {
+                FUNASR_NANO_FP16_DIR
+            };
+            let model_dir = model_root.join(dir);
+            let tokenizer_dir = model_dir.join("Qwen3-0.6B");
+            let llm_name = if model_id == ASR_MODEL_FUNASR_NANO_INT8 {
+                "llm.int8.onnx"
+            } else {
+                "llm.fp16.onnx"
+            };
+            for (name, p) in [
+                ("embedding", model_dir.join("embedding.int8.onnx")),
+                (
+                    "encoder_adaptor",
+                    model_dir.join("encoder_adaptor.int8.onnx"),
+                ),
+                ("llm", model_dir.join(llm_name)),
+                ("tokenizer_dir", tokenizer_dir.clone()),
+            ] {
+                if !p.exists() {
+                    return Err(Error::Provider(format!(
+                        "模型文件缺失（{name}）：{}",
+                        p.display()
+                    )));
+                }
+            }
+            let mut c = build_funasr_nano_config(
+                &model_dir.join("embedding.int8.onnx"),
+                &model_dir.join("encoder_adaptor.int8.onnx"),
+                &model_dir.join(llm_name),
+                &tokenizer_dir,
+                lang,
+            );
+            c.model_config.num_threads = 2;
+            c
+        } else {
+            return Err(Error::Provider(format!("未知离线模型 id：{model_id}")));
+        };
+        Ok(cfg)
+    }
+
+    /// D3：按 model_id 创建 OfflineRecognizer（独立于 session）。
+    #[cfg(feature = "sherpa")]
+    pub fn build_offline_recognizer(
+        model_root: &Path,
+        model_id: &str,
+        lang: &str,
+    ) -> crate::Result<OfflineRecognizer> {
+        let cfg = build_offline_config(model_root, model_id, lang)?;
+        OfflineRecognizer::create(&cfg)
+            .ok_or_else(|| Error::Provider("创建 OfflineRecognizer 失败".into()))
+    }
+
+    /// D3：OfflineRecognizer 整段 decode（文件转录）。
+    #[cfg(feature = "sherpa")]
+    pub fn transcribe_offline(recognizer: &OfflineRecognizer, samples: &[f32]) -> String {
+        let stream = recognizer.create_stream();
+        stream.accept_waveform(16_000, samples);
+        recognizer.decode(&stream);
+        stream
+            .get_result()
+            .map(|r| r.text.trim().to_string())
+            .unwrap_or_default()
     }
 
     /// 离线模式：Fn 按下录音→松开时整段送 OfflineRecognizer 解码。
