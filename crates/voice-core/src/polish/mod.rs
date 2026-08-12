@@ -9,6 +9,7 @@ mod prompts;
 mod punct;
 mod router;
 mod sanitize;
+mod script;
 
 pub use cloud::BailianChatPolish;
 pub use correction::{correct_l0, L0Result};
@@ -18,3 +19,4 @@ pub use prompts::build_messages;
 pub use punct::full_to_half_punct;
 pub use router::{PolishRouter, PolishRouterConfig};
 pub use sanitize::{dedupe_consecutive_finals, sanitize_polish_output};
+pub use script::convert_script;

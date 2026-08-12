@@ -784,7 +784,7 @@ pub async fn toggle_recording(
                 restore_frontmost_focus(&app_handle, frontmost.as_deref());
                 tokio::time::sleep(std::time::Duration::from_millis(120)).await;
 
-                // B5：按前台 app 的半角标点偏好转换 finals（IM 场景）。
+                // B5+B6：按前台 app 半角标点偏好 + 繁简偏好转换 finals。
                 let finals: Vec<String> = {
                     let app_state = app_handle.state::<AppState>();
                     let cfg = app_state.config.read().await;
@@ -794,14 +794,17 @@ pub async fn toggle_recording(
                             .map(|f| f.contains(kw.as_str()))
                             .unwrap_or(false)
                     });
-                    if half {
-                        r.utterances
-                            .iter()
-                            .map(|t| voice_core::polish::full_to_half_punct(t))
-                            .collect()
-                    } else {
-                        r.utterances.clone()
-                    }
+                    let script = cfg.chinese_script_preference;
+                    r.utterances
+                        .iter()
+                        .map(|t| {
+                            let mut s = voice_core::polish::convert_script(t, script);
+                            if half {
+                                s = voice_core::polish::full_to_half_punct(&s);
+                            }
+                            s
+                        })
+                        .collect()
                 };
                 if let Err(e) = pipeline
                     .insert_finals_with_polish(&r.session_id, &finals, &polish_ctx)

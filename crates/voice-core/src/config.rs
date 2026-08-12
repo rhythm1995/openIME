@@ -71,6 +71,16 @@ impl ProviderConfig {
     }
 }
 
+/// 繁简偏好（B6）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChineseScriptPreference {
+    #[default]
+    Auto,
+    Simplified,
+    Traditional,
+}
+
 /// 二期文本润色路由策略（与 ASR PreferLocal 对称）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -140,6 +150,9 @@ pub struct AppConfig {
     /// 上屏文本的全角标点转半角（适合 IM）。空 = 不转换。
     #[serde(default)]
     pub punct_half_width_apps: Vec<String>,
+    /// 繁简偏好（B6）：Auto 不转，Simplified/Traditional 强制简/繁。
+    #[serde(default)]
+    pub chinese_script_preference: ChineseScriptPreference,
 
     /// 默认识别语言：`zh` / `en` / `yue` / `auto`。默认 `zh`。
     #[serde(default = "default_local_language")]
@@ -196,6 +209,7 @@ impl Default for AppConfig {
             active_style_pack_id: None,
             polish_timeout_ms: 800,
             punct_half_width_apps: Vec::new(),
+            chinese_script_preference: ChineseScriptPreference::Auto,
         }
     }
 }
