@@ -182,4 +182,31 @@ mod tests {
         assert_eq!(out.text, "原文");
         assert!(out.provider.contains("passthrough"));
     }
+
+    /// 静默降级：本地失败 → 云端也失败 → 原文直出、不返回 Err。
+    /// （用户要求：润色失败就原样输出，不要报错。）
+    struct FailPolish;
+    #[async_trait]
+    impl TextPolishProvider for FailPolish {
+        async fn polish(&self, req: PolishRequest) -> Result<PolishResponse> {
+            let _ = req;
+            Err(crate::Error::Provider("mock fail".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn prefer_local_both_fail_silently_output_original() {
+        let r = PolishRouter {
+            cfg: PolishRouterConfig {
+                policy: PolishPolicy::PreferLocal,
+                enabled: true,
+            },
+            local: Some(Arc::new(FailPolish)),
+            cloud: Some(Arc::new(FailPolish)),
+        };
+        // 关键：返回 Ok（不是 Err），且文本是原文 —— 不阻断上屏、不报错。
+        let out = r.polish(req("原样输出")).await.unwrap();
+        assert_eq!(out.text, "原样输出");
+        assert!(out.provider.contains("passthrough"));
+    }
 }
