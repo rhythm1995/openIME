@@ -100,6 +100,30 @@ cargo test -p voice-core --features sherpa
 # 仅云端：WITH_SHERPA=0 ./scripts/build.sh
 ```
 
+## 多平台发布（GitHub Actions）
+
+推版本 tag 触发 CI 自动构建 **macOS dmg + Windows NSIS 安装包** 并发布
+GitHub Release（`.github/workflows/release.yml`；也可在 Actions 页手动 workflow_dispatch）。
+
+发布流程：
+
+```bash
+# 1. 同步三处版本号：workspace Cargo.toml / src-tauri/tauri.conf.json / package.json
+# 2. 提交到 main
+git commit -am "release: 0.1.1"
+# 3. 打 tag 并推送（CI 校验 tag 必须等于 tauri.conf.json 的 version）
+git tag v0.1.1 && git push origin main --tags
+```
+
+产物：`openIME_<版本>_aarch64.dmg`（macOS 内测临时签名）+ `openIME_<版本>_x64-setup.exe`
+（Windows 未签名）+ `SHA256SUMS.txt`。
+
+> **内测包安装注意**：
+> - macOS：CI 临时自签（非 Developer ID 公证），首次打开需 **右键 → 打开**；
+>   辅助功能/麦克风授权在每次重装新包后需重新授予。
+> - Windows：未签名，SmartScreen 会提示「未知发布者」，选「仍要运行」。
+> - 正式公证（Apple Developer ID）与 Windows 代码签名待接入证书后补。
+
 ## 启动行为
 
 - **正常启动**（Dock / Spotlight / `open`）：自动显示主面板。

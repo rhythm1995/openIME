@@ -1,0 +1,157 @@
+name: Release
+
+# 多平台打包 + GitHub Release。
+# 触发：push 版本 tag（v0.1.1）→ 构建 macOS dmg + Windows NSIS 安装包并发布。
+# 手动兜底：workflow_dispatch（无 tag 时用 tauri.conf.json 里的版本号）。
+#
+# 签名策略（内测版）：
+# - macOS：CI 一次性自签（openIME CI Signing），非 Developer ID 公证，
+#   首次打开需 右键→打开。正式公证后续接入 Apple 证书 secrets。
+# - Windows：未签名（SmartScreen 提示未知发布者），有证书后补签名 step。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ── 版本校验：tag 与 tauri.conf.json version 必须一致 ──
+  version-check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      tag_name: ${{ steps.check.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 校验 tag 与版本一致
+        id: check
+        env:
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          CONF_VERSION="$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")"
+          echo "tauri.conf version: $CONF_VERSION"
+          if [[ "$TAG" == v* ]]; then
+            TAG_VERSION="${TAG#v}"
+            if [[ "$TAG_VERSION" != "$CONF_VERSION" ]]; then
+              echo "错误：tag $TAG 与 tauri.conf.json version $CONF_VERSION 不一致。" >&2
+              echo "请先同步三处版本（workspace Cargo.toml / src-tauri/tauri.conf.json / package.json）再打 tag。" >&2
+              exit 1
+            fi
+            echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+            echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$CONF_VERSION" >> "$GITHUB_OUTPUT"
+            echo "tag_name=v$CONF_VERSION" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── macOS：临时自签 + dmg ──
+  build-macos:
+    needs: version-check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: macos-release
+      - name: Install cmake (llama.cpp / llm feature)
+        run: brew install cmake
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+      - name: 创建 CI 临时签名身份
+        shell: bash
+        run: |
+          source ./scripts/ci-sign-macos.sh
+          echo "CI_SIGNING_IDENTITY=${CI_SIGNING_IDENTITY}" >> "$GITHUB_ENV"
+      - name: 构建 macOS .app
+        shell: bash
+        run: |
+          pnpm tauri build \
+            --features custom-protocol,sherpa,llm \
+            --config "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"${CI_SIGNING_IDENTITY}\"}}}"
+      - name: 生成 dmg（hdiutil，绕开 tauri create-dmg 的 sizing bug）
+        shell: bash
+        run: |
+          VERSION="$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")"
+          mkdir -p dist-release
+          hdiutil create -volname openIME \
+            -srcfolder target/release/bundle/macos/openIME.app \
+            -ov -format UDZO \
+            "dist-release/openIME_${VERSION}_aarch64.dmg"
+          ls -la dist-release/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openime-macos
+          path: dist-release/
+
+  # ── Windows：未签名 + NSIS ──
+  build-windows:
+    needs: version-check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: windows-release
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+      - name: 构建 Windows NSIS 安装包
+        shell: bash
+        run: |
+          pnpm tauri build --features custom-protocol,sherpa,llm
+      - name: 收集安装包
+        shell: bash
+        run: |
+          mkdir -p dist-release
+          cp target/release/bundle/nsis/*.exe dist-release/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openime-windows
+          path: dist-release/
+
+  # ── GitHub Release ──
+  release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-release
+          merge-multiple: true
+      - name: 生成 sha256
+        run: |
+          cd dist-release
+          sha256sum * > SHA256SUMS.txt
+          ls -la
+      - name: 创建/更新 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "openIME ${{ needs.version-check.outputs.version }}"
+          tag_name: ${{ needs.version-check.outputs.tag_name }}
+          draft: false
+          prerelease: true
+          generate_release_notes: true
+          files: dist-release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

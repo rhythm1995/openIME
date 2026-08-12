@@ -485,6 +485,8 @@ fn show_main_window(app: &tauri::AppHandle) {
 ///   接收后续新进程的 "show" 指令并唤起本实例主窗口；返回 Ok 继续。
 ///
 /// socket 走 app_data_dir，路径稳定、用户无关、无端口冲突。
+/// Unix（macOS/Linux）：unix domain socket。
+#[cfg(unix)]
 fn single_instance_check(app: tauri::AppHandle, sock_path: &std::path::Path) -> Result<(), String> {
     use std::os::unix::net::UnixStream;
 
@@ -526,6 +528,16 @@ fn single_instance_check(app: tauri::AppHandle, sock_path: &std::path::Path) -> 
         })
         .map_err(|e| format!("启动单实例监听线程失败: {e}"))?;
 
+    Ok(())
+}
+
+/// Windows：暂用简单策略（无单实例协调），返回 Ok 继续。
+/// TODO：用 Windows 命名 Mutex（CreateMutexW）实现真正的单实例。
+#[cfg(not(unix))]
+fn single_instance_check(
+    _app: tauri::AppHandle,
+    _sock_path: &std::path::Path,
+) -> Result<(), String> {
     Ok(())
 }
 
