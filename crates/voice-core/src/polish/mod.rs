@@ -11,7 +11,7 @@ mod router;
 mod sanitize;
 mod script;
 
-pub use cloud::BailianChatPolish;
+pub use cloud::{BailianChatPolish, CloudPolishProvider};
 pub use correction::{correct_l0, L0Result};
 pub use itn::normalize_itn;
 pub use local::LocalGgufPolish;

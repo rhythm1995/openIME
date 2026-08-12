@@ -13,6 +13,10 @@ pub enum ProviderKind {
     Sherpa,
     /// 阿里云百炼 Protocol A（流式 WebSocket）。
     Bailian,
+    /// REST POST /audio/transcriptions（OpenAI Whisper / OpenRouter 兼容）。
+    OpenAiAsr,
+    /// REST POST multimodal-generation/chat（百炼 Qwen3 ASR 非流式 / OpenAI Chat audio）。
+    MultimodalAsr,
 }
 
 /// 单个 provider 的连接配置。
@@ -66,6 +70,26 @@ impl ProviderConfig {
                     return Err(Error::Config("bailian provider 缺少 model".into()));
                 }
             }
+            ProviderKind::OpenAiAsr | ProviderKind::MultimodalAsr => {
+                if self.base_url.trim().is_empty() {
+                    return Err(Error::Config(
+                        "云端 ASR provider 缺少 base_url（endpoint）".into(),
+                    ));
+                }
+                let url = self.base_url.trim();
+                let valid = url.starts_with("https://") || url.starts_with("http://");
+                if !valid {
+                    return Err(Error::Config(
+                        "云端 ASR base_url 必须以 http:// 或 https:// 开头".into(),
+                    ));
+                }
+                if self.api_key.trim().is_empty() {
+                    return Err(Error::Config("云端 ASR provider 缺少 api_key".into()));
+                }
+                if self.model.trim().is_empty() {
+                    return Err(Error::Config("云端 ASR provider 缺少 model".into()));
+                }
+            }
         }
         Ok(())
     }
@@ -90,11 +114,23 @@ pub enum HotkeyMode {
     Hold,
 }
 
+/// 云端润色 LLM 协议类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PolishCloudProtocol {
+    /// OpenAI Chat Completions（/chat/completions）。
+    #[default]
+    OpenAiChat,
+    /// Anthropic Messages API（/v1/messages）。
+    Anthropic,
+    /// OpenAI Responses API（/v1/responses）。
+    OpenAiResponses,
+}
+
 /// 二期文本润色路由策略（与 ASR PreferLocal 对称）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PolishPolicy {
-    /// 优先本地 GGUF，失败/未装可回退云端（若已配 key）。
     #[default]
     PreferLocal,
     /// 优先云端 chat。
@@ -152,6 +188,15 @@ pub struct AppConfig {
     /// 云端 chat 模型名（百炼 OpenAI 兼容），如 qwen-turbo。
     #[serde(default = "default_polish_cloud_model")]
     pub polish_cloud_model: String,
+    /// 云端润色 LLM 协议（openai_chat / anthropic / openai_responses）。
+    #[serde(default)]
+    pub polish_cloud_protocol: PolishCloudProtocol,
+    /// 云端润色 LLM endpoint（base URL，如 https://dashscope.aliyuncs.com/compatible-mode/v1）。
+    #[serde(default)]
+    pub polish_cloud_endpoint: String,
+    /// 云端润色 LLM API Key（覆盖 provider api_key，若为空则用 bailian provider 的 key）。
+    #[serde(default)]
+    pub polish_cloud_api_key: String,
     /// 润色程度：Off（保持原样）/ Light（中度，仅校对）/ Heavy（高度，改写润色）。
     #[serde(default)]
     pub polish_mode: PolishMode,
@@ -222,6 +267,9 @@ impl Default for AppConfig {
             polish_policy: PolishPolicy::PreferLocal,
             polish_local_model: POLISH_DEFAULT_LOCAL_MODEL.to_string(),
             polish_cloud_model: "qwen-turbo".to_string(),
+            polish_cloud_protocol: PolishCloudProtocol::OpenAiChat,
+            polish_cloud_endpoint: String::new(),
+            polish_cloud_api_key: String::new(),
             polish_mode: PolishMode::Off,
             active_style_pack_id: None,
             polish_timeout_ms: 800,

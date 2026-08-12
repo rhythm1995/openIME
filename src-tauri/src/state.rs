@@ -115,22 +115,46 @@ impl AppState {
             Arc::new(LocalGgufPolish::new(path)) as Arc<dyn TextPolishProvider>
         });
 
-        // 云端：从已配置的 bailian provider 取 key；base 用兼容模式默认。
-        let cloud: Option<Arc<dyn TextPolishProvider>> = cfg
-            .providers
-            .iter()
-            .find(|p| p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty())
-            .map(|p| {
-                Arc::new(BailianChatPolish::new(
-                    p.api_key.clone(),
-                    BailianChatPolish::default_chat_base(),
-                    if cfg.polish_cloud_model.trim().is_empty() {
-                        "qwen-turbo".into()
-                    } else {
-                        cfg.polish_cloud_model.clone()
-                    },
-                )) as Arc<dyn TextPolishProvider>
-            });
+        // 云端润色：优先用独立配置（polish_cloud_endpoint/api_key/protocol），
+        // 否则回退从 bailian provider 取 key + 默认 base。
+        let cloud: Option<Arc<dyn TextPolishProvider>> = {
+            // 独立配置优先
+            if !cfg.polish_cloud_endpoint.trim().is_empty()
+                && !cfg.polish_cloud_api_key.trim().is_empty()
+            {
+                let base = cfg.polish_cloud_endpoint.trim().to_string();
+                let key = cfg.polish_cloud_api_key.trim().to_string();
+                let model = if cfg.polish_cloud_model.trim().is_empty() {
+                    "qwen-turbo".into()
+                } else {
+                    cfg.polish_cloud_model.clone()
+                };
+                Some(Arc::new(BailianChatPolish::new_with_protocol(
+                    key,
+                    base,
+                    model,
+                    cfg.polish_cloud_protocol,
+                )) as Arc<dyn TextPolishProvider>)
+            } else {
+                // 回退：从 bailian provider 取 key + 默认 base。
+                cfg.providers
+                    .iter()
+                    .find(|p| {
+                        p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty()
+                    })
+                    .map(|p| {
+                        Arc::new(BailianChatPolish::new(
+                            p.api_key.clone(),
+                            BailianChatPolish::default_chat_base(),
+                            if cfg.polish_cloud_model.trim().is_empty() {
+                                "qwen-turbo".into()
+                            } else {
+                                cfg.polish_cloud_model.clone()
+                            },
+                        )) as Arc<dyn TextPolishProvider>
+                    })
+            }
+        };
 
         let polish_on = cfg.polish_mode != PolishMode::Off;
         Arc::new(PolishRouter {

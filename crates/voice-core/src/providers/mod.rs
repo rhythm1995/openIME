@@ -5,6 +5,8 @@
 //! - [`RoutingProvider`]：按 ProviderConfig.kind 在上述两者间路由
 
 pub mod bailian;
+pub mod multimodal_asr;
+pub mod openai_asr;
 pub mod sherpa;
 
 use async_trait::async_trait;
@@ -24,6 +26,8 @@ impl AsrProvider for RoutingProvider {
     async fn connect(&self, cfg: &ProviderConfig) -> crate::Result<Box<dyn AsrSession>> {
         match cfg.kind {
             ProviderKind::Bailian => bailian::BailianProvider.connect(cfg).await,
+            ProviderKind::OpenAiAsr => openai_asr::OpenAiAsrProvider.connect(cfg).await,
+            ProviderKind::MultimodalAsr => multimodal_asr::MultimodalAsrProvider.connect(cfg).await,
             ProviderKind::Sherpa => match &self.sherpa_root {
                 Some((model_root, vad_root)) => {
                     let provider =
