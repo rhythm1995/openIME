@@ -263,6 +263,7 @@ pub fn run() {
             commands::save_utterance,
             commands::list_sessions,
             commands::list_utterances,
+            commands::search_utterances,
             commands::delete_session,
             commands::check_permission,
             commands::request_accessibility,

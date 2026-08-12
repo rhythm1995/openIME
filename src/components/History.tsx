@@ -84,6 +84,8 @@ export default function History() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(480);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<UtteranceRecord[] | null>(null);
 
   const showToast = useCallback((message: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -99,6 +101,27 @@ export default function History() {
       if (toastTimer.current) clearTimeout(toastTimer.current);
     };
   }, []);
+
+  // D2：搜索（query 变化调后端 LIKE）。
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchResults(null);
+      return;
+    }
+    let cancelled = false;
+    ipc
+      .searchUtterances(q)
+      .then((r) => {
+        if (!cancelled) setSearchResults(Array.isArray(r) ? r : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSearchResults([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [searchQuery]);
 
   const refresh = async () => {
     try {
@@ -247,6 +270,44 @@ export default function History() {
         <h1 className="page-title">历史记录</h1>
         <p className="page-subtitle">所有语音转写内容</p>
       </div>
+
+      <div className="field" style={{ marginBottom: 12 }}>
+        <input
+          placeholder="搜索历史记录…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+      </div>
+      {searchQuery.trim() && searchResults !== null && (
+        <div
+          className="history-scroll"
+          style={{ maxHeight: "50vh", marginBottom: 16 }}
+        >
+          {searchResults.length === 0 ? (
+            <p style={{ color: "var(--text-tertiary)", padding: 16 }}>
+              无匹配结果
+            </p>
+          ) : (
+            searchResults.map((u) => (
+              <div
+                key={u.id}
+                className="day-row"
+                style={{ minHeight: 60, padding: "10px 12px" }}
+              >
+                <div className="day-row-text" style={{ fontSize: 14 }}>
+                  {u.final_text}
+                </div>
+                <div
+                  className="day-row-time"
+                  style={{ fontSize: 11, color: "var(--text-tertiary)" }}
+                >
+                  {new Date(u.created_at).toLocaleString()}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
 
       {groups === null ? (
         <p style={{ color: "var(--text-tertiary)" }}>加载中…</p>

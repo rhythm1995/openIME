@@ -42,6 +42,8 @@ export const ipc = {
   listSessions: () => invoke<SessionSummary[]>("list_sessions"),
   listUtterances: (sessionId: string) =>
     invoke<UtteranceRecord[]>("list_utterances", { sessionId }),
+  searchUtterances: (query: string) =>
+    invoke<UtteranceRecord[]>("search_utterances", { query }),
   deleteSession: (sessionId: string) => invoke<void>("delete_session", { sessionId }),
   checkPermission: (kind: PermissionKind) =>
     invoke<PermissionStatus>("check_permission", { kind }),

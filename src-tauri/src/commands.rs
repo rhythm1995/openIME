@@ -155,6 +155,18 @@ pub async fn list_utterances(
         .map_err(|e| e.to_string())
 }
 
+/// D2：跨会话搜索录音文本（LIKE 模糊匹配）。
+#[tauri::command]
+pub fn search_utterances(
+    state: State<'_, AppState>,
+    query: String,
+) -> Result<Vec<UtteranceRecord>, String> {
+    state
+        .store
+        .search_utterances(&query)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn delete_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     state
