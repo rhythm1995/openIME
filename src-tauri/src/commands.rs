@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use voice_core::audio::CpalAudioSource;
 use voice_core::permissions::{PermissionChecker, PermissionKind, PermissionStatus};
 use voice_core::pipeline::SessionMeta;
-use voice_core::traits::HistoryStore;
+use voice_core::traits::{HistoryStore, TextPolishProvider};
 use voice_core::{AppConfig, Hotword, ProviderConfig, SessionSummary, UtteranceRecord};
 
 use crate::platform::current::permissions::MacPermissionChecker;
@@ -110,6 +110,61 @@ pub async fn test_cloud_connection(provider: ProviderConfig) -> Result<String, S
         log_error!("云端连接测试失败：{e}");
         e.to_string()
     })
+}
+
+/// 测试云端润色 LLM 连接（按 polish_cloud_protocol 发一个 "ping" 看返回）。
+#[tauri::command]
+pub async fn test_cloud_polish(state: State<'_, AppState>) -> Result<String, String> {
+    let cfg = state.config.read().await.clone();
+    let (base, key, model, protocol) = {
+        if !cfg.polish_cloud_endpoint.trim().is_empty()
+            && !cfg.polish_cloud_api_key.trim().is_empty()
+        {
+            (
+                cfg.polish_cloud_endpoint.clone(),
+                cfg.polish_cloud_api_key.clone(),
+                cfg.polish_cloud_model.clone(),
+                cfg.polish_cloud_protocol,
+            )
+        } else {
+            // 回退 bailian provider
+            let p = cfg
+                .providers
+                .iter()
+                .find(|p| {
+                    p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty()
+                })
+                .ok_or("未配置云端润色 API Key（请填 polish 独立配置或百炼 provider key）")?;
+            (
+                voice_core::BailianChatPolish::default_chat_base(),
+                p.api_key.clone(),
+                cfg.polish_cloud_model.clone(),
+                voice_core::PolishCloudProtocol::OpenAiChat,
+            )
+        }
+    };
+    let provider = voice_core::BailianChatPolish::new_with_protocol(key, base, model, protocol);
+    log_info!("测试云端润色连接：protocol={:?}", protocol);
+    let req = voice_core::PolishRequest {
+        text: "ping".into(),
+        mode: voice_core::PolishMode::Light,
+        style_prompt: None,
+        hotwords: vec![],
+        timeout: std::time::Duration::from_secs(20),
+    };
+    match provider.polish(req).await {
+        Ok(r) => {
+            log_info!("云端润色连接成功：{} 字返回", r.text.chars().count());
+            Ok(format!(
+                "连接成功！模型已就绪（返回 {}）",
+                r.text.chars().take(30).collect::<String>()
+            ))
+        }
+        Err(e) => {
+            log_error!("云端润色连接测试失败：{e}");
+            Err(e.to_string())
+        }
+    }
 }
 
 // ──────────────── 历史 ────────────────

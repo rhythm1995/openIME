@@ -259,6 +259,7 @@ pub fn run() {
             commands::save_app_config,
             commands::validate_provider,
             commands::test_cloud_connection,
+            commands::test_cloud_polish,
             commands::create_session,
             commands::save_utterance,
             commands::list_sessions,

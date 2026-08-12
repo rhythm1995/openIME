@@ -17,6 +17,7 @@ import type {
   LocalAsrModelEntry,
   LocalModelStatus,
   ModelDownloadProgress,
+  PolishCloudProtocol,
   PolishModelStatus,
   PolishPolicy,
   ProviderConfig,
@@ -76,6 +77,9 @@ export default function Settings() {
   const [recording, setRecording] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+  // 云端润色连接测试
+  const [polishTesting, setPolishTesting] = useState(false);
+  const [polishTestResult, setPolishTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   // 音频设备（麦克风下拉 + 测试）
   const [devices, setDevices] = useState<string[]>([]);
   const [micTest, setMicTest] = useState<{ ok: boolean; warn: boolean; text: string } | null>(null);
@@ -510,6 +514,70 @@ export default function Settings() {
               />
             </div>
 
+            <div className="field">
+              <label className="field-label">云端 LLM 协议</label>
+              <select
+                value={config.polish_cloud_protocol ?? "openai_chat"}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    polish_cloud_protocol: e.target.value as PolishCloudProtocol,
+                  })
+                }
+              >
+                <option value="openai_chat">OpenAI Chat Completions（/chat/completions）</option>
+                <option value="anthropic">Anthropic Messages（/v1/messages）</option>
+                <option value="openai_responses">OpenAI Responses（/v1/responses）</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <label className="field-label">云端 Endpoint（可选）</label>
+              <input
+                value={config.polish_cloud_endpoint ?? ""}
+                onChange={(e) =>
+                  setConfig({ ...config, polish_cloud_endpoint: e.target.value })
+                }
+                placeholder="留空 = 用百炼兼容地址 / 自填 https://openrouter.ai/api/v1"
+              />
+            </div>
+
+            <div className="field">
+              <label className="field-label">云端 API Key（可选）</label>
+              <input
+                type="password"
+                value={config.polish_cloud_api_key ?? ""}
+                onChange={(e) =>
+                  setConfig({ ...config, polish_cloud_api_key: e.target.value })
+                }
+                placeholder="留空 = 用识别引擎的百炼 API Key"
+              />
+            </div>
+
+            <div className="row-between" style={{ alignItems: "flex-end" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {polishTestResult && msgRow(polishTestResult)}
+              </div>
+              <button
+                className="btn btn-sm"
+                disabled={polishTesting}
+                onClick={async () => {
+                  setPolishTesting(true);
+                  setPolishTestResult(null);
+                  try {
+                    const m = await ipc.testCloudPolish();
+                    setPolishTestResult({ ok: true, text: m });
+                  } catch (e) {
+                    setPolishTestResult({ ok: false, text: String(e) });
+                  } finally {
+                    setPolishTesting(false);
+                  }
+                }}
+              >
+                {polishTesting ? "测试中…" : "测试连接"}
+              </button>
+            </div>
+
             <div className="row-between" style={{ marginTop: 8, alignItems: "flex-start" }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
@@ -608,9 +676,78 @@ export default function Settings() {
             }}
           >
             <option value="sherpa">sherpa-onnx（本地，离线，推荐）</option>
-            <option value="bailian">通用流式 ASR（云端）</option>
+            <option value="bailian">百炼 WebSocket 流式（云端）</option>
+            <option value="openai_asr">OpenAI 兼容 REST（Whisper/OpenRouter 等）</option>
+            <option value="multimodal_asr">Multimodal REST（百炼 Qwen3 ASR 非流式）</option>
           </select>
         </div>
+
+        {active.kind === "openai_asr" || active.kind === "multimodal_asr" ? (
+          <>
+            <div className="field">
+              <label className="field-label">模型</label>
+              <input
+                value={active.model}
+                onChange={(e) => setActive({ model: e.target.value })}
+                placeholder={
+                  active.kind === "openai_asr"
+                    ? "qwen/qwen3-asr-flash-2026-02-10"
+                    : "qwen-audio-3.0-asr-flash"
+                }
+              />
+              <span className="field-hint">
+                {active.kind === "openai_asr"
+                  ? "OpenAI 兼容模型 ID（如 openai/whisper-1、qwen/qwen3-asr-flash）"
+                  : "百炼 multimodal 模型 ID（如 qwen-audio-3.0-asr-flash）"}
+              </span>
+            </div>
+            <div className="field">
+              <label className="field-label">Endpoint（HTTP 地址）</label>
+              <input
+                value={active.base_url}
+                onChange={(e) => setActive({ base_url: e.target.value })}
+                placeholder="https://openrouter.ai/api/v1"
+              />
+              <span className="field-hint">
+                {active.kind === "openai_asr"
+                  ? "REST /audio/transcriptions 端点 base URL"
+                  : "REST chat/completions 端点 base URL"}
+              </span>
+            </div>
+            <div className="field">
+              <label className="field-label">API Key</label>
+              <input
+                type="password"
+                value={active.api_key}
+                onChange={(e) => setActive({ api_key: e.target.value })}
+                placeholder="sk-..."
+              />
+            </div>
+            <div className="row-between" style={{ alignItems: "flex-end" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {testResult && msgRow(testResult)}
+              </div>
+              <button
+                className="btn btn-sm"
+                disabled={testing}
+                onClick={async () => {
+                  setTesting(true);
+                  setTestResult(null);
+                  try {
+                    const m = await ipc.testCloudConnection(active);
+                    setTestResult({ ok: true, text: m });
+                  } catch (e) {
+                    setTestResult({ ok: false, text: String(e) });
+                  } finally {
+                    setTesting(false);
+                  }
+                }}
+              >
+                {testing ? "测试中…" : "测试连接"}
+              </button>
+            </div>
+          </>
+        ) : null}
 
         {active.kind === "bailian" && (
           <>

@@ -1,6 +1,6 @@
 // 与 voice_core 的 serde 形状对齐（前端镜像类型）。
 
-export type ProviderKind = "sherpa" | "bailian";
+export type ProviderKind = "sherpa" | "bailian" | "openai_asr" | "multimodal_asr";
 
 export interface ProviderConfig {
   kind: ProviderKind;
@@ -17,6 +17,8 @@ export type PolishPolicy =
   | "local_only"
   | "cloud_only"
   | "off";
+
+export type PolishCloudProtocol = "openai_chat" | "anthropic" | "openai_responses";
 
 /** 润色程度：off（保持原样）/ light（中度，仅校对）/ heavy（高度，改写润色）。 */
 export type PolishMode = "off" | "light" | "heavy";
@@ -47,6 +49,12 @@ export interface AppConfig {
   polish_policy?: PolishPolicy;
   polish_local_model?: string;
   polish_cloud_model?: string;
+  /** 云端 LLM 协议（openai_chat / anthropic / openai_responses） */
+  polish_cloud_protocol?: PolishCloudProtocol;
+  /** 云端 LLM endpoint（base URL） */
+  polish_cloud_endpoint?: string;
+  /** 云端 LLM API Key */
+  polish_cloud_api_key?: string;
   polish_mode?: PolishMode;
   /** 当前选中的风格包 id（F1，仅 heavy 模式生效；null = 默认 Heavy prompt） */
   active_style_pack_id?: string | null;

@@ -40,6 +40,7 @@ export const ipc = {
     invoke<void>("validate_provider", { provider }),
   testCloudConnection: (provider: ProviderConfig) =>
     invoke<string>("test_cloud_connection", { provider }),
+  testCloudPolish: () => invoke<string>("test_cloud_polish"),
   listSessions: () => invoke<SessionSummary[]>("list_sessions"),
   listUtterances: (sessionId: string) =>
     invoke<UtteranceRecord[]>("list_utterances", { sessionId }),

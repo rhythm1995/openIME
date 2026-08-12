@@ -148,9 +148,20 @@ async fn recv_response(rx: &mut WsSource) -> crate::Result<Option<ResponseEnvelo
     }
 }
 
-/// 测试云端连接：建立 WS → 发 run-task → 等 task-started → 发 finish-task。
-/// 成功返回 Ok(())，失败返回具体错误。
+/// 测试云端连接：按 provider kind 分发。
+/// - Bailian：WS run-task → 等 task-started → finish-task。
+/// - OpenAiAsr / MultimodalAsr：发 1 秒静音 WAV → 看 HTTP 200 + text。
 pub async fn test_connection(cfg: &ProviderConfig) -> crate::Result<String> {
+    match cfg.kind {
+        ProviderKind::Bailian => test_connection_ws(cfg).await,
+        ProviderKind::OpenAiAsr => crate::providers::openai_asr::test_connection(cfg).await,
+        ProviderKind::MultimodalAsr => crate::providers::multimodal_asr::test_connection(cfg).await,
+        ProviderKind::Sherpa => Err(Error::Provider("本地 sherpa 引擎无需云端连接测试".into())),
+    }
+}
+
+/// Bailian WS 连接测试。
+async fn test_connection_ws(cfg: &ProviderConfig) -> crate::Result<String> {
     cfg.validate()?;
     let ws = connect_ws(cfg).await?;
     let (mut tx, mut rx) = ws.split();
