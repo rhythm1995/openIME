@@ -14,6 +14,7 @@
 - [x] **A1 按住说话 PTT** — HotkeyMode（Toggle/Hold），Hold 模式 press 只开始不切换停
 - [x] **H2 凭据钥匙串** — keyring crate，API key 存 keychain 不落明文 JSON
 - [x] **F4 选区注入** — macOS AX 直读 AXSelectedText（不碰剪贴板），get_selection 命令
+- [x] **D3 文件转录** — symphonia 解码 + 重采样 16k + sherpa 整段 + srt + 前端选择/导出
 
 ## ⚠️ 不适用（架构原因）
 - C2 剪贴板恢复 — enigo 逐字输入不碰剪贴板
@@ -29,7 +30,6 @@
 - [x] **F1 风格包 CRUD + 快捷键**（自定义增删 + 全局快捷键运行时切换）
 
 ### 大工程（周级）
-- [ ] **D3 文件转录**（ffmpeg + srt/txt/json）
 - [ ] **C1 流式逐字重做**（OpenLess 三态机 + Unicode 边界）
 - [ ] **B2 音素热词完整 RAG**（CapsWriter 两阶段 + 模糊音权重）
 - [ ] **D1 日记归档**（Markdown + 音频回放链接）
