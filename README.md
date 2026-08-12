@@ -8,18 +8,23 @@
 
 | 引擎 | 说明 | 状态 |
 |---|---|---|
-| **阿里云百炼 Protocol A** | 流式 WebSocket，模型 `fun-asr-realtime` / `paraformer-realtime-v2`。对齐 [alibabacloud-bailian-speech-demo](https://github.com/aliyun/alibabacloud-bailian-speech-demo) | ✅ 已实现 + WS mock 集成测试 |
-| **本地 sherpa-onnx** | 进程内 Paraformer-online + Silero VAD，离线，feature 门控（`--features sherpa`） | ✅ 已实现 + 应用内一键下载模型 |
+| **本地 sherpa-onnx** | 进程内离线识别，feature 门控（`--features sherpa`），模型一键下载；OfflineRecognizer 常驻缓存（二次录音零加载） | ✅ 已实现 |
+| **百炼 WebSocket 流式** | Protocol A（run-task/result-generated），支持 `qwen-audio-3.0-asr-flash-streaming` 等流式模型，逐字上屏 | ✅ 已实现 + WS mock 集成测试 |
+| **OpenAI 兼容 REST** | `POST /audio/transcriptions`（base64 WAV），兼容 OpenAI Whisper / OpenRouter 等 | ✅ 已实现 |
+| **Multimodal REST** | `POST /chat/completions`（input_audio 消息），兼容百炼 Qwen3 ASR 非流式 / OpenAI Chat audio | ✅ 已实现 |
 
-用户在设置中填写云端 API（workspace_id + api_key + model），或选用本地引擎并一键下载模型。
+**引擎地址智能归一**：百炼 WS 档的「服务地址」填纯域名 / OpenAI 兼容地址 /
+DashScope 地址均可，应用自动推导 `wss://{host}/api-ws/v1/inference`。
+
+云端 LLM 润色支持 3 协议（OpenAI Chat / Anthropic / Responses），
+策略固定为「本地优先，失败/未装自动回退云端，双失败原文直出不报错」。
 
 ### 本地模型一键安装
 
-设置页选择 `sherpa-onnx（本地，离线）` 引擎后出现「本地模型」卡片，点击
+设置页选择 `sherpa-onnx（本地模型，隐私，推荐）` 引擎后出现「本地模型」卡片，点击
 「下载并安装模型」：流式下载 + 实时进度条 + SHA256 校验 + 断点续传 + 多源故障切换
-（HuggingFace 官方 → hf-mirror 国内镜像）。模型为
-`csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en`（int8，约 227MB）
-+ Silero VAD（约 0.6MB），安装到 `app_data_dir/models/`，装完即可离线使用。
+（HuggingFace 官方 → hf-mirror 国内镜像）。可选模型：SenseVoice / FireRedASR Large /
+FunASR Nano int8·fp16，各带本机适配度标签。安装到 `app_data_dir/models/`，装完即可离线使用。
 
 ## 录音快捷键
 
@@ -202,17 +207,21 @@ ls ~/Library/Logs/DiagnosticReports/ | grep -i openime
 |---|---|---|
 | 百炼协议帧 | run-task 序列化 / result-generated(partial+final) / task-started/finished/failed 反序列化 | 8 |
 | 百炼 provider | 本地 WS mock server 全流程 + task-failed | 2 |
-| 存储 | SQLite CRUD / 级联 / 时间戳 / 迁移 / 文件持久化 | 6 |
+| 存储 | SQLite CRUD / 级联 / 时间戳 / 迁移 / 文件持久化 / 热词批量 / 风格包 CRUD / 日记导出 | 10 |
 | 音频 | f32↔s16le / 重采样比例 / WAV fixture / 错误路径 | 7 |
 | 权限 | 状态枚举 / checker / 序列化 | 3 |
 | 文本插入 | diff_prefix 增量 / 空串 | 2 |
-| pipeline | partial/final + 插入 + 落库 + **L0 总生效 / L2 ≤8字跳过 / L2 成功 / 失败回退 / 空串回退** | 8 |
-| L0 规则纠错 | 填充词去除 / 句末语气词保留 / 合法叠词豁免 / 标点归一 / 同音字保守边界 / 截断检测 | 23 |
-| 系统采集 | 模型适配度标签：轻量/中量/重型 × 内存分档 / 磁盘不足 / Apple Silicon / 300·1100MB 边界 | 9 |
+| pipeline | partial/final + 插入 + 落库 + L0 总生效 / L2 ≤8字跳过 / L2 成功 / 失败回退 / 空串回退 | 8 |
+| L0 规则纠错 | 填充词 / 语气词保留 / 叠词豁免 / 标点归一 / 同音+模糊音热词 / 截断检测 / 数字 ITN / 去句末标点 | 33 |
+| 系统采集 | 模型适配度标签：轻量/中量/重型 × 内存分档 / 磁盘不足 / Apple Silicon | 9 |
+| 繁简/标点 | OpenCC 简繁转换 / 全角→半角标点 | 5 |
+| 文件转录 | symphonia 解码 / 线性重采样 / srt 切分 | 4 |
+| 润色协议 | OpenAI Chat / Anthropic / Responses 响应解析 | 5 |
+| 热词拼音 | 同音/模糊音匹配 / WS 地址归一化 | 8 |
 | model_mgr | SHA256 向量 / 校验 / tar.gz 解压 / 校验失败拒绝 | 4 |
 | trait 契约 | 对象安全 / 端到端 fake / config 校验 | 6 |
-| 前端 | App(ping/保存/校验失败/Onboarding) + History(空/删除) | 6 |
-| **合计** | voice-core lib 103 + 百炼/traits 集成 8 + 前端 7 | **118** |
+| 前端 | App(ping/保存/校验失败/Onboarding) + History(空/删除) | 7 |
+| **合计** | voice-core lib 141 + 百炼/traits 集成 8 + 前端 7 | **156** |
 
 CI：GitHub Actions 三 job（core 三平台 × fmt+clippy+test / tauri-shell / frontend vitest+build）。
 
@@ -225,5 +234,5 @@ CI：GitHub Actions 三 job（core 三平台 × fmt+clippy+test / tauri-shell / 
 - ✅ **M4** model_mgr + sherpa provider（OnlineRecognizer + Silero VAD 推理，feature 门控）
 - ✅ **M5** enigo 文本插入 + pipeline 端到端
 - ✅ **M6** 悬浮窗 / 托盘 / 全局快捷键 / Onboarding / 历史详情
-- 🚧 **二期** AI 润色三档（保持原样 / 中度仅校对 / 高度改写润色）：**L0 规则纠错**（零延迟，润色关也跑）+ **L2 LLM**（Qwen2.5-1.5B GGUF 本地 / 百炼 chat，PreferLocal 失败回退 L0）/ **流式逐字上屏**（百炼 + paraformer-trilingual，边说边出字；离线引擎录完一次性插入）/ **热词 CSV 导入**（按模型限量，超出标注仅前 N 个生效）/ **本机性能→模型适配度标签** · 见 `docs/phase2-local-llm-research.md`
+- ✅ **二期** AI 润色三档（保持原样 / 中度仅校对 / 高度改写润色）：L0 规则纠错（热词同音+模糊音、数字 ITN、去句末标点）+ L2 LLM（本地 GGUF 优先，云端 3 协议：OpenAI Chat / Anthropic / Responses，双失败原文直出）/ 流式逐字上屏（百炼流式引擎）/ 风格包（自定义 prompt + 快捷键切换）/ 热词 CSV 导入 / 繁简转换 / 按 app 半角标点 / 按住说话 PTT / 文件转录（srt）/ 历史搜索 / 日记导出 / 选区注入 / 凭据钥匙串 / 本机性能→模型适配度标签 · 见 `docs/phase2-local-llm-research.md` 与 `docs/competitive-research.md`
 - 🔜 Windows 平台

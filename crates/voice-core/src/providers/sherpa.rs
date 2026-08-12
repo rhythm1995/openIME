@@ -484,8 +484,7 @@ pub(crate) mod engine {
         key: &str,
         create: impl FnOnce() -> crate::Result<OfflineRecognizer>,
     ) -> crate::Result<std::sync::Arc<SendOfflineRecognizer>> {
-        let lock = OFFLINE_RECOGNIZER_CACHE
-            .get_or_init(|| std::sync::Mutex::new(None));
+        let lock = OFFLINE_RECOGNIZER_CACHE.get_or_init(|| std::sync::Mutex::new(None));
         let mut guard = lock.lock().unwrap();
         if let Some((k, rec)) = guard.as_ref() {
             if k == key {
