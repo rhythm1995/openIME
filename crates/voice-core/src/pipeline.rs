@@ -611,7 +611,10 @@ mod tests {
             out.contains("今天天气不错"),
             "L0 应去掉首部填充词，得到 {out}"
         );
-        assert!(out.ends_with('。'), "L0 应给长句补句号，得到 {out}");
+        assert!(
+            !out.ends_with('。'),
+            "B4：单句输入不应补句号，得到 {out}"
+        );
     }
 
     #[tokio::test]

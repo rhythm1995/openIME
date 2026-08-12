@@ -168,6 +168,13 @@ pub fn correct_l0(text: &str, hotwords: &[String]) -> L0Result {
         cur = hom;
     }
 
+    // 5b) 数字 ITN（B1）：中文数字→阿拉伯（百分之/十位 0-99/纯串）。
+    let itn = super::itn::normalize_itn(&cur);
+    if itn != cur {
+        had = true;
+        cur = itn;
+    }
+
     // 6) 截断检测（在去末尾标点之前：用含标点的文本，避免"我觉得。"被误判为截断）。
     let trunc = detect_truncation(&cur);
 

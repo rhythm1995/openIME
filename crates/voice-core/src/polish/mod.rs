@@ -3,6 +3,7 @@
 
 mod cloud;
 mod correction;
+mod itn;
 mod local;
 mod prompts;
 mod router;
@@ -10,6 +11,7 @@ mod sanitize;
 
 pub use cloud::BailianChatPolish;
 pub use correction::{correct_l0, L0Result};
+pub use itn::normalize_itn;
 pub use local::LocalGgufPolish;
 pub use prompts::build_messages;
 pub use router::{PolishRouter, PolishRouterConfig};
