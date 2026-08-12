@@ -474,6 +474,29 @@ pub(crate) mod engine {
     struct SendOfflineRecognizer(OfflineRecognizer);
     unsafe impl Send for SendOfflineRecognizer {}
 
+    /// 全局离线 recognizer 缓存：key → Arc<recognizer>，同 key 复用不重载。
+    type OfflineCacheEntry = (String, std::sync::Arc<SendOfflineRecognizer>);
+    static OFFLINE_RECOGNIZER_CACHE: std::sync::OnceLock<
+        std::sync::Mutex<Option<OfflineCacheEntry>>,
+    > = std::sync::OnceLock::new();
+
+    fn get_cached_offline_recognizer(
+        key: &str,
+        create: impl FnOnce() -> crate::Result<OfflineRecognizer>,
+    ) -> crate::Result<std::sync::Arc<SendOfflineRecognizer>> {
+        let lock = OFFLINE_RECOGNIZER_CACHE
+            .get_or_init(|| std::sync::Mutex::new(None));
+        let mut guard = lock.lock().unwrap();
+        if let Some((k, rec)) = guard.as_ref() {
+            if k == key {
+                return Ok(rec.clone());
+            }
+        }
+        let rec = std::sync::Arc::new(SendOfflineRecognizer(create()?));
+        *guard = Some((key.to_string(), rec.clone()));
+        Ok(rec)
+    }
+
     /// 建立 recognizer + VAD 并 spawn 驱动线程，返回 SherpaSession。
     pub async fn connect_with_paths(
         cfg: &ProviderConfig,
@@ -756,9 +779,14 @@ pub(crate) mod engine {
             cfg.model_config.num_threads = 2;
         }
 
-        let recognizer = OfflineRecognizer::create(&cfg)
-            .ok_or_else(|| Error::Provider(format!("创建 OfflineRecognizer 失败（{label}）")))?;
-        let recognizer = SendOfflineRecognizer(recognizer);
+        // 常驻缓存：同 (模型, 语言, 根目录) 复用已加载的 OfflineRecognizer，
+        // 避免每次录音重载 ONNX 模型（SenseVoice ~数百 ms，FireRed/Nano 1s+）。
+        // 录音串行（recording_guard），recognizer 同一时刻只被一个驱动线程使用。
+        let cache_key = format!("{label}:{lang}:{}", model_root.display());
+        let recognizer = get_cached_offline_recognizer(&cache_key, || {
+            OfflineRecognizer::create(&cfg)
+                .ok_or_else(|| Error::Provider(format!("创建 OfflineRecognizer 失败（{label}）")))
+        })?;
 
         let (dtx, drx) = mpsc::unbounded_channel::<crate::Result<TranscriptDelta>>();
         let (audio_tx, audio_rx) = std::sync::mpsc::channel::<Vec<f32>>();
@@ -766,7 +794,6 @@ pub(crate) mod engine {
         std::thread::Builder::new()
             .name("sherpa-offline".into())
             .spawn(move || {
-                let recognizer = recognizer.0;
                 let mut all_samples: Vec<f32> = Vec::new();
                 while let Ok(samples) = audio_rx.recv() {
                     all_samples.extend_from_slice(&samples);
@@ -775,9 +802,9 @@ pub(crate) mod engine {
                     let _ = dtx.send(Ok(TranscriptDelta::final_("", 0)));
                     return;
                 }
-                let stream = recognizer.create_stream();
+                let stream = recognizer.0.create_stream();
                 stream.accept_waveform(16_000, &all_samples);
-                recognizer.decode(&stream);
+                recognizer.0.decode(&stream);
                 if let Some(result) = stream.get_result() {
                     let text = result.text.trim().to_string();
                     let _ = dtx.send(Ok(TranscriptDelta::final_(&text, 0)));
