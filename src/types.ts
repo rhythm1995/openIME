@@ -42,7 +42,18 @@ export interface AppConfig {
   polish_local_model?: string;
   polish_cloud_model?: string;
   polish_mode?: PolishMode;
+  /** 当前选中的风格包 id（F1，仅 heavy 模式生效；null = 默认 Heavy prompt） */
+  active_style_pack_id?: string | null;
   polish_timeout_ms?: number;
+}
+
+/** 一个风格包（F1）：用户自定义输出风格的 system prompt。 */
+export interface StylePack {
+  id: string;
+  name: string;
+  system_prompt: string;
+  is_builtin: boolean;
+  ord: number;
 }
 
 export interface PolishModelStatus {

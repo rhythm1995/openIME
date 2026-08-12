@@ -9,6 +9,7 @@ import type {
   LocalModelStatus,
   PolishModelStatus,
   ProviderConfig,
+  StylePack,
   SessionSummary,
   SystemInfo,
   UtteranceRecord,
@@ -73,6 +74,10 @@ export const ipc = {
   // 二期：AI 润色
   getPolishModelStatus: () => invoke<PolishModelStatus>("get_polish_model_status"),
   installPolishModel: () => invoke<void>("install_polish_model"),
+  // 风格包（F1）
+  listStylePacks: () => invoke<StylePack[]>("list_style_packs"),
+  setActiveStylePack: (id: string | null) =>
+    invoke<void>("set_active_style_pack", { id }),
   // 热词词典
   listHotwords: () => invoke<Hotword[]>("list_hotwords"),
   addHotword: (word: string, weight: number) =>

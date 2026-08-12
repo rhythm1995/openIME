@@ -19,6 +19,7 @@ import type {
   PolishModelStatus,
   PolishPolicy,
   ProviderConfig,
+  StylePack,
   SystemInfo,
 } from "../types";
 import { ipc, permissionLabel, type PermissionKind, type PermissionStatus } from "../ipc";
@@ -79,6 +80,7 @@ export default function Settings() {
   const [testingMic, setTestingMic] = useState(false);
   // 二期润色
   const [polishStatus, setPolishStatus] = useState<PolishModelStatus | null>(null);
+  const [stylePacks, setStylePacks] = useState<StylePack[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,6 +110,9 @@ export default function Settings() {
       }).catch(() => {});
       ipc.getPolishModelStatus().then((s) => {
         if (!cancelled) setPolishStatus(s);
+      }).catch(() => {});
+      ipc.listStylePacks().then((p) => {
+        if (!cancelled) setStylePacks(Array.isArray(p) ? p : []);
       }).catch(() => {});
       refreshSystemInfo(false);
       // 麦克风枚举最重，再往后一点。
@@ -364,6 +369,31 @@ export default function Settings() {
 
         {(config.polish_mode ?? "off") !== "off" && (
           <>
+            {(config.polish_mode ?? "off") === "heavy" && stylePacks.length > 0 && (
+              <div className="field" style={{ marginTop: 14 }}>
+                <label className="field-label">风格包</label>
+                <select
+                  value={config.active_style_pack_id ?? ""}
+                  onChange={(e) => {
+                    const id = e.target.value || null;
+                    setConfig({ ...config, active_style_pack_id: id });
+                    ipc.setActiveStylePack(id).catch(() => {});
+                  }}
+                >
+                  <option value="">默认 Heavy（通用润色）</option>
+                  {stylePacks.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                      {p.is_builtin ? "（内置）" : ""}
+                    </option>
+                  ))}
+                </select>
+                <span className="field-hint">
+                  Heavy 模式下，用所选风格包的指令替代默认润色（F1）
+                </span>
+              </div>
+            )}
+
             <div className="field" style={{ marginTop: 14 }}>
               <label className="field-label">路由策略</label>
               <select
