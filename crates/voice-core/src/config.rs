@@ -14,8 +14,10 @@ pub enum ProviderKind {
     /// 阿里云百炼 Protocol A（流式 WebSocket）。
     Bailian,
     /// REST POST /audio/transcriptions（OpenAI Whisper / OpenRouter 兼容）。
+    #[serde(rename = "openai_asr")]
     OpenAiAsr,
     /// REST POST multimodal-generation/chat（百炼 Qwen3 ASR 非流式 / OpenAI Chat audio）。
+    #[serde(rename = "multimodal_asr")]
     MultimodalAsr,
 }
 
@@ -335,6 +337,18 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_kind_serde_roundtrip_snake() {
+        // 前端用 snake_case（openai_asr / multimodal_asr），必须能反序列化。
+        let k: ProviderKind = serde_json::from_str("\"openai_asr\"").unwrap();
+        assert_eq!(k, ProviderKind::OpenAiAsr);
+        let m: ProviderKind = serde_json::from_str("\"multimodal_asr\"").unwrap();
+        assert_eq!(m, ProviderKind::MultimodalAsr);
+        // 序列化也一致（roundtrip）。
+        assert_eq!(serde_json::to_string(&k).unwrap(), "\"openai_asr\"");
+        assert_eq!(serde_json::to_string(&m).unwrap(), "\"multimodal_asr\"");
+    }
 
     #[test]
     fn sherpa_only_needs_model() {
