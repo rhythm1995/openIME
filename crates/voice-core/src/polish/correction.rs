@@ -168,15 +168,15 @@ pub fn correct_l0(text: &str, hotwords: &[String]) -> L0Result {
         cur = hom;
     }
 
-    // 6) 句末补句号（长句 ≥6 且无标点/语气词时）。
-    let ended = ensure_sentence_end(&cur);
-    if ended != cur {
-        had = true;
-        cur = ended;
-    }
-
-    // 7) 截断检测：不补全，仅打 flag。
+    // 6) 截断检测（在去末尾标点之前：用含标点的文本，避免"我觉得。"被误判为截断）。
     let trunc = detect_truncation(&cur);
+
+    // 7) 去末尾标点：单句输入到聊天框，句末标点违和（B4，CapsWriter trash_punc 风格）。
+    let stripped = strip_trailing_punct(&cur);
+    if stripped != cur {
+        had = true;
+        cur = stripped;
+    }
 
     L0Result {
         text: cur,
@@ -520,30 +520,27 @@ fn correct_homophones(s: &str, hotwords: &[String]) -> String {
     }
 }
 
-// ── 6) 句末补句号 ────────────────────────────────────────
+// ── 7) 去末尾标点 ────────────────────────────────────────
 
-fn ensure_sentence_end(s: &str) -> String {
-    let t = s.trim();
-    if t.chars().count() < 6 {
-        return s.to_string();
+/// 去掉末尾的常见标点（，。 等）：单句输入到聊天框时句末标点违和（B4）。
+/// 句中标点保留，仅去末尾连续标点。
+fn strip_trailing_punct(s: &str) -> String {
+    let t = s.trim_end();
+    let mut chars: Vec<char> = t.chars().collect();
+    while let Some(&c) = chars.last() {
+        if COMMON_PUNCTS.contains(&c) {
+            chars.pop();
+        } else {
+            break;
+        }
     }
-    let last = t.chars().last().unwrap();
-    if COMMON_PUNCTS.contains(&last) || SENTENCE_PARTICLES.contains(&last) {
-        return s.to_string();
-    }
-    // 疑似截断（开放性收尾：想/觉得/然后…）→ 不补句号，交由 truncation_flag 标记；
-    // 否则补了句号会把截断信号掩盖掉（detect_truncation 在本函数之后运行）。
-    if is_open_tail(t) {
-        return s.to_string();
-    }
-    // 长句且无句末标点/语气词 → 补句号
-    format!("{t}。")
+    chars.into_iter().collect()
 }
 
 // ── 7) 截断检测 ──────────────────────────────────────────
 
 /// 开放性收尾词：以这些词结尾的句子疑似被截断（如"我觉得"、"如果"、"然后"）。
-/// `ensure_sentence_end` 据此跳过补句号，`detect_truncation` 据此打 flag。
+/// `detect_truncation` 据此打 flag（在去末尾标点之前检测，故"我觉得。"不会被误判）。
 const OPEN_TAILS: &[&str] = &["想", "觉得", "然后", "因为", "如果", "虽然", "但是"];
 
 /// 是否以开放性收尾词结束（trim 后）。
@@ -611,11 +608,11 @@ mod tests {
     }
 
     #[test]
-    fn ensure_end_long_no_punct() {
-        assert_eq!(ensure_sentence_end("今天天气不错"), "今天天气不错。");
-        assert_eq!(ensure_sentence_end("你好"), "你好"); // 短句不补
-        assert_eq!(ensure_sentence_end("你好。"), "你好。"); // 已有标点不补
-        assert_eq!(ensure_sentence_end("明天见啊"), "明天见啊"); // 语气词不补
+    fn strip_trailing_punct_removes_end_punct() {
+        assert_eq!(strip_trailing_punct("你好。"), "你好");
+        assert_eq!(strip_trailing_punct("你好。。"), "你好"); // 连续标点都去
+        assert_eq!(strip_trailing_punct("你好，世界。"), "你好，世界"); // 仅末尾，句中保留
+        assert_eq!(strip_trailing_punct("你好"), "你好"); // 无标点不变
     }
 
     #[test]
@@ -714,14 +711,14 @@ mod tests {
     }
 
     #[test]
-    fn long_sentence_gets_period_e2e() {
+    fn long_sentence_no_trailing_punct_e2e() {
+        // B4：单句输入不补句末标点（CapsWriter trash_punc 风格）。
         let r = correct_l0("今天天气不错但是有点冷", &[]);
         assert!(
-            r.text.ends_with('。'),
-            "长句无标点应补句号，得到 {}",
+            !r.text.ends_with('。'),
+            "单句输入不应补句号，得到 {}",
             r.text
         );
-        assert!(r.had_correction);
     }
 
     #[test]
