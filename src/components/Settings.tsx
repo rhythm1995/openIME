@@ -1059,8 +1059,23 @@ export default function Settings() {
             onChange={(e) => setConfig({ ...config, hotkey: e.target.value })}
           />
           <span className="field-hint">
-            默认 Fn（🌐 键）。也可填组合键如 Alt+Shift+D。按一次开始，松开/再按停止
+            默认 Fn（🌐 键）。也可填组合键如 Alt+Shift+D。
           </span>
+          <div style={{ marginTop: 10 }}>
+            <label className="field-label">触发模式（A1）</label>
+            <select
+              value={config.hotkey_mode ?? "toggle"}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  hotkey_mode: e.target.value as "toggle" | "hold",
+                })
+              }
+            >
+              <option value="toggle">切换（按一次开 / 再按一次停）</option>
+              <option value="hold">按住说话（松开停止）</option>
+            </select>
+          </div>
           {config.hotkey.trim().toLowerCase() === "fn" && (
             <span
               className="field-hint"

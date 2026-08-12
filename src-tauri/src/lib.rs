@@ -642,6 +642,16 @@ fn on_fn_edge(pressed: bool) {
             return;
         }
         LAST_TRIGGER_MS.store(now_ms, Ordering::SeqCst);
+        // A1 Hold（按住说话）模式：已在录音时，press 不重复触发（只开始，不切换停）。
+        let hold = app
+            .state::<AppState>()
+            .config
+            .try_read()
+            .map(|c| c.hotkey_mode == voice_core::HotkeyMode::Hold)
+            .unwrap_or(false);
+        if hold && *app.state::<AppState>().recording.blocking_read() {
+            return;
+        }
         trigger_toggle(app);
     } else {
         // 松开：延后 300ms 再停，保留一点尾音，避免用户刚说完的最后一个字被切掉。

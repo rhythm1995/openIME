@@ -81,6 +81,15 @@ pub enum ChineseScriptPreference {
     Traditional,
 }
 
+/// 快捷键模式（A1）：Toggle 按一下开/再按一下停；Hold 按住说话、松开停。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HotkeyMode {
+    #[default]
+    Toggle,
+    Hold,
+}
+
 /// 二期文本润色路由策略（与 ASR PreferLocal 对称）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -108,6 +117,9 @@ pub struct AppConfig {
     /// 全局录音快捷键。支持 "Fn"（macOS Globe 键，原生监听）
     /// 或 Tauri/Accelerator 风格组合键如 "Alt+Shift+D"。
     pub hotkey: String,
+    /// 快捷键模式（A1）：Toggle（默认）/ Hold（按住说话）。
+    #[serde(default)]
+    pub hotkey_mode: HotkeyMode,
     /// 录音时是否静音其他应用音频（一期可固定 false）。
     pub mute_other_audio: bool,
     /// 开机自启（macOS Login Items）。开机自启时应用静默常驻菜单栏，不弹面板。
@@ -194,6 +206,7 @@ impl Default for AppConfig {
                 language: None,
             }],
             hotkey: "Fn".to_string(),
+            hotkey_mode: HotkeyMode::Toggle,
             mute_other_audio: false,
             launch_at_login: false,
             // local_mode 与默认 ASR（Zipformer 流式）对齐；新逻辑以 local_asr_model 为准。

@@ -11,6 +11,7 @@
 - [x] **F1 风格包**（46a2e28 / f17f998 / 4c8007f）— store + 后端全链路 + 前端选择 UI
 - [x] **B5 按 app 标点** — 全角→半角（IM 场景），按前台 app bundle 偏好转换上屏
 - [x] **B6 繁简转换** — ferrous-opencc（纯 Rust OpenCC），按偏好简↔繁转换上屏
+- [x] **A1 按住说话 PTT** — HotkeyMode（Toggle/Hold），Hold 模式 press 只开始不切换停
 
 ## ⚠️ 不适用（架构原因）
 - C2 剪贴板恢复 — enigo 逐字输入不碰剪贴板
@@ -21,7 +22,6 @@
 ### 轻量后端
 - [ ] **H2 凭据钥匙串**（keyring）
 - [ ] **F4 选区注入**（macOS AX 直读选中文字）
-- [ ] **A1 按住说话 PTT**（fn_key press/release 边沿 + 模式）
 
 ### 前端补全
 - [ ] **D2 搜索 UI**（前端搜索框 + 列表）

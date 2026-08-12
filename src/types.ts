@@ -21,10 +21,14 @@ export type PolishPolicy =
 /** 润色程度：off（保持原样）/ light（中度，仅校对）/ heavy（高度，改写润色）。 */
 export type PolishMode = "off" | "light" | "heavy";
 
+/** 快捷键模式（A1）：toggle 切换 / hold 按住说话。 */
+export type HotkeyMode = "toggle" | "hold";
+
 export interface AppConfig {
   active_provider: number;
   providers: ProviderConfig[];
   hotkey: string;
+  hotkey_mode?: HotkeyMode;
   mute_other_audio: boolean;
   /** 开机自启（macOS Login Items）；开机自启时应用静默常驻菜单栏 */
   launch_at_login?: boolean;

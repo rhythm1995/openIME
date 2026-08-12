@@ -35,7 +35,8 @@ pub use asr_catalog::{
     FIRERED_LARGE_DIR, FUNASR_NANO_FP16_DIR, FUNASR_NANO_INT8_DIR,
 };
 pub use config::{
-    AppConfig, PolishPolicy, ProviderConfig, ProviderKind, POLISH_DEFAULT_LOCAL_MODEL,
+    AppConfig, ChineseScriptPreference, HotkeyMode, PolishPolicy, ProviderConfig, ProviderKind,
+    POLISH_DEFAULT_LOCAL_MODEL,
 };
 pub use insert::EnigoInserter;
 pub use model_download::{
