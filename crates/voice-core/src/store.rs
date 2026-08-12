@@ -55,6 +55,16 @@ const MIGRATIONS: &[&str] = &[
         weight INTEGER NOT NULL DEFAULT 1
     );
     "#,
+    // v3（风格包：用户自定义输出风格 prompt，F1）
+    r#"
+    CREATE TABLE IF NOT EXISTS style_packs (
+        id            TEXT PRIMARY KEY,
+        name          TEXT NOT NULL,
+        system_prompt TEXT NOT NULL,
+        is_builtin    INTEGER NOT NULL DEFAULT 0,
+        ord           INTEGER NOT NULL DEFAULT 0
+    );
+    "#,
 ];
 
 /// SQLite HistoryStore 实现。
@@ -294,6 +304,17 @@ pub struct Hotword {
     pub weight: i32,
 }
 
+/// 一个风格包（F1）：用户自定义输出风格的系统提示词。
+/// Heavy 润色模式下，若选中某风格包，用其 system_prompt 替代默认 Heavy prompt。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StylePack {
+    pub id: String,
+    pub name: String,
+    pub system_prompt: String,
+    pub is_builtin: bool,
+    pub ord: i32,
+}
+
 impl SqliteStore {
     pub fn list_hotwords(&self) -> Result<Vec<Hotword>> {
         let conn = self.conn()?;
@@ -398,6 +419,81 @@ impl SqliteStore {
             out.push(row.map_err(|e| Error::Store(format!("读取搜索行失败: {e}")))?);
         }
         Ok(out)
+    }
+
+    // ── 风格包（F1）──
+
+    pub fn list_style_packs(&self) -> Result<Vec<StylePack>> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, system_prompt, is_builtin, ord FROM style_packs \
+                 ORDER BY ord ASC, rowid ASC",
+            )
+            .map_err(|e| Error::Store(format!("list_style_packs prepare 失败: {e}")))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(StylePack {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    system_prompt: r.get(2)?,
+                    is_builtin: r.get::<_, i32>(3)? != 0,
+                    ord: r.get(4)?,
+                })
+            })
+            .map_err(|e| Error::Store(format!("list_style_packs query 失败: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| Error::Store(format!("读取风格包行失败: {e}")))?);
+        }
+        Ok(out)
+    }
+
+    pub fn upsert_style_pack(&self, p: &StylePack) -> Result<()> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO style_packs(id, name, system_prompt, is_builtin, ord) VALUES(?,?,?,?,?) \
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name, system_prompt=excluded.system_prompt, \
+             is_builtin=excluded.is_builtin, ord=excluded.ord",
+            params![
+                p.id,
+                p.name,
+                p.system_prompt,
+                if p.is_builtin { 1 } else { 0 },
+                p.ord,
+            ],
+        )
+        .map_err(|e| Error::Store(format!("upsert_style_pack 失败: {e}")))?;
+        Ok(())
+    }
+
+    pub fn delete_style_pack(&self, id: &str) -> Result<()> {
+        let conn = self.conn()?;
+        conn.execute("DELETE FROM style_packs WHERE id=? AND is_builtin=0", [id])
+            .map_err(|e| Error::Store(format!("delete_style_pack 失败: {e}")))?;
+        Ok(())
+    }
+
+    /// 内置风格包种子（仅空表时）：正式 / 口语 / commit message。
+    pub fn seed_builtin_style_packs_if_empty(&self) -> Result<()> {
+        if !self.list_style_packs()?.is_empty() {
+            return Ok(());
+        }
+        let builtins = [
+            ("builtin-formal", "正式", "请用正式、简洁的书面语输出，适合工作消息。", 0),
+            ("builtin-casual", "口语", "请保持口语自然，略作通顺即可，不要过于书面。", 1),
+            ("builtin-commit", "commit message", "请把内容整理成简洁的 git commit message（动词开头、祈使句、不超 50 字）。", 2),
+        ];
+        for (id, name, prompt, ord) in builtins {
+            self.upsert_style_pack(&StylePack {
+                id: id.into(),
+                name: name.into(),
+                system_prompt: prompt.into(),
+                is_builtin: true,
+                ord,
+            })?;
+        }
+        Ok(())
     }
 }
 
@@ -561,5 +657,33 @@ mod tests {
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].final_text, "今天讨论智谱模型");
         assert!(store.search_utterances("不存在的词xyz").unwrap().is_empty());
+    }
+
+    #[test]
+    fn style_packs_crud_and_seed() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.seed_builtin_style_packs_if_empty().unwrap();
+        let packs = store.list_style_packs().unwrap();
+        assert_eq!(packs.len(), 3);
+        assert!(packs.iter().any(|p| p.name == "正式"));
+        // 再 seed 不重复
+        store.seed_builtin_style_packs_if_empty().unwrap();
+        assert_eq!(store.list_style_packs().unwrap().len(), 3);
+        // upsert 自定义
+        store
+            .upsert_style_pack(&StylePack {
+                id: "my".into(),
+                name: "我的".into(),
+                system_prompt: "test".into(),
+                is_builtin: false,
+                ord: 10,
+            })
+            .unwrap();
+        assert_eq!(store.list_style_packs().unwrap().len(), 4);
+        // 删自定义 OK，删内置无效
+        store.delete_style_pack("my").unwrap();
+        assert_eq!(store.list_style_packs().unwrap().len(), 3);
+        store.delete_style_pack("builtin-formal").unwrap();
+        assert_eq!(store.list_style_packs().unwrap().len(), 3); // 内置删不掉
     }
 }
