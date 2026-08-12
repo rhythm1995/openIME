@@ -369,6 +369,36 @@ impl SqliteStore {
         }
         Ok(out)
     }
+
+    /// 跨会话搜索录音文本（D2 历史搜索）：LIKE 模糊匹配，按时间倒序，限 200 条。
+    pub fn search_utterances(&self, query: &str) -> Result<Vec<UtteranceRecord>> {
+        let conn = self.conn()?;
+        let pattern = format!("%{query}%");
+        let mut stmt = conn
+            .prepare(
+                "SELECT id,session_id,seq,final_text,audio_path,created_at \
+                 FROM utterances WHERE final_text LIKE ? ORDER BY created_at DESC LIMIT 200",
+            )
+            .map_err(|e| Error::Store(format!("search_utterances prepare 失败: {e}")))?;
+        let rows = stmt
+            .query_map([&pattern], |r| {
+                let audio: Option<String> = r.get(4)?;
+                Ok(UtteranceRecord {
+                    id: r.get(0)?,
+                    session_id: r.get(1)?,
+                    seq: r.get(2)?,
+                    final_text: r.get(3)?,
+                    audio_path: audio,
+                    created_at: parse_ts(&r.get::<_, String>(5)?).unwrap_or_else(|_| Utc::now()),
+                })
+            })
+            .map_err(|e| Error::Store(format!("search_utterances query 失败: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| Error::Store(format!("读取搜索行失败: {e}")))?);
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -499,5 +529,37 @@ mod tests {
             .unwrap();
         assert_eq!(again, 1);
         assert_eq!(store.list_hotwords().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn search_utterances_like_match() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.create_session(&sample_session("s1")).await.unwrap();
+        store
+            .save_utterance(&UtteranceRecord {
+                id: "u1".into(),
+                session_id: "s1".into(),
+                seq: 0,
+                final_text: "今天讨论智谱模型".into(),
+                audio_path: None,
+                created_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        store
+            .save_utterance(&UtteranceRecord {
+                id: "u2".into(),
+                session_id: "s1".into(),
+                seq: 1,
+                final_text: "明天天气不错".into(),
+                audio_path: None,
+                created_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        let r = store.search_utterances("智谱").unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].final_text, "今天讨论智谱模型");
+        assert!(store.search_utterances("不存在的词xyz").unwrap().is_empty());
     }
 }
