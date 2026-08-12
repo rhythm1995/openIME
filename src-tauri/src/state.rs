@@ -200,8 +200,14 @@ impl AppState {
 pub fn load_config(store: &SqliteStore) -> Result<Option<AppConfig>, Error> {
     match store.get_setting(CONFIG_KEY)? {
         Some(json) => {
-            let cfg = serde_json::from_str(&json)
+            let mut cfg: AppConfig = serde_json::from_str(&json)
                 .map_err(|e| Error::Store(format!("解析 app_config 失败: {e}")))?;
+            // H2：api_key 从 keychain 填充（save 时已置空，明文不落 JSON）。
+            for (i, p) in cfg.providers.iter_mut().enumerate() {
+                if p.api_key.is_empty() {
+                    p.api_key = crate::credentials::fetch_provider_key(i).unwrap_or_default();
+                }
+            }
             Ok(Some(cfg))
         }
         None => Ok(None),
@@ -209,7 +215,15 @@ pub fn load_config(store: &SqliteStore) -> Result<Option<AppConfig>, Error> {
 }
 
 pub fn save_config(store: &SqliteStore, cfg: &AppConfig) -> Result<(), Error> {
-    let json = serde_json::to_string(cfg)
+    // H2：api_key 迁移到 keychain，JSON 里置空（不存明文）。
+    let mut cfg = cfg.clone();
+    for (i, p) in cfg.providers.iter_mut().enumerate() {
+        if !p.api_key.is_empty() {
+            let _ = crate::credentials::store_provider_key(i, &p.api_key);
+            p.api_key.clear();
+        }
+    }
+    let json = serde_json::to_string(&cfg)
         .map_err(|e| Error::Store(format!("序列化 app_config 失败: {e}")))?;
     store.set_setting(CONFIG_KEY, &json)?;
     Ok(())

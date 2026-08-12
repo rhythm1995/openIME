@@ -2,6 +2,7 @@
 //! 所有业务逻辑都在 voice-core。
 
 mod commands;
+mod credentials;
 mod logging;
 mod platform;
 mod state;

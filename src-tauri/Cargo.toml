@@ -33,6 +33,8 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+# H2 凭据钥匙串（API key 存系统 keychain，不落明文 JSON）
+keyring = "3"
 
 [features]
 # 默认走自定义协议（生产）+ 本地 sherpa-onnx；开发时 tauri 会注入 devUrl
