@@ -763,12 +763,16 @@ export default function Settings() {
               </span>
             </div>
             <div className="field">
-              <label className="field-label">WebSocket 地址</label>
+              <label className="field-label">服务地址</label>
               <input
                 value={active.base_url}
                 onChange={(e) => setActive({ base_url: e.target.value })}
-                placeholder="wss://your-asr-host/api-ws/v1/inference"
+                placeholder="ws-xxx.ap-southeast-1.maas.aliyuncs.com"
               />
+              <span className="field-hint">
+                填控制台里的 OpenAI 兼容地址 / DashScope 地址 / 纯域名均可，
+                自动转换为 WebSocket 地址（如填 https://…/compatible-mode/v1）
+              </span>
             </div>
             <div className="field">
               <label className="field-label">API Key</label>

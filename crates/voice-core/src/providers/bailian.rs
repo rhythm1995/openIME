@@ -207,8 +207,11 @@ async fn test_connection_ws(cfg: &ProviderConfig) -> crate::Result<String> {
 }
 
 async fn connect_ws(cfg: &ProviderConfig) -> crate::Result<WsStream> {
-    let mut req = cfg
-        .base_url
+    // 用户填的可能不是标准 WS 地址，先归一化：
+    // - 纯域名 / https 地址（OpenAI 兼容地址、DashScope 地址）→ 推导 wss://{host}/api-ws/v1/inference
+    // - wss:// 但缺路径 → 补 /api-ws/v1/inference
+    let ws_url = normalize_ws_url(&cfg.base_url);
+    let mut req = ws_url
         .as_str()
         .into_client_request()
         .map_err(|e| Error::Protocol(format!("构造 WS 请求失败: {e}")))?;
@@ -226,6 +229,42 @@ async fn connect_ws(cfg: &ProviderConfig) -> crate::Result<WsStream> {
         .await
         .map_err(|e| Error::Protocol(format!("WebSocket 连接失败: {e}")))?;
     Ok(ws)
+}
+
+/// 把用户填的「WebSocket 地址」归一化为标准 WS URL。
+///
+/// 阿里百炼（Model Studio）控制台给用户的通常是：
+/// - OpenAI 兼容地址：`https://{host}/compatible-mode/v1`
+/// - DashScope 地址：`https://{host}/api/v1`
+/// - 纯域名：`{host}`（host 通常形如 `ws-xxx.ap-southeast-1.maas.aliyuncs.com`）
+///
+/// 而实际 WS 端点是 `wss://{host}/api-ws/v1/inference`。本函数做这层推导，
+/// 用户填上面任何一种（或标准 wss 地址）都能连。
+pub fn normalize_ws_url(input: &str) -> String {
+    let s = input.trim();
+    // 已是 ws/wss 地址：缺路径时补标准路径，否则原样。
+    if let Some(rest) = s.strip_prefix("wss://").or_else(|| s.strip_prefix("ws://")) {
+        let scheme = if s.starts_with("wss://") { "wss" } else { "ws" };
+        let (host, path) = match rest.find('/') {
+            Some(i) => (&rest[..i], &rest[i..]),
+            None => (rest, ""),
+        };
+        if path.is_empty() || path == "/" {
+            return format!("{scheme}://{host}/api-ws/v1/inference");
+        }
+        return s.to_string();
+    }
+    // https/http 地址：剥 scheme 和路径，只取 host，重拼 wss。
+    if let Some(rest) = s
+        .strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+    {
+        let host = rest.split('/').next().unwrap_or(rest);
+        return format!("wss://{host}/api-ws/v1/inference");
+    }
+    // 纯域名（无 scheme）：直接拼 wss。
+    let host = s.split('/').next().unwrap_or(s);
+    format!("wss://{host}/api-ws/v1/inference")
 }
 
 /// 一次百炼转写会话。读循环在 connect 时已 spawn 到后台，结束时关闭 deltas 流。
@@ -268,5 +307,54 @@ impl AsrSession for BailianSession {
     fn deltas(&mut self) -> Pin<Box<dyn Stream<Item = crate::Result<TranscriptDelta>> + Send>> {
         let rx = self.deltas_rx.take().expect("deltas() 只能调用一次");
         Box::pin(UnboundedReceiverStream::new(rx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_ws_url;
+
+    #[test]
+    fn bare_host_gets_standard_path() {
+        assert_eq!(
+            normalize_ws_url("ws-6jdmvefi3vkpae19.ap-southeast-1.maas.aliyuncs.com"),
+            "wss://ws-6jdmvefi3vkpae19.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference"
+        );
+    }
+
+    #[test]
+    fn openai_compatible_url_strips_path() {
+        assert_eq!(
+            normalize_ws_url(
+                "https://ws-6jdmvefi3vkpae19.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+            ),
+            "wss://ws-6jdmvefi3vkpae19.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference"
+        );
+    }
+
+    #[test]
+    fn dashscope_url_strips_path() {
+        assert_eq!(
+            normalize_ws_url("https://ws-6jdmvefi3vkpae19.ap-southeast-1.maas.aliyuncs.com/api/v1"),
+            "wss://ws-6jdmvefi3vkpae19.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference"
+        );
+    }
+
+    #[test]
+    fn full_ws_url_kept() {
+        assert_eq!(
+            normalize_ws_url(
+                "wss://ws-6jdmvefi3vkpae19.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference"
+            ),
+            "wss://ws-6jdmvefi3vkpae19.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference"
+        );
+    }
+
+    #[test]
+    fn ws_without_path_gets_appended() {
+        assert_eq!(
+            normalize_ws_url("wss://ws-6jdmvefi3vkpae19.ap-southeast-1.maas.aliyuncs.com"),
+            "wss://ws-6jdmvefi3vkpae19.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference"
+        );
     }
 }
