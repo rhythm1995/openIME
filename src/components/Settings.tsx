@@ -19,7 +19,6 @@ import type {
   ModelDownloadProgress,
   PolishCloudProtocol,
   PolishModelStatus,
-  PolishPolicy,
   ProviderConfig,
   StylePack,
   SystemInfo,
@@ -483,23 +482,8 @@ export default function Settings() {
             )}
 
             <div className="field" style={{ marginTop: 14 }}>
-              <label className="field-label">路由策略</label>
-              <select
-                value={config.polish_policy ?? "prefer_local"}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    polish_policy: e.target.value as PolishPolicy,
-                  })
-                }
-              >
-                <option value="prefer_local">优先本地（推荐）</option>
-                <option value="prefer_cloud">优先云端</option>
-                <option value="local_only">仅本地</option>
-                <option value="cloud_only">仅云端</option>
-              </select>
               <span className="field-hint">
-                本地需下载约 986MB 的 Qwen2.5-1.5B-Instruct Q4_K_M；云端复用百炼 API Key
+                运行策略：本地模型优先，未下载或失败时自动回退云端（无需配置）
               </span>
             </div>
 
@@ -675,9 +659,9 @@ export default function Settings() {
               }
             }}
           >
-            <option value="sherpa">sherpa-onnx（本地，离线，推荐）</option>
+            <option value="sherpa">sherpa-onnx（本地模型，隐私，推荐）</option>
             <option value="bailian">百炼 WebSocket 流式（云端）</option>
-            <option value="openai_asr">OpenAI 兼容 REST（Whisper/OpenRouter 等）</option>
+            <option value="openai_asr">OpenAI 兼容 REST（OpenRouter/OpenAI 等）</option>
             <option value="multimodal_asr">Multimodal REST（百炼 Qwen3 ASR 非流式）</option>
           </select>
         </div>

@@ -160,7 +160,7 @@ impl AppState {
         Arc::new(PolishRouter {
             cfg: PolishRouterConfig {
                 policy: if polish_on {
-                    cfg.polish_policy
+                    PolishPolicy::PreferLocal
                 } else {
                     PolishPolicy::Off
                 },
