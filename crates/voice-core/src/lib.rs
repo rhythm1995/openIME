@@ -64,6 +64,9 @@ pub use providers::sherpa::{SherpaModelPaths, SherpaProvider};
 pub use providers::RoutingProvider;
 pub use store::{Hotword, OutputMode, RoleKind, SqliteStore, StylePack};
 pub use system::{collect_system_info, compute_model_tag, ModelPerfTag, SystemInfo};
+pub use transcribe::{
+    segment_ranges, srt_from_segments, stitch_overlap, stitch_overlap_punct, transcribe_segmented,
+};
 pub use traits::{
     AsrProvider, AsrSession, AudioFormat, AudioFrame, AudioSource, HistoryStore, PolishMode,
     PolishRequest, PolishResponse, SessionSummary, TextInserter, TextPolishProvider,

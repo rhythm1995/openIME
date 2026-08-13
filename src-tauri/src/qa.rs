@@ -257,12 +257,8 @@ pub async fn insert_last_answer(app: &AppHandle) -> Result<Option<voice_core::In
     let app_state = app.state::<AppState>();
     let inserter = app_state.composite_inserter().map_err(|e| e.to_string())?;
     let cfg = app_state.config.blocking_read().clone();
-    let opts = voice_core::InsertOpts {
-        strategy: cfg.insert_strategy,
-        paste_fallback_apps: cfg.paste_fallback_apps.clone(),
-        restore_clipboard: cfg.restore_clipboard,
-        frontmost: frontmost.clone(),
-    };
+    // R11：QA 插入光标也走唯一业务构造（非流式）。
+    let opts = voice_core::InsertOpts::from_config(&cfg, frontmost.clone(), false);
     // 先还焦到开窗时的前台（QA 窗此刻在前台，直接插会进 webview）。
     crate::commands::restore_frontmost(app, frontmost.as_deref());
     tokio::time::sleep(std::time::Duration::from_millis(120)).await;

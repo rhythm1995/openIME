@@ -1,3 +1,89 @@
+# openIME 实现进度（TDD）
+
+## P2（[`p2-design.md`](./p2-design.md)）
+
+跟踪 P2 的 PR0–PR6。每条用 TDD，完成一项打勾；完成一个 PR 跑全量 `cargo test -p voice-core` + `cargo test -p openime --lib` + `pnpm test` + `pnpm build`。
+
+依赖图：PR0 → PR1 ∥ PR2 ∥ PR4；PR2 → PR3；PR4 → PR5 → PR6。
+
+| PR | 主题 | 状态 |
+|---|---|---|
+| PR0 | P2 AppConfig 字段（serde default + validate_p2_fields） | ✅ 完成 |
+| PR1 | R12 长音频分段 + 重叠 + 进度/取消 | ✅ 完成 |
+| PR2 | R9 Hold+Fn delay-start + 修 Toggle 松开停 | ✅ 完成 |
+| PR3 | R9 macOS flagsChanged 补发 + 吞键 tap | ✅ 完成（真机 A9.1 待验） |
+| PR4 | R11 Windows TSF 阶段 A（HKCU + DLL + NSIS） | ⏭️ 跳过（需 Windows 编译 + 真机） |
+| PR5 | R11 TSF 命名管道 CommitText 协议 | ✅ 纯协议部分完成（Windows FFI 待 Windows） |
+| PR6 | R11 insert_ex 优先 TSF + R7 回退 | ✅ 纯函数部分完成（Windows FFI 待 Windows） |
+
+---
+
+## PR0 — P2 AppConfig 字段 ✅
+
+- [x] 0.1 `config.rs`：7 个 P2 字段全部 `#[serde(default)]`（short_press_ms / fn_repost_enabled / fn_repost_tis_fallback / windows_tsf_enabled / windows_tsf_fallback / file_seg_duration_secs / file_seg_overlap_secs）
+- [x] 0.2 `AppConfig::validate_p2_fields`：范围校验（short_press_ms 100..=800、duration 10..=180、overlap 1..=30 且 overlap<duration）
+- [x] 0.3 `commands.rs save_app_config`：接入 `validate_p2_fields`，失败整单不落盘
+- [x] 0.4 `types.ts` / `Settings.test.tsx` `defaultConfig` 同步 7 字段
+- [x] 0.5 i18n zh/en：短按阈值 + fnRepost + 分段时长/重叠 + 进度/取消占位键；`Settings.tsx` 增加短按阈值输入
+- [x] 0.6 验收：voice-core 232 passed · openime 22 passed · pnpm 18 passed · tsc 通过
+
+## PR1 — R12 长音频分段 + 重叠 ✅
+
+- [x] 1.1 `transcribe.rs segment_ranges`：0/短/60s/64s/1800s/非法 Err，**无**并入分支（短尾段自然出现）
+- [x] 1.2 `stitch_overlap` / `stitch_overlap_punct`：k_min=2、标点二次去重、单字不误吃、空串
+- [x] 1.3 `srt_from_segments`（时间戳 + t0、i>0 丢 start<t0+overlap/2、跨段序号连续）+ `transcribe_segmented`
+- [x] 1.4 `transcribe_file_full` 新签名（seg/overlap/cancel/on_progress）；一次 `build_offline_recognizer` 顺序喂切片后 drop；**不碰** `OFFLINE_RECOGNIZER_CACHE`
+- [x] 1.5 `lib.rs`（voice-core）导出 segment_ranges / stitch_overlap / stitch_overlap_punct / srt_from_segments / transcribe_segmented
+- [x] 1.6 `state.rs` transcribe_guard/transcribe_cancel + `commands.rs` transcribe_file（CAS guard + 段间 emit 进度）/ cancel_transcribe
+- [x] 1.7 前端：`ipc.ts` cancelTranscribe；`Settings.tsx` 分段时长/重叠输入 + `transcribe://progress` 监听 + 取消按钮 + 转录中 disable
+- [x] 1.8 验收：mock 33 段 stitch、mock 取消（第 2 段后 → Err「已取消」）、srt 序号连续 + overlap/2 丢 cue 全过
+
+## PR2 — R9 Hold+Fn delay-start + 修 Toggle 松开停 ✅
+
+- [x] 2.1 `fn_policy.rs`（新）：`classify_fn_edge` 状态机 + `should_ignore_fn_edge`（表驱动 11 case + ignore window 单测）
+- [x] 2.2 `lib.rs on_fn_edge`：delay-start（`ArmHoldTimer` → 阈值到期仍按住才 `StartRecord`）+ `this_press_started_recording`；Toggle 松开不再停（KD-2）
+- [x] 2.3 `state.rs`：`abort_flag` / `request_abort` / `take_abort`；`clear_stop` 同时清 abort
+- [x] 2.4 `commands.rs`：CAS 成功后、任何 await 之前立刻 `clear_stop`；两处防御 `take_abort`（音频创建后、`record_and_collect` 返回后）
+- [x] 2.5 阈值前不 `mark_recording`：delay-start 使 `on_record_hotkey` 仅在阈值后调用（QA 短按不进 `QaRecording`，S9.4）
+- [x] 2.6 验收：openime 24 passed（含 fn_policy 2 项）；补发仍为 log（PR3 落地）
+- [x] 2.7 `fn_policy::fn_tap_can_consume(hotkey, hold)` 纯判定 + 单测（只改 `hotkey_mode` 不 `request_stop` / 吞键判定翻转）
+
+## PR3 — R9 macOS flagsChanged 补发 + 吞键 tap ✅
+
+- [x] 3.1 `fn_monitor.m`：Default tap（可吞键）+ 补发一对 `kCGEventFlagsChanged`（双 magic `0x4F494D45`）+ `REPOST_IGNORE_MS=60` 主过滤 + NSEvent 同 ignore window + 失败退回 ListenOnly
+- [x] 3.2 `fn_key.rs` FFI：`set_fn_tap_consume` / `schedule_repost_fn` / `repost_fn`
+- [x] 3.3 `lib.rs`：`RepostOnly → schedule_repost_fn`；`store_fn_tap_consume(hotkey==Fn && Hold)` 在 `save_app_config` + `apply_hotkey` 下发
+- [x] 3.4 Windows / 非 macOS 平台桩（保证跨平台编译）
+- [x] 3.5 验收：`cargo check -p openime` 通过（ObjC 编译）；openime 24 passed
+- [x] 3.6 `Settings.tsx`「Hold 下短按 Fn 补发 🌐」开关（仅 macOS 渲染，`IS_MAC` 判定）
+- [ ] 3.7 待真机：HID flagsChanged 补发是否触发 🌐 切输入法（A9.1，Open Question 1）；TIS 回退 `fn_repost_tis_fallback` 未接（默认 false）
+
+## PR5 — R11 TSF 命名管道协议（纯协议部分）✅
+
+- [x] 5.1 `windows_ime/protocol.rs`：常量（LANG 0x0804 / CLSID / PROFILE_GUID / 管道前缀 / 协议版本 1）+ `ImeProtocolMessage`（tag=type + camelCase + rename_all_fields）
+- [x] 5.2 `windows_ime/profile.rs`：`ImeProfileSnapshot` / `ProfileRestoreDecision` / `restore_decision`（A11.3）
+- [x] 5.3 `should_fallback_after_ime`（A11.4）+ `ime_pipe_name_for_target`（含 pid-tid，A11.5）
+- [x] 5.4 黄金 fixture 4 条（`windows-ime/fixtures/*.json`）+ roundtrip / stale session / errorCode 蛇形单测（A11.9）
+- [x] 5.5 验收：openime 34 passed（含 windows_ime 10 项）
+- [ ] 5.6 待 Windows：`windows_ime/{session,ipc}.rs` FFI（WaitNamedPipe + CreateFile 重试 800ms + `GetNamedPipeServerProcessId` 校验 + WM_INPUTLANGCHANGEREQUEST）；C++ `ipc_server.cpp` / `edit_session.cpp`
+
+## PR6 — R11 insert_ex 优先 TSF（纯函数部分）✅
+
+- [x] 6.1 `insert.rs`：`InsertOutcome::Committed`（HUD 与 Typed 一样静默）
+- [x] 6.2 `InsertOpts` 增 `tsf_enabled` / `tsf_fallback`；`InsertOpts::from_config(cfg, frontmost, streaming)` 唯一业务构造（`tsf = windows && cfg && !streaming`）
+- [x] 6.3 `commands.rs toggle_recording` + `qa.rs insert_last_answer` 都改走 `from_config`；streaming 提前计算供组装
+- [x] 6.4 验收：voice-core 234 passed · openime 34 passed；`from_config` 单测（非 Windows / streaming 时 tsf_enabled=false）
+- [x] 6.5 `tsf_supported_for_machine`（仅 AMD64 走 TSF；I386 / ARM64 / None → R7，A11.10）+ 单测
+- [ ] 6.6 待 Windows：`insert_fallback.rs insert_ex` 的 TSF 通路（prepare → 目标管道 ClientReady → SubmitText → Committed → 失败回退 R7）；`focus.rs frontmost_process_info`（pid/tid/machine 门控）；设置页 IME 状态 +「恢复系统输入法」按钮
+
+## P2 跳过 / 待 Windows / 待真机
+
+- **PR4 全部跳过**（需 Windows 编译）：C++ `OpenImeTsf.dll`（ITfTextInputProcessorEx + ITfEditSession，`/MT`）、`CMakeLists.txt`、NSIS `hooks.nsh`（HKCU `regsvr32 /s`）、`tauri.conf.json` `resources + installerHooks`、`windows_ime_status` 探测。本机 macOS 无法编译/验证，按「不确定先跳过」。
+- **PR5/PR6 的 Windows FFI 部分跳过**（同上）：命名管道 client/session、`frontmost_process_info`、`insert_ex` TSF 分支、设置页 TSF 开关与恢复按钮。纯协议/纯函数已落地并单测。
+- **PR3 真机验收待跑**：HID flagsChanged 补发是否触发 🌐（A9.1）；`fn_repost_tis_fallback` 未接（默认 false）。
+
+---
+
 # P1 实现进度（TDD）
 
 跟踪 [`p1-design.md`](./p1-design.md) 的 PR1–PR6。每条用 TDD，完成一项打勾；完成一个 PR 跑全量 `cargo test -p voice-core` + `pnpm test`。

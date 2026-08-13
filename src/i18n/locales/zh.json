@@ -168,7 +168,11 @@
       "translateHint": "按一下开始说源语言，光标处插入目标语言；再按一下停止。",
       "qaLabel": "划词问答快捷键（R6，可选）",
       "qaPh": "如 Cmd+Shift+;（留空不启用）",
-      "qaHint": "选中文字后按下：弹出问答浮窗，语音提问，流式回答。"
+      "qaHint": "选中文字后按下：弹出问答浮窗，语音提问，流式回答。",
+      "shortPressLabel": "短按阈值（毫秒）",
+      "shortPressHint": "Hold 模式下按住 Fn 超过该时长才开录；提前松开只补发 🌐（100–800，默认 300）",
+      "fnRepostName": "短按 Fn 补发 🌐",
+      "fnRepostDesc": "Hold + Fn 轻点（未达到阈值）时补发 🌐 键，让系统执行切输入法等原功能。仅 macOS 显示。"
     },
     "transcribe": {
       "title": "文件转录",
@@ -176,7 +180,12 @@
       "failed": "转录失败：{{error}}",
       "transcribing": "转录中…",
       "selectFile": "选择音频文件转录",
-      "exportSrt": "导出 SRT 字幕"
+      "exportSrt": "导出 SRT 字幕",
+      "segDurationLabel": "分段时长（秒）",
+      "segOverlapLabel": "分段重叠（秒）",
+      "progress": "转录进度：{{done}}/{{total}} 段",
+      "cancel": "取消转录",
+      "cancelled": "转录已取消"
     },
     "appBehavior": {
       "title": "App 行为",

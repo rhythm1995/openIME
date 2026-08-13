@@ -62,6 +62,8 @@ pub mod current {
 
     pub mod fn_key {
         pub fn install_fn_monitor(_on_edge: fn(pressed: bool)) {}
+        pub fn set_fn_tap_consume(_consume: bool) {}
+        pub fn schedule_repost_fn() {}
         pub fn is_fn_registered() -> bool {
             false
         }

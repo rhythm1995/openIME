@@ -81,6 +81,8 @@ pub async fn save_app_config(
     validate_all_endpoints(&config).map_err(|e| e.to_string())?;
     // PR4：热键两两不等 + 可解析（任一失败 → 不写 DB、不改内存）。
     validate_hotkeys(&config)?;
+    // P2：短按阈值 / 分段时长·重叠范围校验（失败整单不落盘）。
+    config.validate_p2_fields().map_err(|e| e.to_string())?;
     // 规范化 local_asr_model，同步 local_mode 与 sherpa provider.model。
     config.sync_local_asr_fields();
     let hotkeys_changed = {
@@ -92,6 +94,8 @@ pub async fn save_app_config(
     };
     save_config(&state.store, &config).map_err(|e| e.to_string())?;
     *state.config.write().await = config.clone();
+    // R9：hotkey_mode（及 hotkey）变化 → 下发吞键模式（即使 hotkeys_changed 为 false）。
+    crate::store_fn_tap_consume(&config);
     // 润色/引擎等变更：丢弃 pipeline，下次录音按新配置重建。
     state.invalidate_pipeline().await;
     // 任意快捷键字段变化 → 重新注册全部（PR4 收口）。
@@ -831,6 +835,9 @@ pub async fn toggle_recording(
         return Ok(false);
     }
 
+    // R9：CAS 成功后、任何 await / CpalAudioSource::new 之前立刻清 stop + abort（一次）。
+    state.clear_stop();
+
     // 抢到 guard 后 take 意图（启动失败也会清回 Dictate，避免残留 Translate/Qa）。
     let intent = match state.pending_intent.lock() {
         Ok(mut g) => {
@@ -901,7 +908,13 @@ pub async fn toggle_recording(
         })?,
     );
 
-    state.clear_stop();
+    // R9 防御 take_abort ①：音频创建后、开录前被中止 → 收起 HUD，不开录。
+    if state.take_abort() {
+        hide_overlay_only(&app);
+        release_recording_guard(&state);
+        return Ok(true);
+    }
+
     *state.recording.write().await = true;
     // 通知 overlay：录音已开始（避免挂载时 race 读到 false 显示空白）。
     let _ = app.emit("recording://started", ());
@@ -912,14 +925,16 @@ pub async fn toggle_recording(
     let recording = state.recording.clone();
     let guard = state.recording_guard.clone();
     let stop_flag = state.stop_flag.clone();
+    let abort_flag = state.abort_flag.clone();
+    let store = state.store.clone();
     let polish_ctx = state.polish_context(intent).await;
-    // R7：插入选项独立于 PolishContext（薄壳从 config + 前台 app 组装）。
-    let insert_opts = voice_core::InsertOpts {
-        strategy: cfg.insert_strategy,
-        paste_fallback_apps: cfg.paste_fallback_apps.clone(),
-        restore_clipboard: cfg.restore_clipboard,
-        frontmost: frontmost.clone(),
-    };
+    // C1：流式引擎（百炼）边说边逐字上屏；R5：前缀角色开 → 强制整段插入（A5.8）。
+    // 翻译 / QA 永不流式上屏。提前算好，供 from_config 组装 tsf_enabled。
+    let streaming = intent == voice_core::SessionIntent::Dictate
+        && provider_cfg.kind == voice_core::ProviderKind::Bailian
+        && !polish_ctx.prefix_roles_enabled;
+    // R7/R11：插入选项唯一业务构造（streaming 时 tsf_enabled=false）。
+    let insert_opts = voice_core::InsertOpts::from_config(&cfg, frontmost.clone(), streaming);
     let app_handle = app.clone();
     let meta = SessionMeta {
         engine: match intent {
@@ -943,11 +958,6 @@ pub async fn toggle_recording(
                 }))
             };
 
-        // C1：流式引擎（百炼）边说边逐字上屏；R5：前缀角色开 → 强制整段插入（A5.8）。
-        // 翻译 / QA 永不流式上屏。
-        let streaming = intent == voice_core::SessionIntent::Dictate
-            && provider_cfg.kind == voice_core::ProviderKind::Bailian
-            && !polish_ctx.prefix_roles_enabled;
         // 流式模式：录音期间就上屏，先还焦（QA 无此路径）。
         if streaming {
             restore_frontmost_focus(&app_handle, frontmost.as_deref());
@@ -966,6 +976,24 @@ pub async fn toggle_recording(
                 &insert_opts,
             )
             .await;
+
+        // R9 防御 take_abort ②：record_and_collect 返回后、persist/QA/insert 之前。
+        if abort_flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            // 中止：不上屏、不 QA 提问，只删 pipeline 会话（不碰 QA history）。
+            if let Ok(r) = &result {
+                let _ = store.delete_session(&r.session_id).await;
+            }
+            crate::qa::mark_recording(&app_handle, false);
+            let _ = app_handle.emit("recording://processing", "已取消");
+            *recording.write().await = false;
+            guard.store(false, std::sync::atomic::Ordering::SeqCst);
+            let h = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                hide_overlay_only(&h);
+            });
+            return;
+        }
 
         match result {
             Ok(r) => match intent {
@@ -1247,44 +1275,101 @@ pub struct TranscribeResult {
 }
 
 /// D3：转录音频文件 → (文本, srt)。用当前选中的本地 ASR 模型。
+/// R12：按 `file_seg_duration_secs` / `file_seg_overlap_secs` 分段 + 重叠；可取消；段间 emit 进度。
 #[tauri::command]
 pub async fn transcribe_file(
+    app: AppHandle,
     state: State<'_, AppState>,
     path: String,
 ) -> Result<TranscribeResult, String> {
-    let (model_id, lang, model_root) = {
+    use std::sync::atomic::Ordering;
+
+    // 防并发：CAS 抢占转录 guard，已有转录在进行则拒绝。
+    let acquired = state.transcribe_guard.compare_exchange(
+        false,
+        true,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
+    if acquired.is_err() {
+        return Err("已有转录在进行".into());
+    }
+    // 命令入口清掉上次的取消标志。
+    state.transcribe_cancel.store(false, Ordering::SeqCst);
+
+    let (model_id, lang, model_root, seg_secs, overlap_secs) = {
         let cfg = state.config.read().await;
         (
             cfg.resolved_local_asr_model(),
             cfg.local_language.clone(),
             state.model_root(),
+            cfg.file_seg_duration_secs,
+            cfg.file_seg_overlap_secs,
         )
     };
-    let root = model_root.ok_or("未配置本地模型路径，请先下载模型")?;
+    let root = match model_root {
+        Some(r) => r,
+        None => {
+            state.transcribe_guard.store(false, Ordering::SeqCst);
+            return Err("未配置本地模型路径，请先下载模型".into());
+        }
+    };
     let file_name = std::path::Path::new(&path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("audio")
         .to_string();
-    log_info!("开始转录文件：{path}（模型 {model_id}）");
+    log_info!("开始转录文件：{path}（模型 {model_id}，{seg_secs}s/{overlap_secs}s 重叠）");
     let path_clone = path.clone();
+    let cancel = state.transcribe_cancel.clone();
+    let app_for_progress = app.clone();
+
     let result = tokio::task::spawn_blocking(move || {
         voice_core::transcribe::transcribe_file_full(
             std::path::Path::new(&path_clone),
             &root,
             &model_id,
             &lang,
+            seg_secs,
+            overlap_secs,
+            Some(cancel.as_ref()),
+            move |done, total| {
+                let _ = app_for_progress.emit(
+                    "transcribe://progress",
+                    serde_json::json!({
+                        "done_segs": done,
+                        "total_segs": total,
+                        "seconds_done": (done as u64).saturating_mul(seg_secs as u64),
+                        "seconds_total": (total as u64).saturating_mul(seg_secs as u64),
+                    }),
+                );
+            },
         )
     })
-    .await
-    .map_err(|e| format!("转录任务失败：{e}"))?
-    .map_err(|e| e.to_string())?;
+    .await;
+
+    // 无论成败都释放 guard（转录一次性，失败不残留占用）。
+    state.transcribe_guard.store(false, Ordering::SeqCst);
+
+    let result = result
+        .map_err(|e| format!("转录任务失败：{e}"))?
+        .map_err(|e| e.to_string())?;
     log_info!("转录完成：{path}（{} 字）", result.0.chars().count());
     Ok(TranscribeResult {
         text: result.0,
         srt: result.1,
         file_name,
     })
+}
+
+/// P2 R12：请求取消进行中的文件转录（段间协作退出）。
+#[tauri::command]
+pub fn cancel_transcribe(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .transcribe_cancel
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    log_info!("请求取消文件转录");
+    Ok(())
 }
 
 /// D1：导出所有录音为 Markdown 日记（按日期分组）。
@@ -1383,5 +1468,17 @@ mod tests {
         let mut c = base_cfg();
         c.translate_hotkey = Some("Fn".into());
         assert!(validate_hotkeys(&c).is_err());
+    }
+
+    #[test]
+    fn p2_fields_validated_on_save() {
+        let mut c = base_cfg();
+        c.short_press_ms = 50;
+        assert!(c.validate_p2_fields().is_err());
+        let mut c = base_cfg();
+        c.file_seg_duration_secs = 60;
+        c.file_seg_overlap_secs = 60;
+        assert!(c.validate_p2_fields().is_err());
+        assert!(base_cfg().validate_p2_fields().is_ok());
     }
 }

@@ -35,6 +35,12 @@ pub struct AppState {
     pub model_downloading: Arc<AtomicBool>,
     /// R2:润色取消标志；ESC 触发后置 true，apply_polish 看到→尽快返回 L0。
     pub polish_cancel: Arc<AtomicBool>,
+    /// P2 R12：文件转录进行中 guard（CAS 防并发启动）。
+    pub transcribe_guard: Arc<AtomicBool>,
+    /// P2 R12：文件转录取消标志（cancel_transcribe 置 true；命令入口 swap false 再跑）。
+    pub transcribe_cancel: Arc<AtomicBool>,
+    /// P2 R9：录音中止标志（仅防御；R9 主路径不置位）。置位 → 不上屏、不 QA 提问。
+    pub abort_flag: Arc<AtomicBool>,
     /// P1：快捷键先写意图，toggle_recording 抢到 guard 后 take（见 p1-design 分支表）。
     pub pending_intent: Mutex<SessionIntent>,
     /// R7：组合插入器（Type-then-Paste）。与 pipeline 共享同一实例。
@@ -77,6 +83,9 @@ impl AppState {
             stop_flag: Arc::new(AtomicBool::new(false)),
             model_downloading: Arc::new(AtomicBool::new(false)),
             polish_cancel: Arc::new(AtomicBool::new(false)),
+            transcribe_guard: Arc::new(AtomicBool::new(false)),
+            transcribe_cancel: Arc::new(AtomicBool::new(false)),
+            abort_flag: Arc::new(AtomicBool::new(false)),
             pending_intent: Mutex::new(SessionIntent::Dictate),
             inserter: OnceLock::new(),
             app,
@@ -286,8 +295,23 @@ impl AppState {
         self.stop_flag.store(true, Ordering::SeqCst);
     }
 
+    /// 请求中止录音：置 abort + stop。中止 = 不上屏、不 QA 提问（仅防御）。
+    /// R9 主路径永不调用；保留给其它命令/未来用，故允许未使用告警。
+    #[allow(dead_code)]
+    pub fn request_abort(&self) {
+        self.abort_flag.store(true, Ordering::SeqCst);
+        self.stop_flag.store(true, Ordering::SeqCst);
+    }
+
+    /// 取出并清掉 abort 标志。返回 true 表示本轮应中止。
+    pub fn take_abort(&self) -> bool {
+        self.abort_flag.swap(false, Ordering::SeqCst)
+    }
+
     pub fn clear_stop(&self) {
         self.stop_flag.store(false, Ordering::SeqCst);
+        // R9：clear_stop 同时清 abort（CAS 成功后、任何 await 之前调用一次）。
+        self.abort_flag.store(false, Ordering::SeqCst);
     }
 
     /// R2:请求取消进行中的润色（ESC 触发）。

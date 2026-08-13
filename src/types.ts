@@ -97,6 +97,26 @@ export interface AppConfig {
   paste_fallback_apps?: string[];
   /** 粘贴后 750ms 恢复原剪贴板 */
   restore_clipboard?: boolean;
+
+  // ── P2：R9 短按补发 ──
+  /** Fn 短按阈值（ms）：Hold+Fn 按住超过该时长才开录（默认 300） */
+  short_press_ms?: number;
+  /** Hold+Fn 短按补发 🌐（默认开） */
+  fn_repost_enabled?: boolean;
+  /** HID 补发后若前台输入源未变，TIS 切下一输入源（默认关） */
+  fn_repost_tis_fallback?: boolean;
+
+  // ── P2：R11 Windows TSF ──
+  /** Windows 优先 TSF CommitText 上屏（默认开；非 Windows 忽略） */
+  windows_tsf_enabled?: boolean;
+  /** TSF 提交失败回退粘贴（默认开） */
+  windows_tsf_fallback?: boolean;
+
+  // ── P2：R12 长音频分段 ──
+  /** 文件转录切片时长（秒，默认 60） */
+  file_seg_duration_secs?: number;
+  /** 相邻切片重叠时长（秒，默认 4） */
+  file_seg_overlap_secs?: number;
 }
 
 /** 一个风格包（F1）：用户自定义输出风格的 system prompt。

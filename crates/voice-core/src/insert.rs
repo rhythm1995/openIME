@@ -13,11 +13,12 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use enigo::{Enigo, Keyboard, Settings};
 
-use crate::config::InsertStrategy;
+use crate::config::{AppConfig, InsertStrategy};
 use crate::traits::TextInserter;
 use crate::Error;
 
 /// R7：一次插入的选项（由薄壳从 AppConfig + 前台 app 组装）。
+/// P2 R11：`tsf_enabled` / `tsf_fallback` 由 [`InsertOpts::from_config`] 组装。
 #[derive(Debug, Clone, Default)]
 pub struct InsertOpts {
     pub strategy: InsertStrategy,
@@ -27,6 +28,26 @@ pub struct InsertOpts {
     pub restore_clipboard: bool,
     /// 本次插入时的前台 app 标识（粘贴策略命中判断用）。
     pub frontmost: Option<String>,
+    /// P2 R11：优先走 TSF CommitText（是否已安装由 insert_ex 再查一次 status）。
+    pub tsf_enabled: bool,
+    /// P2 R11：TSF 提交失败回退 P1 R7 粘贴。
+    pub tsf_fallback: bool,
+}
+
+impl InsertOpts {
+    /// P2 R11：唯一业务构造器（`toggle_recording` 与 `qa::insert_last_answer` 都必须走它）。
+    /// `tsf_enabled = windows && cfg.windows_tsf_enabled && !streaming`。
+    pub fn from_config(cfg: &AppConfig, frontmost: Option<String>, streaming: bool) -> Self {
+        let tsf = cfg!(windows) && cfg.windows_tsf_enabled && !streaming;
+        Self {
+            strategy: cfg.insert_strategy,
+            paste_fallback_apps: cfg.paste_fallback_apps.clone(),
+            restore_clipboard: cfg.restore_clipboard,
+            frontmost,
+            tsf_enabled: tsf,
+            tsf_fallback: cfg.windows_tsf_fallback,
+        }
+    }
 }
 
 /// enigo 实现的文本插入器。逐字（Unicode）输入到当前键盘焦点。
@@ -85,6 +106,7 @@ pub fn diff_prefix<'a>(previous: &'a str, current: &'a str) -> &'a str {
 }
 
 /// R7：插入结果四态（Type-then-Paste 兜底）。
+/// P2 R11：增加 `Committed`（TSF CommitText 成功，HUD 与 Typed 一样静默）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsertOutcome {
     /// enigo 模拟按键成功。
@@ -95,6 +117,8 @@ pub enum InsertOutcome {
     CopiedFallback,
     /// 打字与粘贴都失败。
     Failed,
+    /// P2 R11：TSF CommitText 成功。
+    Committed,
 }
 
 /// R7：是否恢复原剪贴板——仅当当前剪贴板内容仍是上次插入的文字时才恢复
@@ -325,5 +349,35 @@ mod tests {
         assert!(!matches_paste_fallback(Some("mstsc.exe"), &[]));
         assert!(!matches_paste_fallback(None, &["mstsc".into()]));
         assert!(!matches_paste_fallback(Some("mstsc.exe"), &["".into()]));
+    }
+
+    // ── P2 R11：InsertOpts::from_config ──
+
+    #[test]
+    fn from_config_mirrors_cfg_and_frontmost() {
+        let mut cfg = AppConfig::default();
+        cfg.insert_strategy = InsertStrategy::Paste;
+        cfg.paste_fallback_apps = vec!["mstsc".into()];
+        cfg.restore_clipboard = false;
+        cfg.windows_tsf_enabled = true;
+        cfg.windows_tsf_fallback = true;
+        let opts = InsertOpts::from_config(&cfg, Some("com.apple.notes".into()), false);
+        assert_eq!(opts.strategy, InsertStrategy::Paste);
+        assert_eq!(opts.paste_fallback_apps, vec!["mstsc".to_string()]);
+        assert!(!opts.restore_clipboard);
+        assert_eq!(opts.frontmost.as_deref(), Some("com.apple.notes"));
+        assert_eq!(opts.tsf_fallback, true);
+    }
+
+    #[test]
+    fn from_config_tsf_disabled_on_non_windows_and_streaming() {
+        // A11.8b：非 Windows 平台 tsf_enabled 恒 false；streaming=true 也 false。
+        let cfg = AppConfig::default();
+        assert!(!InsertOpts::from_config(&cfg, None, false).tsf_enabled);
+        assert!(!InsertOpts::from_config(&cfg, None, true).tsf_enabled);
+        // Default 漏填 = 静默降级。
+        let d = InsertOpts::default();
+        assert!(!d.tsf_enabled);
+        assert!(!d.tsf_fallback);
     }
 }

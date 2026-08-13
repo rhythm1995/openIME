@@ -6,6 +6,12 @@ use super::focus;
 /// Fn 键监听：Windows 不实现（P1 用全局快捷键）。
 pub fn install_fn_monitor(_on_edge: fn(pressed: bool)) {}
 
+/// R9：Fn 吞键下发——macOS 专属，Windows 无 Fn tap。
+pub fn set_fn_tap_consume(_consume: bool) {}
+
+/// R9：Fn 短按补发——macOS 专属，Windows 无 Fn tap。
+pub fn schedule_repost_fn() {}
+
 pub fn is_fn_registered() -> bool {
     false
 }

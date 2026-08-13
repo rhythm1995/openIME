@@ -39,6 +39,14 @@ const defaultConfig = {
   insert_strategy: "auto",
   paste_fallback_apps: [],
   restore_clipboard: true,
+  // P2 新字段（PR0 默认值）。
+  short_press_ms: 300,
+  fn_repost_enabled: true,
+  fn_repost_tis_fallback: false,
+  windows_tsf_enabled: true,
+  windows_tsf_fallback: true,
+  file_seg_duration_secs: 60,
+  file_seg_overlap_secs: 4,
 };
 
 function mockInvoke(map: Record<string, unknown>) {

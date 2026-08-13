@@ -30,6 +30,9 @@ import { ipc, permissionLabelKey, type PermissionKind, type PermissionStatus } f
 // 默认本地 ASR id（与 voice-core asr_catalog 对齐；未安装时不算「使用中」）。
 const DEFAULT_LOCAL_ASR = "sensevoice";
 
+// R9：「Hold 下短按 Fn 补发 🌐」仅 macOS 渲染（非 macOS 隐藏，不灰字占位）。
+const IS_MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+
 function fmtSize(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -91,6 +94,7 @@ export default function Settings() {
   // D3 文件转录
   const [transcribing, setTranscribing] = useState(false);
   const [transcribeResult, setTranscribeResult] = useState<TranscribeResult | null>(null);
+  const [transcribeProgress, setTranscribeProgress] = useState<{ done_segs: number; total_segs: number } | null>(null);
   const [newStyleName, setNewStyleName] = useState("");
   const [newStylePrompt, setNewStylePrompt] = useState("");
 
@@ -173,6 +177,11 @@ export default function Settings() {
     listen<boolean>("fn://edge", (e) => {
       setFnCount((c) => (e.payload ? c + 1 : c));
       setFnState(e.payload ? "down" : "idle");
+    }).then((u) => unlisteners.push(u));
+
+    // 文件转录进度（R12）。
+    listen<{ done_segs: number; total_segs: number }>("transcribe://progress", (e) => {
+      setTranscribeProgress(e.payload);
     }).then((u) => unlisteners.push(u));
 
     // 录音状态变化：只更新录音指示灯，不再直接写测试框文本。
@@ -1402,6 +1411,37 @@ export default function Settings() {
             </select>
           </div>
           <div style={{ marginTop: 10 }}>
+            <label className="field-label">{t("settings.hotkey.shortPressLabel")}</label>
+            <input
+              type="number"
+              min={100}
+              max={800}
+              value={config.short_press_ms ?? 300}
+              onChange={(e) =>
+                setConfig({ ...config, short_press_ms: Number(e.target.value) })
+              }
+            />
+            <span className="field-hint">{t("settings.hotkey.shortPressHint")}</span>
+          </div>
+          {IS_MAC && (
+            <div className="set-row" style={{ marginTop: 12 }}>
+              <div>
+                <div className="set-name">{t("settings.hotkey.fnRepostName")}</div>
+                <div className="set-desc">{t("settings.hotkey.fnRepostDesc")}</div>
+              </div>
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  checked={config.fn_repost_enabled ?? true}
+                  onChange={(e) =>
+                    setConfig({ ...config, fn_repost_enabled: e.target.checked })
+                  }
+                />
+                <span className="slider" />
+              </label>
+            </div>
+          )}
+          <div style={{ marginTop: 10 }}>
             <label className="field-label">{t("settings.hotkey.styleSwitchLabel")}</label>
             <input
               value={config.style_switch_hotkey ?? ""}
@@ -1551,30 +1591,73 @@ export default function Settings() {
       {/* D3 文件转录 */}
       <div className="card">
         <h2 className="card-title">{t("settings.transcribe.title")}</h2>
-        <button
-          className="btn"
-          disabled={transcribing}
-          onClick={async () => {
-            const selected = await open({
-              multiple: false,
-              filters: [{ name: t("settings.transcribe.audioFilter"), extensions: ["mp3", "wav", "flac", "ogg", "m4a"] }],
-            });
-            const path = typeof selected === "string" ? selected : null;
-            if (!path) return;
-            setTranscribing(true);
-            setTranscribeResult(null);
-            try {
-              const r = await ipc.transcribeFile(path);
-              setTranscribeResult(r);
-            } catch (e) {
-              alert(t("settings.transcribe.failed", { error: String(e) }));
-            } finally {
-              setTranscribing(false);
-            }
-          }}
-        >
-          {transcribing ? t("settings.transcribe.transcribing") : t("settings.transcribe.selectFile")}
-        </button>
+        <div className="field" style={{ display: "flex", gap: 12, marginTop: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label className="field-label">{t("settings.transcribe.segDurationLabel")}</label>
+            <input
+              type="number"
+              min={10}
+              max={180}
+              value={config.file_seg_duration_secs ?? 60}
+              onChange={(e) =>
+                setConfig({ ...config, file_seg_duration_secs: Number(e.target.value) })
+              }
+            />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label className="field-label">{t("settings.transcribe.segOverlapLabel")}</label>
+            <input
+              type="number"
+              min={1}
+              max={30}
+              value={config.file_seg_overlap_secs ?? 4}
+              onChange={(e) =>
+                setConfig({ ...config, file_seg_overlap_secs: Number(e.target.value) })
+              }
+            />
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button
+            className="btn"
+            disabled={transcribing}
+            onClick={async () => {
+              const selected = await open({
+                multiple: false,
+                filters: [{ name: t("settings.transcribe.audioFilter"), extensions: ["mp3", "wav", "flac", "ogg", "m4a"] }],
+              });
+              const path = typeof selected === "string" ? selected : null;
+              if (!path) return;
+              setTranscribing(true);
+              setTranscribeResult(null);
+              setTranscribeProgress(null);
+              try {
+                const r = await ipc.transcribeFile(path);
+                setTranscribeResult(r);
+              } catch (e) {
+                alert(t("settings.transcribe.failed", { error: String(e) }));
+              } finally {
+                setTranscribing(false);
+                setTranscribeProgress(null);
+              }
+            }}
+          >
+            {transcribing ? t("settings.transcribe.transcribing") : t("settings.transcribe.selectFile")}
+          </button>
+          {transcribing && (
+            <button className="btn btn-ghost" onClick={() => ipc.cancelTranscribe()}>
+              {t("settings.transcribe.cancel")}
+            </button>
+          )}
+        </div>
+        {transcribing && transcribeProgress && (
+          <div className="field-hint" style={{ marginTop: 8 }}>
+            {t("settings.transcribe.progress", {
+              done: transcribeProgress.done_segs,
+              total: transcribeProgress.total_segs,
+            })}
+          </div>
+        )}
         {transcribeResult && (
           <>
             <textarea

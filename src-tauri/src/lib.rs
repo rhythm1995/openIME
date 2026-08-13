@@ -3,13 +3,15 @@
 
 mod commands;
 mod credentials;
+mod fn_policy;
 mod insert_fallback;
 mod logging;
 mod platform;
 mod qa;
 mod state;
+mod windows_ime;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,6 +31,8 @@ static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 /// 默认快捷键（配置缺失/解析失败时兜底）。
 const DEFAULT_HOTKEY: &str = "Alt+Shift+D";
+/// R9：按下防抖窗口（滤 CGEventTap + NSEvent 双监听漏网的重复 down）。
+const FN_PRESS_DEBOUNCE_MS: u64 = 50;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -297,6 +301,7 @@ pub fn run() {
             commands::delete_style_pack,
             commands::get_selection,
             commands::transcribe_file,
+            commands::cancel_transcribe,
             commands::export_diary,
             commands::frontend_log,
             commands::set_launch_at_login,
@@ -714,6 +719,16 @@ fn single_instance_check(
 
 // ──────────────── 快捷键注册中心 ────────────────
 
+/// R9：把「是否吞 Fn 键」下发到 macOS tap（hotkey==Fn && Hold 才吞）。
+/// 每次 `save_app_config` 写完 config 后以及 `apply_hotkey` 里调用。
+pub(crate) fn store_fn_tap_consume(cfg: &voice_core::AppConfig) {
+    let consume = fn_policy::fn_tap_can_consume(
+        &cfg.hotkey,
+        cfg.hotkey_mode == voice_core::HotkeyMode::Hold,
+    );
+    crate::platform::current::fn_key::set_fn_tap_consume(consume);
+}
+
 /// PR4 收口：`unregister_all` 后注册 录音 / 风格循环 / 翻译 / QA。
 /// 任何 hotkey 字段变化都调用本函数重新注册（save_app_config 与启动都走这里）。
 fn apply_hotkey(app: &tauri::AppHandle, cfg: &voice_core::AppConfig) {
@@ -737,6 +752,9 @@ fn apply_hotkey(app: &tauri::AppHandle, cfg: &voice_core::AppConfig) {
             }
         }
     }
+    // R9：下发「是否吞 Fn 键」（hotkey==Fn && Hold 才吞）。
+    store_fn_tap_consume(cfg);
+
     // 可选快捷键：风格循环 / 翻译 / QA（P1 仅 Toggle）。
     for (name, hk) in [
         ("风格包切换", cfg.style_switch_hotkey.as_deref()),
@@ -874,7 +892,9 @@ fn parse_code(p: &str) -> Option<Code> {
 }
 
 /// Fn 键边沿回调（NSEvent monitor 线程上下文）。
-/// 始终向前端推送事件（供测试模块显示）；按下 → 开始录音（防抖），松开 → 停止录音。
+///
+/// R9：Hold+Fn delay-start——按下只 `ArmHoldTimer`，`short_press_ms` 到期仍按住才开录；
+/// 提前松开只 `RepostOnly`（PR3 补发 🌐），**不进** pipeline。Toggle 松开不再停（KD-2）。
 fn on_fn_edge(pressed: bool) {
     log_info!("Fn 键{}", if pressed { "按下" } else { "抬起" });
 
@@ -886,49 +906,114 @@ fn on_fn_edge(pressed: bool) {
         return;
     };
 
-    // Fn 释放的 300ms 尾部延时与按下的"继续说" отмены共用一个代数；分别声明成两个静态会导致不共享。
+    // 代数：HOLD_GEN 取消未到期的 delay-start；STOP_GEN 取消 300ms 尾音待停。
+    static HOLD_GEN: AtomicU64 = AtomicU64::new(0);
     static STOP_GEN: AtomicU64 = AtomicU64::new(0);
+    static FN_DOWN_MS: AtomicU64 = AtomicU64::new(0);
+    static LAST_PRESS_MS: AtomicU64 = AtomicU64::new(0);
+    static THIS_PRESS_STARTED: AtomicBool = AtomicBool::new(false);
+    static FN_DOWN: AtomicBool = AtomicBool::new(false);
+
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let state = app.state::<AppState>();
+    let Some(cfg) = state.config.try_read().ok().map(|c| c.clone()) else {
+        return;
+    };
+    let hold = cfg.hotkey_mode == voice_core::HotkeyMode::Hold;
+    let is_fn_hotkey = cfg.hotkey.trim().eq_ignore_ascii_case("fn");
+    let already_recording = state.recording_guard.load(Ordering::SeqCst);
+
     if pressed {
-        // 松开的尾部延时如果还在 sleep，说明用户想继续说 —— 取消该次待停。
+        // 先 debounce：重复 down（双监听漏网 / 测试注入）不得 HOLD_GEN+=1，以免取消已武装的计时器。
+        let last = LAST_PRESS_MS.load(Ordering::SeqCst);
+        if now_ms.saturating_sub(last) < FN_PRESS_DEBOUNCE_MS {
+            return;
+        }
+        LAST_PRESS_MS.store(now_ms, Ordering::SeqCst);
+        FN_DOWN_MS.store(now_ms, Ordering::SeqCst);
+        FN_DOWN.store(true, Ordering::SeqCst);
+        THIS_PRESS_STARTED.store(false, Ordering::SeqCst);
         STOP_GEN.fetch_add(1, Ordering::SeqCst);
-        // 300ms 防抖。
-        static LAST_TRIGGER_MS: AtomicU64 = AtomicU64::new(0);
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let last = LAST_TRIGGER_MS.load(Ordering::SeqCst);
-        if now_ms.saturating_sub(last) < 300 {
-            return;
-        }
-        LAST_TRIGGER_MS.store(now_ms, Ordering::SeqCst);
-        // A1 Hold（按住说话）模式：已在录音时，press 不重复触发（只开始，不切换停）。
-        let hold = app
-            .state::<AppState>()
-            .config
-            .try_read()
-            .map(|c| c.hotkey_mode == voice_core::HotkeyMode::Hold)
-            .unwrap_or(false);
-        if hold && *app.state::<AppState>().recording.blocking_read() {
-            return;
-        }
-        // 与全局录音快捷键同一条入口（QA 窗可见时走 QA 录音）。
-        on_record_hotkey(app);
-    } else {
-        // 松开：延后 300ms 再停，保留一点尾音，避免用户刚说完的最后一个字被切掉。
-        // 若期间用户又按下（想继续说），则该次待停被按下分支的 STOP_GEN 累加作废。
-        let gen = STOP_GEN.fetch_add(1, Ordering::SeqCst) + 1;
-        let state = app.state::<AppState>().clone();
-        let app_for_processing = app.clone();
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            // 期间若已再次按下，gen 已过期，不再停。
-            if STOP_GEN.load(Ordering::SeqCst) != gen {
-                return;
+        HOLD_GEN.fetch_add(1, Ordering::SeqCst);
+
+        let ctx = fn_policy::FnEdgeContext {
+            pressed: true,
+            hold,
+            already_recording,
+            this_press_started_recording: false,
+            duration_ms: None,
+            is_fn_hotkey,
+            fn_repost_enabled: cfg.fn_repost_enabled,
+        };
+        match fn_policy::classify_fn_edge(&ctx) {
+            fn_policy::FnEdgeAction::IgnorePress => {
+                log_info!("fn_edge: IgnorePress");
             }
-            let _ = app_for_processing.emit("recording://processing", "正在识别…");
-            state.request_stop();
-        });
+            fn_policy::FnEdgeAction::ArmHoldTimer => {
+                let gen = HOLD_GEN.load(Ordering::SeqCst);
+                let short_press_ms = cfg.short_press_ms as u64;
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(short_press_ms)).await;
+                    // 期间已松开（HOLD_GEN 已累加）或 Fn 已抬起 → 不 Start。
+                    if HOLD_GEN.load(Ordering::SeqCst) != gen {
+                        return;
+                    }
+                    if !FN_DOWN.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    THIS_PRESS_STARTED.store(true, Ordering::SeqCst);
+                    on_record_hotkey(&app);
+                });
+            }
+            fn_policy::FnEdgeAction::StartRecord | fn_policy::FnEdgeAction::ToggleStop => {
+                on_record_hotkey(app);
+            }
+            _ => {}
+        }
+    } else {
+        FN_DOWN.store(false, Ordering::SeqCst);
+        // 取消未到期的 delay-start 计时器。
+        HOLD_GEN.fetch_add(1, Ordering::SeqCst);
+        let dur = now_ms.saturating_sub(FN_DOWN_MS.load(Ordering::SeqCst));
+        let own = THIS_PRESS_STARTED.load(Ordering::SeqCst);
+
+        let ctx = fn_policy::FnEdgeContext {
+            pressed: false,
+            hold,
+            already_recording,
+            this_press_started_recording: own,
+            duration_ms: Some(dur),
+            is_fn_hotkey,
+            fn_repost_enabled: cfg.fn_repost_enabled,
+        };
+        match fn_policy::classify_fn_edge(&ctx) {
+            fn_policy::FnEdgeAction::IgnoreRelease => {}
+            fn_policy::FnEdgeAction::RepostOnly => {
+                log_info!("fn_edge: RepostOnly → 补发 🌐");
+                crate::platform::current::fn_key::schedule_repost_fn();
+                THIS_PRESS_STARTED.store(false, Ordering::SeqCst);
+            }
+            fn_policy::FnEdgeAction::StopAfterTail => {
+                let gen = STOP_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+                let state = state.clone();
+                let app_for_processing = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    if STOP_GEN.load(Ordering::SeqCst) != gen {
+                        return;
+                    }
+                    let _ = app_for_processing.emit("recording://processing", "正在识别…");
+                    state.request_stop();
+                });
+                THIS_PRESS_STARTED.store(false, Ordering::SeqCst);
+            }
+            _ => {}
+        }
     }
 }
 

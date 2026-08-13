@@ -92,6 +92,7 @@ export const ipc = {
   // D3 文件转录
   transcribeFile: (path: string) =>
     invoke<TranscribeResult>("transcribe_file", { path }),
+  cancelTranscribe: () => invoke<void>("cancel_transcribe"),
   importHotwordsCsv: (content: string) =>
     invoke<HotwordImportResult>("import_hotwords_csv", { content }),
   // R6 划词问答

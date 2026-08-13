@@ -168,7 +168,11 @@
       "translateHint": "Speak in the source language; the target language appears at the caret.",
       "qaLabel": "Selection QA hotkey (R6, optional)",
       "qaPh": "e.g. Cmd+Shift+; (empty = off)",
-      "qaHint": "Select text, press the key: a QA panel opens, ask by voice, streamed answer."
+      "qaHint": "Select text, press the key: a QA panel opens, ask by voice, streamed answer.",
+      "shortPressLabel": "Short-press threshold (ms)",
+      "shortPressHint": "In Hold mode, recording starts only after Fn is held longer than this; releasing earlier re-posts 🌐 (100–800, default 300)",
+      "fnRepostName": "Re-post 🌐 on short Fn press",
+      "fnRepostDesc": "On Hold + Fn tap (below threshold), re-post the 🌐 key so the system performs its original action (e.g. switch input source). macOS only."
     },
     "transcribe": {
       "title": "File transcription",
@@ -176,7 +180,12 @@
       "failed": "Transcription failed: {{error}}",
       "transcribing": "Transcribing…",
       "selectFile": "Select audio file to transcribe",
-      "exportSrt": "Export SRT subtitles"
+      "exportSrt": "Export SRT subtitles",
+      "segDurationLabel": "Segment duration (s)",
+      "segOverlapLabel": "Segment overlap (s)",
+      "progress": "Progress: {{done}}/{{total}} segments",
+      "cancel": "Cancel transcription",
+      "cancelled": "Transcription cancelled"
     },
     "appBehavior": {
       "title": "App behavior",

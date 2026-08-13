@@ -266,6 +266,33 @@ pub struct AppConfig {
     /// 粘贴后 750ms 恢复原剪贴板（内容仍相等才写回）。
     #[serde(default = "default_true")]
     pub restore_clipboard: bool,
+
+    // ── P2：R9 短按补发 ──
+    /// Fn 短按阈值（ms）：Hold+Fn 按住超过该时长才开录；提前松开只补发 🌐。
+    #[serde(default = "default_short_press_ms")]
+    pub short_press_ms: u32,
+    /// Hold+Fn 短按补发 🌐（Fn/Globe）原按键。默认开。
+    #[serde(default = "default_true")]
+    pub fn_repost_enabled: bool,
+    /// HID 补发后若前台输入源未变，TIS 切下一输入源（默认关）。
+    #[serde(default)]
+    pub fn_repost_tis_fallback: bool,
+
+    // ── P2：R11 Windows TSF ──
+    /// Windows 优先用 TSF CommitText 上屏（未安装则静默回退）。
+    #[serde(default = "default_true")]
+    pub windows_tsf_enabled: bool,
+    /// TSF 提交失败时回退 P1 R7 粘贴。
+    #[serde(default = "default_true")]
+    pub windows_tsf_fallback: bool,
+
+    // ── P2：R12 长音频分段 ──
+    /// 文件转录切片时长（秒）。
+    #[serde(default = "default_file_seg_duration_secs")]
+    pub file_seg_duration_secs: u32,
+    /// 相邻切片重叠时长（秒），须 < duration 且 >= 1。
+    #[serde(default = "default_file_seg_overlap_secs")]
+    pub file_seg_overlap_secs: u32,
 }
 
 fn default_local_mode() -> String {
@@ -291,6 +318,15 @@ fn default_translate_target_lang() -> String {
 }
 fn default_true() -> bool {
     true
+}
+fn default_short_press_ms() -> u32 {
+    300
+}
+fn default_file_seg_duration_secs() -> u32 {
+    60
+}
+fn default_file_seg_overlap_secs() -> u32 {
+    4
 }
 
 /// 默认本地润色模型（Qwen2.5-1.5B-Instruct GGUF Q4_K_M）。
@@ -339,6 +375,13 @@ impl Default for AppConfig {
             insert_strategy: InsertStrategy::Auto,
             paste_fallback_apps: Vec::new(),
             restore_clipboard: true,
+            short_press_ms: 300,
+            fn_repost_enabled: true,
+            fn_repost_tis_fallback: false,
+            windows_tsf_enabled: true,
+            windows_tsf_fallback: true,
+            file_seg_duration_secs: 60,
+            file_seg_overlap_secs: 4,
         }
     }
 }
@@ -393,6 +436,38 @@ impl AppConfig {
                 p.language = Some(lang);
             }
         }
+    }
+
+    /// P2：保存期校验 P2 新增字段的范围（serde 之外的强约束，失败整单不落盘）。
+    /// 范围与 p2-design「配置模型」一致：
+    /// - `short_press_ms ∈ [100, 800]`
+    /// - `file_seg_duration_secs ∈ [10, 180]`
+    /// - `file_seg_overlap_secs ∈ [1, 30]` 且 `< file_seg_duration_secs`
+    pub fn validate_p2_fields(&self) -> crate::Result<()> {
+        if !(100..=800).contains(&self.short_press_ms) {
+            return Err(Error::Config(format!(
+                "短按阈值须在 100..=800 之间，当前 {}（默认 300）",
+                self.short_press_ms
+            )));
+        }
+        if !(10..=180).contains(&self.file_seg_duration_secs) {
+            return Err(Error::Config(format!(
+                "分段时长须在 10..=180 之间，当前 {}（默认 60）",
+                self.file_seg_duration_secs
+            )));
+        }
+        if !(1..=30).contains(&self.file_seg_overlap_secs) {
+            return Err(Error::Config(format!(
+                "分段重叠须在 1..=30 之间，当前 {}（默认 4）",
+                self.file_seg_overlap_secs
+            )));
+        }
+        if self.file_seg_overlap_secs >= self.file_seg_duration_secs {
+            return Err(Error::Config(
+                "分段参数非法：须 10≤duration≤180、1≤overlap≤30 且 overlap<duration".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -512,5 +587,69 @@ mod tests {
         assert_eq!(c.insert_strategy, InsertStrategy::Auto);
         assert!(c.paste_fallback_apps.is_empty());
         assert!(c.restore_clipboard);
+    }
+
+    #[test]
+    fn p2_fields_have_defaults() {
+        let c = AppConfig::default();
+        assert_eq!(c.short_press_ms, 300);
+        assert!(c.fn_repost_enabled);
+        assert!(!c.fn_repost_tis_fallback);
+        assert!(c.windows_tsf_enabled);
+        assert!(c.windows_tsf_fallback);
+        assert_eq!(c.file_seg_duration_secs, 60);
+        assert_eq!(c.file_seg_overlap_secs, 4);
+    }
+
+    #[test]
+    fn legacy_config_without_p2_fields_deserializes() {
+        // P2 字段缺失的旧 JSON 仍可反序列化（全部 serde default）。
+        let json = r#"{
+            "active_provider": 0,
+            "providers": [],
+            "hotkey": "Fn",
+            "mute_other_audio": false
+        }"#;
+        let c: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.short_press_ms, 300);
+        assert!(c.fn_repost_enabled);
+        assert_eq!(c.file_seg_duration_secs, 60);
+        assert_eq!(c.file_seg_overlap_secs, 4);
+    }
+
+    #[test]
+    fn validate_p2_fields_accepts_default() {
+        assert!(AppConfig::default().validate_p2_fields().is_ok());
+    }
+
+    #[test]
+    fn validate_p2_fields_rejects_out_of_range() {
+        let mut c = AppConfig::default();
+        c.short_press_ms = 50;
+        assert!(c.validate_p2_fields().is_err());
+        c.short_press_ms = 900;
+        assert!(c.validate_p2_fields().is_err());
+
+        let mut c = AppConfig::default();
+        c.file_seg_duration_secs = 5;
+        assert!(c.validate_p2_fields().is_err());
+        c.file_seg_duration_secs = 200;
+        assert!(c.validate_p2_fields().is_err());
+
+        let mut c = AppConfig::default();
+        c.file_seg_overlap_secs = 0;
+        assert!(c.validate_p2_fields().is_err());
+        c.file_seg_overlap_secs = 40;
+        assert!(c.validate_p2_fields().is_err());
+    }
+
+    #[test]
+    fn validate_p2_fields_rejects_overlap_not_less_than_duration() {
+        let mut c = AppConfig::default();
+        c.file_seg_duration_secs = 10;
+        c.file_seg_overlap_secs = 10;
+        assert!(c.validate_p2_fields().is_err());
+        c.file_seg_overlap_secs = 9;
+        assert!(c.validate_p2_fields().is_ok());
     }
 }

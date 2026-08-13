@@ -18,6 +18,10 @@ extern "C" {
     fn openime_hide_window_without_activating(ns_window: *mut c_void);
     fn openime_get_selection() -> *const c_char;
     fn openime_paste_cmd_v() -> i32;
+    // R9：吞键下发 + 补发 🌐（HID flagsChanged）。
+    fn openime_set_fn_tap_consume(consume: bool);
+    fn openime_schedule_repost_fn();
+    fn openime_repost_fn() -> i32;
 }
 
 static mut EDGE_CALLBACK: Option<fn(pressed: bool)> = None;
@@ -124,6 +128,22 @@ pub fn hide_window_without_activating(ns_window: *mut c_void) {
 /// R7：发送 Cmd+V 粘贴和弦（CGEvent）。成功 true。
 pub fn paste_cmd_v() -> bool {
     unsafe { openime_paste_cmd_v() != 0 }
+}
+
+/// R9：下发「是否吞 Fn 键」到 ObjC tap（hotkey==Fn && Hold 才吞）。
+pub fn set_fn_tap_consume(consume: bool) {
+    unsafe { openime_set_fn_tap_consume(consume) };
+}
+
+/// R9：先写 ignore deadline，下一圈 main runloop 再补发一对 flagsChanged。
+pub fn schedule_repost_fn() {
+    unsafe { openime_schedule_repost_fn() };
+}
+
+/// R9：立即补发一对 flagsChanged（供测试/回退路径）。
+#[allow(dead_code)]
+pub fn repost_fn() -> bool {
+    unsafe { openime_repost_fn() != 0 }
 }
 
 extern "C" {
