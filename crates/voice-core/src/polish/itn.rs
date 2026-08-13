@@ -31,7 +31,13 @@ pub fn normalize_itn(s: &str) -> String {
                 i += 1;
             }
             let seg: String = chars[start..i].iter().collect();
-            out.push_str(&seg_to_num(&seg));
+            // 单字非「十」不转：日常「一/二/三 + 量词」多是不定指（一句话、两条鱼），
+            // 转成「1句话」反而不自然。多字段（二十、十五、二零二六、一二三）才转。
+            if seg.chars().count() == 1 && seg != "十" {
+                out.push_str(&seg);
+            } else {
+                out.push_str(&seg_to_num(&seg));
+            }
         } else {
             out.push(chars[i]);
             i += 1;
@@ -115,6 +121,14 @@ mod tests {
     #[test]
     fn no_digit_unchanged() {
         assert_eq!(normalize_itn("你好世界"), "你好世界");
+    }
+
+    #[test]
+    fn single_digit_kept() {
+        // 单字「一/二/三 + 量词」多为不定指，不应转成阿拉伯数字（修「说1句话」bug）。
+        assert_eq!(normalize_itn("说一句话"), "说一句话");
+        assert_eq!(normalize_itn("两条鱼"), "两条鱼");
+        assert_eq!(normalize_itn("有三个人"), "有三个人");
     }
 
     #[test]
