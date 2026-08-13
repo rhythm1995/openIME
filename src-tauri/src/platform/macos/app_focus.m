@@ -216,3 +216,27 @@ const char* openime_get_selection(void) {
     });
     return out;
 }
+
+// R7：发送 Cmd+V 粘贴和弦（CGEvent：kVK_ANSI_V=9 + Command）。成功 1 / 失败 0。
+// 与 enigo 文本输入同需辅助功能权限；CGEvent 保证是「物理键 + Command」而非 insertText。
+int openime_paste_cmd_v(void) {
+    CGEventSourceRef src = CGEventSourceCreate(kCGEventSourceStateCombinedSessionState);
+    if (!src) return 0;
+    CGKeyCode vKey = (CGKeyCode)9; // kVK_ANSI_V
+    CGEventRef down = CGEventCreateKeyboardEvent(src, vKey, true);
+    CGEventRef up = CGEventCreateKeyboardEvent(src, vKey, false);
+    if (!down || !up) {
+        if (down) CFRelease(down);
+        if (up) CFRelease(up);
+        CFRelease(src);
+        return 0;
+    }
+    CGEventSetFlags(down, kCGEventFlagMaskCommand);
+    CGEventSetFlags(up, kCGEventFlagMaskCommand);
+    CGEventPost(kCGHIDEventTap, down);
+    CGEventPost(kCGHIDEventTap, up);
+    CFRelease(down);
+    CFRelease(up);
+    CFRelease(src);
+    return 1;
+}

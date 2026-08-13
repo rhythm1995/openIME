@@ -142,6 +142,19 @@ pub trait AsrProvider: Send + Sync {
 #[async_trait]
 pub trait TextInserter: Send + Sync {
     async fn insert(&self, text: &str) -> Result<()>;
+
+    /// R7：四态插入（Type-then-Paste）。薄壳 `CompositeInserter` 覆盖本方法做完整
+    /// 状态机；默认实现退回 [`Self::insert`]：成功 Typed，失败 Failed。
+    async fn insert_ex(
+        &self,
+        text: &str,
+        _opts: &crate::insert::InsertOpts,
+    ) -> crate::insert::InsertOutcome {
+        match self.insert(text).await {
+            Ok(_) => crate::insert::InsertOutcome::Typed,
+            Err(_) => crate::insert::InsertOutcome::Failed,
+        }
+    }
 }
 
 // ───────────────────────── 文本润色（二期） ─────────────────────────
@@ -165,11 +178,14 @@ pub struct PolishRequest {
     pub text: String,
     pub mode: PolishMode,
     /// 风格包 system_prompt（F1，Heavy 模式生效；None = 默认 Heavy prompt）。
+    /// R5：前缀角色直连时也用它携带角色指令。
     pub style_prompt: Option<String>,
     /// 热词：提示模型保留写法。
     pub hotwords: Vec<String>,
     /// 超时；超时后 router 可回退原文/云端。
     pub timeout: std::time::Duration,
+    /// P1：max_tokens 按请求传入（润色默认 256，角色 1024）。None = 256。
+    pub max_tokens: Option<u32>,
 }
 
 /// 润色结果。

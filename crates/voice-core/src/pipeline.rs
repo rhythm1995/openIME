@@ -7,6 +7,10 @@
 //! 3. 主循环：audio.next_frame → session.feed；
 //! 4. 录音停止（audio 返回 None 或外部 cancel）→ session.finish → 等 reader 结束。
 //!
+//! P1：按 [`SessionIntent`] 分流（听写 / 翻译 / QA 录音）；听写 L0 后做前缀角色检测
+//! （R5），命中直连 cloud/local，未命中走 [`crate::polish::PolishRouter`]。
+//! 插入走四态 `insert_ex`（R7），`InsertOpts` 由薄壳组装传入。
+//!
 //! 完全用 mock 可测：FakeAudioSource + FakeAsrProvider + RecordingInserter + InMemoryStore。
 
 use std::sync::Arc;
@@ -14,19 +18,61 @@ use std::sync::Arc;
 use futures::StreamExt;
 use uuid::Uuid;
 
+use crate::insert::InsertOpts;
+use crate::polish::{detect_prefix_role, lang_display_name, LlmClient, TranslateRequest};
+use crate::store::RoleKind;
 use crate::traits::{
     AsrProvider, AudioSource, HistoryStore, PolishMode, PolishRequest, SessionSummary,
     TextInserter, TextPolishProvider, TranscriptKind, UtteranceRecord,
 };
-use crate::Error;
+use crate::{Error, InsertOutcome};
 
 /// pipeline 的依赖。全部以 Arc<dyn> 注入，便于 mock 与替换。
 pub struct PipelineDeps {
     pub provider: Arc<dyn AsrProvider>,
     pub inserter: Arc<dyn TextInserter>,
     pub store: Arc<dyn HistoryStore>,
-    /// 二期润色；None 则直通原文。
+    /// 无前缀 Light/Heavy 润色路由；None 则直通原文。
     pub polish: Option<Arc<dyn TextPolishProvider>>,
+    /// P1：云端 LLM（翻译 / 前缀角色 / QA）。与 polish 路由分开注入。
+    pub cloud: Option<Arc<dyn LlmClient>>,
+    /// P1：本地 GGUF（仅 `provider=local` 的前缀角色直连）。
+    pub local: Option<Arc<dyn TextPolishProvider>>,
+}
+
+/// P1：一次录音会话的意图（快捷键来源）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SessionIntent {
+    /// 听写（录音键）：L0 → 前缀角色 → 润色路由。
+    #[default]
+    Dictate,
+    /// 翻译（翻译键）：说源语言，出目标语言。不走前缀 / 风格包 / Router。
+    Translate,
+    /// QA 录音（QA 窗可见时按录音键）：只转写不插入。
+    Qa,
+}
+
+/// 润色/处理阶段的可展示警告（薄壳据此发 HUD 文案）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolishWarn {
+    TranslateFailed,
+    RoleLlmFailed,
+    RoleNoBackend,
+}
+
+/// 单条 final 的处理结果：上屏文本 + 警告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolishOutcome {
+    pub text: String,
+    pub warning: Option<PolishWarn>,
+}
+
+/// `insert_finals_with_polish` 的单条结果：文本 + 插入四态 + 警告。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinalInsertResult {
+    pub text: String,
+    pub outcome: InsertOutcome,
+    pub warning: Option<PolishWarn>,
 }
 
 /// 润色上下文（录音结束插入前使用）。
@@ -38,7 +84,24 @@ pub struct PolishContext {
     pub hotwords: Vec<String>,
     pub timeout_ms: u32,
     /// R2:润色取消标志；`Some` 且被置 true 时，apply_polish 在当前 await 点尽快返回 L0 结果。
-    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// P1：会话意图。
+    pub intent: SessionIntent,
+    /// P1：前缀角色开关（开 → 听写不流式上屏，由薄壳保证）。
+    pub prefix_roles_enabled: bool,
+    /// P1：风格包全表（前缀检测 + 角色 prompt）。
+    pub style_packs: Vec<crate::StylePack>,
+    /// P1：翻译目标语言短码（如 "en"）。
+    pub translate_target_lang: String,
+    /// P1：「先润色再翻译」哨兵合成调用。
+    pub translate_with_polish: bool,
+}
+
+impl PolishContext {
+    /// R4/R5 共用：翻译 / 角色 LLM 超时 = max(polish_timeout_ms, 8000)。
+    pub fn llm_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis((self.timeout_ms.max(8000)).max(100) as u64)
+    }
 }
 
 /// partial 增量回调（UI 用）。一期可忽略返回。
@@ -84,10 +147,18 @@ impl Pipeline {
         cfg: &crate::ProviderConfig,
         meta: SessionMeta,
         on_partial: Option<PartialCallback>,
-        stop_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        stop_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
     ) -> crate::Result<SessionResult> {
         let result = self
-            .record_and_collect(audio, cfg, meta, on_partial, stop_flag, false)
+            .record_and_collect(
+                audio,
+                cfg,
+                meta,
+                on_partial,
+                stop_flag,
+                false,
+                &InsertOpts::default(),
+            )
             .await?;
         self.insert_finals(&result.session_id, &result.utterances)
             .await?;
@@ -98,14 +169,19 @@ impl Pipeline {
     ///
     /// 用于需要先恢复前台焦点（如 macOS 上 overlay 抢焦点）再插入的场景：
     /// 调用方拿到结果后应先激活目标 app，再调 [`Self::insert_finals`]。
+    ///
+    /// `streaming_insert`：true 时 partial/final 经 diff_prefix 增量上屏（C1）；
+    /// chunk 失败（FR-7.10）→ 停止继续逐字，final 时对 diff 粘贴一次。
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_and_collect(
         &self,
         mut audio: Box<dyn AudioSource>,
         cfg: &crate::ProviderConfig,
         meta: SessionMeta,
         on_partial: Option<PartialCallback>,
-        stop_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        stop_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
         streaming_insert: bool,
+        insert_opts: &InsertOpts,
     ) -> crate::Result<SessionResult> {
         let session_id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
@@ -133,12 +209,15 @@ impl Pipeline {
         // C1 streaming_insert=true 时，partial/final 经 diff_prefix 增量上屏（Unicode 安全）。
         let partial_cb = on_partial;
         let inserter = self.deps.inserter.clone();
-        let inserted: std::sync::Arc<std::sync::Mutex<String>> =
-            std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let inserted: Arc<std::sync::Mutex<String>> =
+            Arc::new(std::sync::Mutex::new(String::new()));
         let streaming = streaming_insert;
+        let opts = insert_opts.clone();
         let reader = tokio::spawn(async move {
             let mut finals: Vec<String> = Vec::new();
             let mut deltas = deltas;
+            // R7（FR-7.10）：chunk 失败后停止逐字，记录失败时已上屏的文本，final 时贴一次。
+            let mut broken: Option<String> = None;
             while let Some(item) = deltas.next().await {
                 match item {
                     Ok(d) => match d.kind {
@@ -146,28 +225,54 @@ impl Pipeline {
                             if let Some(cb) = &partial_cb {
                                 cb(&d.text);
                             }
-                            if streaming {
+                            if streaming && broken.is_none() {
                                 let delta = {
-                                    let mut s = inserted.lock().unwrap();
+                                    let s = inserted.lock().unwrap();
                                     let delta = crate::insert::diff_prefix(&s, &d.text).to_string();
-                                    *s = d.text.clone();
                                     delta
                                 };
                                 if !delta.is_empty() {
-                                    let _ = inserter.insert(&delta).await;
+                                    let outcome = inserter.insert_ex(&delta, &opts).await;
+                                    let mut s = inserted.lock().unwrap();
+                                    match outcome {
+                                        InsertOutcome::Typed | InsertOutcome::Pasted => {
+                                            *s = d.text.clone();
+                                        }
+                                        _ => {
+                                            broken = Some(s.clone());
+                                        }
+                                    }
                                 }
                             }
                         }
                         TranscriptKind::Final => {
                             if streaming {
-                                let delta = {
-                                    let mut s = inserted.lock().unwrap();
-                                    let delta = crate::insert::diff_prefix(&s, &d.text).to_string();
-                                    s.clear(); // 句末：下一句从零开始
-                                    delta
-                                };
-                                if !delta.is_empty() {
-                                    let _ = inserter.insert(&delta).await;
+                                match broken.take() {
+                                    Some(before) => {
+                                        // 停止逐字后：对剩余差异粘贴一次。
+                                        let delta =
+                                            crate::insert::diff_prefix(&before, &d.text)
+                                                .to_string();
+                                        if !delta.is_empty() {
+                                            let mut paste_opts = opts.clone();
+                                            paste_opts.strategy =
+                                                crate::config::InsertStrategy::Paste;
+                                            let _ = inserter.insert_ex(&delta, &paste_opts).await;
+                                        }
+                                    }
+                                    None => {
+                                        let delta = {
+                                            let mut s = inserted.lock().unwrap();
+                                            let delta =
+                                                crate::insert::diff_prefix(&s, &d.text)
+                                                    .to_string();
+                                            s.clear(); // 句末：下一句从零开始
+                                            delta
+                                        };
+                                        if !delta.is_empty() {
+                                            let _ = inserter.insert_ex(&delta, &opts).await;
+                                        }
+                                    }
                                 }
                             }
                             finals.push(d.text.clone());
@@ -210,46 +315,64 @@ impl Pipeline {
     ///
     /// 调用方负责：需要在插入前确保目标窗口（前台 App）已获得焦点。
     pub async fn insert_finals(&self, session_id: &str, finals: &[String]) -> crate::Result<()> {
-        self.insert_finals_with_polish(session_id, finals, &PolishContext::default())
-            .await
+        self.insert_finals_with_polish(
+            session_id,
+            finals,
+            &PolishContext::default(),
+            &InsertOpts::default(),
+        )
+        .await
+        .map(|_| ())
     }
 
-    /// 插入前可选润色（二期）。`ctx.enabled=false` 或无 polish 依赖时与 [`insert_finals`] 相同。
+    /// 插入前按意图处理（L0 → 前缀角色 / 翻译 / 润色路由），走四态 `insert_ex`。
+    /// 返回每条 final 的（文本、插入结果、警告）。
     pub async fn insert_finals_with_polish(
         &self,
         session_id: &str,
         finals: &[String],
         ctx: &PolishContext,
-    ) -> crate::Result<()> {
+        insert_opts: &InsertOpts,
+    ) -> crate::Result<Vec<FinalInsertResult>> {
         // ASR 有时会连续推两条相同 final；先去重再润色/上屏，避免「同一句输入两次」。
         let finals = crate::polish::dedupe_consecutive_finals(finals);
         let mut last_inserted = String::new();
+        let mut results = Vec::new();
         for (seq, text) in finals.iter().enumerate() {
             let polished = self.apply_polish(text, ctx).await;
-            if polished.is_empty() {
+            if polished.text.is_empty() {
                 continue;
             }
             // 上屏级再挡一层：连续两条润色结果相同则只插一次。
-            if polished == last_inserted {
+            if polished.text == last_inserted {
                 tracing::debug!("跳过与上一条相同的上屏文本");
                 continue;
             }
-            self.deps.inserter.insert(&polished).await?;
-            last_inserted = polished.clone();
+            let outcome = self
+                .deps
+                .inserter
+                .insert_ex(&polished.text, insert_opts)
+                .await;
+            last_inserted = polished.text.clone();
             self.deps
                 .store
                 .save_utterance(&UtteranceRecord {
                     id: Uuid::new_v4().to_string(),
                     session_id: session_id.to_string(),
                     seq: seq as u32,
-                    // 落库保存实际上屏文本（润色后）。
-                    final_text: polished,
+                    // 落库保存实际上屏文本（处理后）。
+                    final_text: polished.text.clone(),
                     audio_path: None,
                     created_at: chrono::Utc::now(),
                 })
                 .await?;
+            results.push(FinalInsertResult {
+                text: polished.text,
+                outcome,
+                warning: polished.warning,
+            });
         }
-        Ok(())
+        Ok(results)
     }
 
     /// C1：流式模式专用——finals 已在录音期间逐字上屏，只去重+落库，不重复插入。
@@ -277,14 +400,21 @@ impl Pipeline {
         Ok(())
     }
 
-    async fn apply_polish(&self, text: &str, ctx: &PolishContext) -> String {
+    /// 单条文本的意图处理：返回上屏文本与可选警告。
+    async fn apply_polish(&self, text: &str, ctx: &PolishContext) -> PolishOutcome {
         if text.trim().is_empty() {
-            return text.to_string();
+            return PolishOutcome {
+                text: text.to_string(),
+                warning: None,
+            };
         }
         // ── L0 规则层：总是先过一遍（即使总体润色关闭，也做最小清理）；不阻断。
         let l0 = crate::polish::correct_l0(text, &ctx.hotwords);
         if l0.text.trim().is_empty() {
-            return l0.text;
+            return PolishOutcome {
+                text: l0.text,
+                warning: None,
+            };
         }
         tracing::debug!(
             "L0 规则层：had_correction={} truncation={} 原='{}' 纠后='{}'",
@@ -294,27 +424,214 @@ impl Pipeline {
             l0.text
         );
 
+        match ctx.intent {
+            // ── R4 翻译：不走前缀 / 风格包 / Router；失败回退 L0 原文。
+            SessionIntent::Translate => self.apply_translate(&l0.text, ctx).await,
+            // ── 听写：L0 后前缀角色（R5），未命中走润色路由。
+            SessionIntent::Dictate => {
+                if ctx.prefix_roles_enabled {
+                    if let Some((pack, rest)) = detect_prefix_role(&l0.text, &ctx.style_packs) {
+                        return self.apply_prefix_role(pack, &rest, ctx).await;
+                    }
+                }
+                self.apply_routed_polish(&l0.text, ctx).await
+            }
+            // ── QA 录音不进插入路径；防御性 L0 直出。
+            SessionIntent::Qa => PolishOutcome {
+                text: l0.text,
+                warning: None,
+            },
+        }
+    }
+
+    /// R4：翻译（先润色再翻译可选）。失败 → L0 原文 + TranslateFailed（FR-4.3/4.4）。
+    async fn apply_translate(&self, text: &str, ctx: &PolishContext) -> PolishOutcome {
+        let Some(cloud) = &self.deps.cloud else {
+            return PolishOutcome {
+                text: text.to_string(),
+                warning: Some(PolishWarn::TranslateFailed),
+            };
+        };
+        let target = lang_display_name(&ctx.translate_target_lang).to_string();
+        let req = TranslateRequest {
+            text: text.to_string(),
+            target_lang: target,
+            timeout: ctx.llm_timeout(),
+            max_tokens: 1024,
+        };
+        if ctx.translate_with_polish {
+            match cloud.polish_and_translate(req).await {
+                Ok(pt) if !pt.translation.trim().is_empty() => {
+                    tracing::info!("润色+翻译成功：{} 字译文", pt.translation.chars().count());
+                    return PolishOutcome {
+                        text: pt.translation.trim().to_string(),
+                        warning: None,
+                    };
+                }
+                Ok(_) => tracing::warn!("润色+翻译输出无效，回退纯翻译"),
+                Err(e) => tracing::warn!("润色+翻译失败，回退纯翻译：{e}"),
+            }
+            // FR-4.4：解析失败 → 纯 translate_text；再失败 → L0 原文。
+            let pure = TranslateRequest {
+                text: text.to_string(),
+                target_lang: lang_display_name(&ctx.translate_target_lang).to_string(),
+                timeout: ctx.llm_timeout(),
+                max_tokens: 1024,
+            };
+            return match cloud.translate_text(pure).await {
+                Ok(t) if !t.trim().is_empty() => PolishOutcome {
+                    text: t.trim().to_string(),
+                    warning: None,
+                },
+                _ => PolishOutcome {
+                    text: text.to_string(),
+                    warning: Some(PolishWarn::TranslateFailed),
+                },
+            };
+        }
+        match cloud.translate_text(req).await {
+            Ok(t) if !t.trim().is_empty() => PolishOutcome {
+                text: t.trim().to_string(),
+                warning: None,
+            },
+            Err(e) => {
+                tracing::warn!("翻译失败，回退 L0 原文：{e}");
+                PolishOutcome {
+                    text: text.to_string(),
+                    warning: Some(PolishWarn::TranslateFailed),
+                }
+            }
+            Ok(_) => PolishOutcome {
+                text: text.to_string(),
+                warning: Some(PolishWarn::TranslateFailed),
+            },
+        }
+    }
+
+    /// R5：前缀角色——Translate 走翻译，其它按包 provider 直连（禁止 PolishRouter）。
+    /// 失败 → 去前缀原文 + RoleLlmFailed / RoleNoBackend。
+    async fn apply_prefix_role(
+        &self,
+        pack: &crate::StylePack,
+        rest: &str,
+        ctx: &PolishContext,
+    ) -> PolishOutcome {
+        tracing::debug!("前缀角色命中：{}（{}）", pack.name, pack.id);
+        if pack.role_kind == RoleKind::Translate {
+            let Some(cloud) = &self.deps.cloud else {
+                return PolishOutcome {
+                    text: rest.to_string(),
+                    warning: Some(PolishWarn::RoleNoBackend),
+                };
+            };
+            let target = lang_display_name(&ctx.translate_target_lang).to_string();
+            let req = TranslateRequest {
+                text: rest.to_string(),
+                target_lang: target,
+                timeout: ctx.llm_timeout(),
+                max_tokens: 1024,
+            };
+            return match cloud.translate_text(req).await {
+                Ok(t) if !t.trim().is_empty() => PolishOutcome {
+                    text: t.trim().to_string(),
+                    warning: None,
+                },
+                _ => PolishOutcome {
+                    text: rest.to_string(),
+                    warning: Some(PolishWarn::RoleLlmFailed),
+                },
+            };
+        }
+
+        // 普通指令角色：provider=local 走 GGUF，否则云端。
+        let is_local = pack
+            .provider
+            .as_deref()
+            .map(|p| p.trim().eq_ignore_ascii_case("local"))
+            .unwrap_or(false);
+        let req = PolishRequest {
+            text: rest.to_string(),
+            mode: PolishMode::Heavy,
+            style_prompt: Some(pack.system_prompt.clone()),
+            hotwords: ctx.hotwords.clone(),
+            timeout: ctx.llm_timeout(),
+            max_tokens: Some(1024),
+        };
+        // cloud（LlmClient::polish）与 local（TextPolishProvider::polish）分开调用，
+        // 避免 trait 对象间转换。
+        let result = if is_local {
+            match &self.deps.local {
+                Some(local) => local.polish(req).await,
+                None => {
+                    return PolishOutcome {
+                        text: rest.to_string(),
+                        warning: Some(PolishWarn::RoleNoBackend),
+                    }
+                }
+            }
+        } else {
+            match &self.deps.cloud {
+                Some(cloud) => cloud.polish(req).await,
+                None => {
+                    return PolishOutcome {
+                        text: rest.to_string(),
+                        warning: Some(PolishWarn::RoleNoBackend),
+                    }
+                }
+            }
+        };
+        match result {
+            Ok(r) if !r.text.trim().is_empty() => PolishOutcome {
+                text: r.text.trim().to_string(),
+                warning: None,
+            },
+            Ok(_) => PolishOutcome {
+                text: rest.to_string(),
+                warning: Some(PolishWarn::RoleLlmFailed),
+            },
+            Err(e) => {
+                tracing::warn!("角色 LLM 失败，插入去前缀原文：{e}");
+                PolishOutcome {
+                    text: rest.to_string(),
+                    warning: Some(PolishWarn::RoleLlmFailed),
+                }
+            }
+        }
+    }
+
+    /// 无前缀命中时的路由润色（F1 行为）：Off → L0 直出；Light/Heavy → Router + 全局包。
+    async fn apply_routed_polish(&self, text: &str, ctx: &PolishContext) -> PolishOutcome {
         // 若总体润色关闭 / 无 provider / 模式 Off → L0 直出。
         if !ctx.enabled || ctx.mode == PolishMode::Off {
-            return l0.text;
+            return PolishOutcome {
+                text: text.to_string(),
+                warning: None,
+            };
         }
         let Some(polish) = &self.deps.polish else {
-            return l0.text;
+            return PolishOutcome {
+                text: text.to_string(),
+                warning: None,
+            };
         };
 
         // ── L2 gating：≤8 字跳过 LLM（过度纠正 + 延迟不值得；调研 6.3）。
-        if l0.text.trim().chars().count() <= 8 {
+        if text.trim().chars().count() <= 8 {
             tracing::debug!("L2 跳过：≤8 字，L0 直出");
-            return l0.text;
+            return PolishOutcome {
+                text: text.to_string(),
+                warning: None,
+            };
         }
 
         // ── L2 LLM 纯校对（失败→ L0 回退，不阻断上屏）。
         let req = PolishRequest {
-            text: l0.text.clone(),
+            text: text.to_string(),
             mode: ctx.mode,
             style_prompt: ctx.style_prompt.clone(),
             hotwords: ctx.hotwords.clone(),
             timeout: std::time::Duration::from_millis(ctx.timeout_ms.max(100) as u64),
+            max_tokens: None,
         };
         // R2:支持 ESC 取消——润色进行中若 cancel 标志被置 true，尽快返回 L0 结果。
         let polish_fut = polish.polish(req);
@@ -331,9 +648,12 @@ impl Pipeline {
         match result {
             Some(Ok(r)) => {
                 if r.text.trim().is_empty() {
-                    l0.text
+                    PolishOutcome {
+                        text: text.to_string(),
+                        warning: None,
+                    }
                 } else {
-                    let cleaned = crate::polish::sanitize_polish_output(&l0.text, &r.text);
+                    let cleaned = crate::polish::sanitize_polish_output(text, &r.text);
                     if cleaned != r.text.trim() {
                         tracing::info!(
                             "润色输出已清洗（防重复）：provider={} raw_len={} clean_len={}",
@@ -342,20 +662,29 @@ impl Pipeline {
                             cleaned.len()
                         );
                     }
-                    cleaned
+                    PolishOutcome {
+                        text: cleaned,
+                        warning: None,
+                    }
                 }
             }
             Some(Err(e)) => {
                 tracing::warn!("润色失败，使用 L0 结果：{e}");
-                l0.text
+                PolishOutcome {
+                    text: text.to_string(),
+                    warning: None,
+                }
             }
-            None => l0.text,
+            None => PolishOutcome {
+                text: text.to_string(),
+                warning: None,
+            },
         }
     }
 }
 
 /// R2:轮询取消标志（30ms），用于 `tokio::select!` 与润色 future 竞速。
-async fn wait_cancel(flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+async fn wait_cancel(flag: Arc<std::sync::atomic::AtomicBool>) {
     use std::sync::atomic::Ordering;
     loop {
         if flag.load(Ordering::SeqCst) {
@@ -368,9 +697,9 @@ async fn wait_cancel(flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::InsertStrategy;
     use crate::traits::{
-        AsrSession, AudioFormat, AudioFrame, PolishRequest, PolishResponse, TextPolishProvider,
-        TranscriptDelta,
+        AsrSession, AudioFormat, AudioFrame, PolishResponse, TranscriptDelta,
     };
     use crate::ProviderConfig;
     use async_trait::async_trait;
@@ -500,6 +829,8 @@ mod tests {
             inserter: ins.clone(),
             store: store.clone(),
             polish: None,
+            cloud: None,
+            local: None,
         };
         (deps, ins, store)
     }
@@ -588,6 +919,8 @@ mod tests {
             inserter: ins.clone(),
             store: store.clone(),
             polish: None,
+            cloud: None,
+            local: None,
         });
 
         let cfg = ProviderConfig {
@@ -662,6 +995,8 @@ mod tests {
             inserter: ins.clone(),
             store: store.clone(),
             polish: Some(polish),
+            cloud: None,
+            local: None,
         };
         (deps, ins, store)
     }
@@ -674,6 +1009,18 @@ mod tests {
             hotwords: vec![],
             timeout_ms: 1000,
             cancel: None,
+            intent: SessionIntent::Dictate,
+            prefix_roles_enabled: false,
+            style_packs: vec![],
+            translate_target_lang: "en".into(),
+            translate_with_polish: false,
+        }
+    }
+
+    fn opts_default() -> InsertOpts {
+        InsertOpts {
+            strategy: InsertStrategy::Auto,
+            ..Default::default()
         }
     }
 
@@ -686,9 +1033,14 @@ mod tests {
             enabled: false,
             ..Default::default()
         };
-        pipe.insert_finals_with_polish("s1", &["嗯那个今天天气不错".into()], &ctx)
-            .await
-            .unwrap();
+        pipe.insert_finals_with_polish(
+            "s1",
+            &["嗯那个今天天气不错".into()],
+            &ctx,
+            &opts_default(),
+        )
+        .await
+        .unwrap();
         let out = ins.out.lock().unwrap().clone();
         assert!(
             out.contains("今天天气不错"),
@@ -704,9 +1056,14 @@ mod tests {
         let calls = mock.calls.clone();
         let (deps, ins, _store) = deps_with_polish(mock);
         let pipe = Pipeline::new(deps);
-        pipe.insert_finals_with_polish("s1", &["你好".into()], &ctx_enabled(PolishMode::Light))
-            .await
-            .unwrap();
+        pipe.insert_finals_with_polish(
+            "s1",
+            &["你好".into()],
+            &ctx_enabled(PolishMode::Light),
+            &opts_default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(*ins.out.lock().unwrap(), "你好");
         assert_eq!(calls.load(Ordering::SeqCst), 0, "短句(≤8字)不应调用 L2");
     }
@@ -724,6 +1081,7 @@ mod tests {
             "s1",
             &["我们下午在会试室见面吧".into()],
             &ctx_enabled(PolishMode::Light),
+            &opts_default(),
         )
         .await
         .unwrap();
@@ -742,6 +1100,7 @@ mod tests {
             "s1",
             &["我们下午在会试室见面吧".into()],
             &ctx_enabled(PolishMode::Light),
+            &opts_default(),
         )
         .await
         .unwrap();
@@ -759,6 +1118,7 @@ mod tests {
             "s1",
             &["我们下午在会试室见面吧".into()],
             &ctx_enabled(PolishMode::Light),
+            &opts_default(),
         )
         .await
         .unwrap();
@@ -772,10 +1132,481 @@ mod tests {
         let calls = mock.calls.clone();
         let (deps, ins, _store) = deps_with_polish(mock);
         let pipe = Pipeline::new(deps);
-        pipe.insert_finals_with_polish("s1", &["".into()], &ctx_enabled(PolishMode::Light))
-            .await
-            .unwrap();
+        pipe.insert_finals_with_polish(
+            "s1",
+            &["".into()],
+            &ctx_enabled(PolishMode::Light),
+            &opts_default(),
+        )
+        .await
+        .unwrap();
         assert!(ins.out.lock().unwrap().is_empty());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    // ── P1：翻译 / 前缀角色 mock 测试（A4.4b / A5.x）────────────
+
+    struct MockCloud {
+        translate_calls: Arc<AtomicU32>,
+        polish_translate_calls: Arc<AtomicU32>,
+        behavior: MockBehavior,
+    }
+    impl MockCloud {
+        fn new(b: MockBehavior) -> Self {
+            Self {
+                translate_calls: Arc::new(AtomicU32::new(0)),
+                polish_translate_calls: Arc::new(AtomicU32::new(0)),
+                behavior: b,
+            }
+        }
+    }
+    #[async_trait]
+    impl LlmClient for MockCloud {
+        async fn polish(&self, _req: PolishRequest) -> crate::Result<PolishResponse> {
+            match &self.behavior {
+                MockBehavior::Ok(t) => Ok(PolishResponse {
+                    text: t.clone(),
+                    provider: "mock-cloud".into(),
+                    latency_ms: 1,
+                }),
+                MockBehavior::Empty => Ok(PolishResponse {
+                    text: String::new(),
+                    provider: "mock-cloud".into(),
+                    latency_ms: 1,
+                }),
+                MockBehavior::Err => Err(crate::Error::Provider("mock cloud fail".into())),
+            }
+        }
+        async fn translate_text(&self, _req: TranslateRequest) -> crate::Result<String> {
+            self.translate_calls.fetch_add(1, Ordering::SeqCst);
+            match &self.behavior {
+                MockBehavior::Ok(t) => Ok(t.clone()),
+                MockBehavior::Empty => Ok(String::new()),
+                MockBehavior::Err => Err(crate::Error::Provider("mock translate fail".into())),
+            }
+        }
+        async fn polish_and_translate(
+            &self,
+            req: TranslateRequest,
+        ) -> crate::Result<crate::polish::PolishTranslate> {
+            self.polish_translate_calls.fetch_add(1, Ordering::SeqCst);
+            if req.text.contains("哨兵失败") {
+                return Ok(crate::polish::PolishTranslate {
+                    polished: "坏输出".into(),
+                    translation: String::new(),
+                });
+            }
+            Ok(crate::polish::PolishTranslate {
+                polished: format!("润色:{}", req.text),
+                translation: format!("T({})", req.text),
+            })
+        }
+        async fn chat_stream(&self, _req: crate::polish::ChatRequest) -> crate::Result<String> {
+            Ok("QA 回答".into())
+        }
+    }
+
+    fn role_pack(id: &str, prefix: &str, kind: RoleKind) -> crate::StylePack {
+        crate::StylePack {
+            id: id.into(),
+            name: id.into(),
+            system_prompt: "角色指令".into(),
+            is_builtin: true,
+            ord: 0,
+            match_prefix: Some(prefix.into()),
+            provider: None,
+            model: None,
+            role_kind: kind,
+            output_mode: crate::store::OutputMode::Insert,
+        }
+    }
+
+    fn ctx_with_cloud(cloud: Arc<dyn LlmClient>) -> (PipelineDeps, Arc<RecInserter>) {
+        let ins = Arc::new(RecInserter::default());
+        let store = Arc::new(MemStore::default());
+        let deps = PipelineDeps {
+            provider: Arc::new(FakeProvider),
+            inserter: ins.clone(),
+            store,
+            polish: None,
+            cloud: Some(cloud),
+            local: None,
+        };
+        (deps, ins)
+    }
+
+    #[tokio::test]
+    async fn translate_intent_uses_translate_text() {
+        // A4.4b：mock LlmClient 返回固定译文 → 插入 mock 文本。
+        let mock = Arc::new(MockCloud::new(MockBehavior::Ok(
+            "We have a meeting tomorrow.".into(),
+        )));
+        let calls = mock.translate_calls.clone();
+        let (deps, ins) = ctx_with_cloud(mock);
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.intent = SessionIntent::Translate;
+        let results = pipe
+            .insert_finals_with_polish("s1", &["明天开会".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "We have a meeting tomorrow.");
+        assert_eq!(results[0].warning, None);
+        assert_eq!(*ins.out.lock().unwrap(), "We have a meeting tomorrow.");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn translate_failure_falls_back_to_l0_with_warning() {
+        // FR-4.3：失败回退 L0 原文（不丢字）+ TranslateFailed。
+        let mock = Arc::new(MockCloud::new(MockBehavior::Err));
+        let (deps, ins) = ctx_with_cloud(mock);
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.intent = SessionIntent::Translate;
+        let results = pipe
+            .insert_finals_with_polish("s1", &["明天开会".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "明天开会");
+        assert_eq!(results[0].warning, Some(PolishWarn::TranslateFailed));
+        assert_eq!(*ins.out.lock().unwrap(), "明天开会");
+    }
+
+    #[tokio::test]
+    async fn translate_with_polish_uses_sentinel_call() {
+        // A4.4b：polish+translate 走合成调用一次。
+        let mock = Arc::new(MockCloud::new(MockBehavior::Ok("unused".into())));
+        let pt_calls = mock.polish_translate_calls.clone();
+        let (deps, ins) = ctx_with_cloud(mock);
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.intent = SessionIntent::Translate;
+        ctx.translate_with_polish = true;
+        let results = pipe
+            .insert_finals_with_polish("s1", &["明天开会".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "T(明天开会)");
+        assert_eq!(pt_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(*ins.out.lock().unwrap(), "T(明天开会)");
+    }
+
+    #[tokio::test]
+    async fn translate_with_polish_bad_sentinels_retries_pure_translate() {
+        // FR-4.4：合成解析失败 → 再走纯 translate_text。
+        let mock = Arc::new(MockCloud::new(MockBehavior::Ok(
+            "We have a meeting.".into(),
+        )));
+        let translate_calls = mock.translate_calls.clone();
+        let (deps, ins) = ctx_with_cloud(mock);
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.intent = SessionIntent::Translate;
+        ctx.translate_with_polish = true;
+        let results = pipe
+            .insert_finals_with_polish(
+                "s1",
+                &["哨兵失败 明天开会".into()],
+                &ctx,
+                &opts_default(),
+            )
+            .await
+            .unwrap();
+        // 合成调用把空译文解析成「失败」→ 回退纯翻译。
+        assert_eq!(results[0].text, "We have a meeting.");
+        assert_eq!(results[0].warning, None);
+        assert_eq!(translate_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(*ins.out.lock().unwrap(), "We have a meeting.");
+    }
+
+    #[tokio::test]
+    async fn translate_without_cloud_falls_back_with_warning() {
+        let (deps, ins, _store) = deps();
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.intent = SessionIntent::Translate;
+        let results = pipe
+            .insert_finals_with_polish("s1", &["明天开会".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "明天开会");
+        assert_eq!(results[0].warning, Some(PolishWarn::TranslateFailed));
+        assert_eq!(*ins.out.lock().unwrap(), "明天开会");
+    }
+
+    // ── A5.x：前缀角色 ──
+
+    #[tokio::test]
+    async fn prefix_role_inserts_mock_output_without_prefix() {
+        // A5.1b：mock 返回固定邮件体 → 插入 mock，前缀已剥。
+        let mock = Arc::new(MockCloud::new(MockBehavior::Ok("正式邮件正文".into())));
+        let (deps, ins) = ctx_with_cloud(mock);
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.prefix_roles_enabled = true;
+        ctx.style_packs = vec![role_pack("mail", "邮件", RoleKind::Default)];
+        let results = pipe
+            .insert_finals_with_polish(
+                "s1",
+                &["邮件: 明天开会".into()],
+                &ctx,
+                &opts_default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "正式邮件正文");
+        assert_eq!(*ins.out.lock().unwrap(), "正式邮件正文");
+    }
+
+    #[tokio::test]
+    async fn translate_role_uses_translate_text_not_polish() {
+        // A5.2b：role_kind=Translate + mock translate → 走 translate_text。
+        let mock = Arc::new(MockCloud::new(MockBehavior::Ok("你好".into())));
+        let translate_calls = mock.translate_calls.clone();
+        let (deps, ins) = ctx_with_cloud(mock);
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.prefix_roles_enabled = true;
+        ctx.translate_target_lang = "zh".into();
+        ctx.style_packs = vec![role_pack("translate", "翻译", RoleKind::Translate)];
+        let results = pipe
+            .insert_finals_with_polish("s1", &["翻译: hello".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "你好");
+        assert_eq!(translate_calls.load(Ordering::SeqCst), 1, "应走 translate_text");
+        assert_eq!(*ins.out.lock().unwrap(), "你好");
+    }
+
+    #[tokio::test]
+    async fn fullwidth_colon_same_detection_result() {
+        // A5.3：「翻译：hello」与「翻译: hello」同一检测结果。
+        let mock = Arc::new(MockCloud::new(MockBehavior::Ok("你好".into())));
+        let (deps, ins) = ctx_with_cloud(mock);
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.prefix_roles_enabled = true;
+        ctx.translate_target_lang = "zh".into();
+        ctx.style_packs = vec![role_pack("translate", "翻译", RoleKind::Translate)];
+        for t in ["翻译: hello", "翻译：hello"] {
+            let results = pipe
+                .insert_finals_with_polish("s1", &[t.into()], &ctx, &opts_default())
+                .await
+                .unwrap();
+            assert_eq!(results[0].text, "你好", "输入 {t}");
+        }
+        assert_eq!(*ins.out.lock().unwrap(), "你好你好");
+    }
+
+    #[tokio::test]
+    async fn no_prefix_does_not_call_role() {
+        // A5.4：无前缀 → 不调角色（polish_mode=Off → L0 直出）。
+        let mock = Arc::new(MockCloud::new(MockBehavior::Ok("邮件正文".into())));
+        let (deps, ins) = ctx_with_cloud(mock);
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.prefix_roles_enabled = true;
+        ctx.style_packs = vec![role_pack("mail", "邮件", RoleKind::Default)];
+        let results = pipe
+            .insert_finals_with_polish("s1", &["明天三点开会".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "明天三点开会");
+        assert_eq!(*ins.out.lock().unwrap(), "明天三点开会");
+    }
+
+    #[tokio::test]
+    async fn prefix_role_runs_even_when_polish_off() {
+        // A5.5：polish_mode=Off + 前缀 → 仍调角色 cloud。
+        let mock = Arc::new(MockCloud::new(MockBehavior::Ok("正式邮件正文".into())));
+        let (deps, ins) = ctx_with_cloud(mock);
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.enabled = false;
+        ctx.prefix_roles_enabled = true;
+        ctx.style_packs = vec![role_pack("mail", "邮件", RoleKind::Default)];
+        let results = pipe
+            .insert_finals_with_polish("s1", &["邮件: 明天开会".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "正式邮件正文");
+        assert_eq!(*ins.out.lock().unwrap(), "正式邮件正文");
+    }
+
+    #[tokio::test]
+    async fn prefix_role_without_backend_inserts_stripped_text_with_warning() {
+        // A5.6：无 backend → 插入去前缀原文 + warning。
+        let (deps, ins, _store) = deps(); // cloud: None
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.prefix_roles_enabled = true;
+        ctx.style_packs = vec![role_pack("mail", "邮件", RoleKind::Default)];
+        let results = pipe
+            .insert_finals_with_polish("s1", &["邮件: 明天开会".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "明天开会");
+        assert_eq!(results[0].warning, Some(PolishWarn::RoleNoBackend));
+        assert_eq!(*ins.out.lock().unwrap(), "明天开会");
+    }
+
+    #[tokio::test]
+    async fn prefix_disabled_treats_prefix_as_plain_text() {
+        // A5.7：关前缀开关 → 「邮件: …」当普通文本。
+        let mock = Arc::new(MockCloud::new(MockBehavior::Ok("不应出现".into())));
+        let translate_calls = mock.translate_calls.clone();
+        let (deps, ins) = ctx_with_cloud(mock);
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.prefix_roles_enabled = false;        ctx.style_packs = vec![role_pack("mail", "邮件", RoleKind::Default)];
+        let results = pipe
+            .insert_finals_with_polish(
+                "s1",
+                &["邮件: 明天开会".into()],
+                &ctx,
+                &opts_default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "邮件: 明天开会");
+        assert_eq!(translate_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(*ins.out.lock().unwrap(), "邮件: 明天开会");
+    }
+
+    #[tokio::test]
+    async fn prefix_role_llm_failure_inserts_stripped_text_with_warning() {
+        // 角色 LLM 失败 → 去前缀原文 + RoleLlmFailed。
+        let mock = Arc::new(MockCloud::new(MockBehavior::Err));
+        let (deps, _ins) = ctx_with_cloud(mock);
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.prefix_roles_enabled = true;
+        ctx.style_packs = vec![role_pack("mail", "邮件", RoleKind::Default)];
+        let results = pipe
+            .insert_finals_with_polish("s1", &["邮件: 明天开会".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "明天开会");
+        assert_eq!(results[0].warning, Some(PolishWarn::RoleLlmFailed));
+    }
+
+    #[tokio::test]
+    async fn local_provider_role_uses_local_backend() {
+        // provider=local → 走 local handle 而非 cloud。
+        let local = Arc::new(MockPolish::new(MockBehavior::Ok("本地角色输出".into())));
+        let local_calls = local.calls.clone();
+        let cloud = Arc::new(MockCloud::new(MockBehavior::Ok("云端不应被调".into())));
+        let cloud_calls = cloud.translate_calls.clone();
+        let ins = Arc::new(RecInserter::default());
+        let deps = PipelineDeps {
+            provider: Arc::new(FakeProvider),
+            inserter: ins.clone(),
+            store: Arc::new(MemStore::default()),
+            polish: None,
+            cloud: Some(cloud),
+            local: Some(local),
+        };
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.prefix_roles_enabled = true;
+        let mut pack = role_pack("mail", "邮件", RoleKind::Default);
+        pack.provider = Some("local".into());
+        ctx.style_packs = vec![pack];
+        let results = pipe
+            .insert_finals_with_polish("s1", &["邮件: 明天开会".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "本地角色输出");
+        assert_eq!(local_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(cloud_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(*ins.out.lock().unwrap(), "本地角色输出");
+    }
+
+    #[tokio::test]
+    async fn local_provider_role_without_gguf_is_no_backend() {
+        // provider=local 但未装 GGUF → RoleNoBackend。
+        let cloud = Arc::new(MockCloud::new(MockBehavior::Ok("云端不应被调".into())));
+        let ins = Arc::new(RecInserter::default());
+        let deps = PipelineDeps {
+            provider: Arc::new(FakeProvider),
+            inserter: ins.clone(),
+            store: Arc::new(MemStore::default()),
+            polish: None,
+            cloud: Some(cloud),
+            local: None,
+        };
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.prefix_roles_enabled = true;
+        let mut pack = role_pack("mail", "邮件", RoleKind::Default);
+        pack.provider = Some("local".into());
+        ctx.style_packs = vec![pack];
+        let results = pipe
+            .insert_finals_with_polish("s1", &["邮件: 明天开会".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "明天开会");
+        assert_eq!(results[0].warning, Some(PolishWarn::RoleNoBackend));
+    }
+
+    // ── R7：四态插入 ──
+
+    struct OutcomeInserter {
+        outcomes: StdMutex<Vec<(String, InsertOutcome)>>,
+    }
+    #[async_trait]
+    impl TextInserter for OutcomeInserter {
+        async fn insert(&self, text: &str) -> crate::Result<()> {
+            self.outcomes
+                .lock()
+                .unwrap()
+                .push((text.to_string(), InsertOutcome::Typed));
+            Ok(())
+        }
+        async fn insert_ex(&self, text: &str, _opts: &InsertOpts) -> InsertOutcome {
+            let outcome = if text.starts_with('败') {
+                InsertOutcome::CopiedFallback
+            } else {
+                InsertOutcome::Typed
+            };
+            self.outcomes.lock().unwrap().push((text.to_string(), outcome));
+            outcome
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_finals_reports_outcomes() {
+        // A7.6：插入结果四态被返回给薄壳做 HUD 映射。
+        let ins = Arc::new(OutcomeInserter {
+            outcomes: StdMutex::new(vec![]),
+        });
+        let deps = PipelineDeps {
+            provider: Arc::new(FakeProvider),
+            inserter: ins.clone(),
+            store: Arc::new(MemStore::default()),
+            polish: None,
+            cloud: None,
+            local: None,
+        };
+        let pipe = Pipeline::new(deps);
+        let ctx = PolishContext {
+            enabled: false,
+            ..Default::default()
+        };
+        let results = pipe
+            .insert_finals_with_polish(
+                "s1",
+                &["好的文本".into(), "败了".into()],
+                &ctx,
+                &opts_default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].outcome, InsertOutcome::Typed);
+        assert_eq!(results[1].outcome, InsertOutcome::CopiedFallback);
+        let calls = ins.outcomes.lock().unwrap();
+        assert!(calls.iter().any(|(t, _)| t == "好的文本"));
     }
 }

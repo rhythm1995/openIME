@@ -1,4 +1,5 @@
-//! 平台相关实现。一期仅 macOS；其他平台提供桩实现保证编译。
+//! 平台相关实现。macOS 全功能；Windows 前台 exe 捕获 / 还焦 / Ctrl+V（R7 P1）；
+//! 其它平台提供桩实现保证编译。
 
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -6,8 +7,14 @@ pub mod macos;
 #[cfg(target_os = "macos")]
 pub use macos as current;
 
-// 非 macOS 平台：桩实现，保证跨平台编译（权限功能仅 macOS 生效）。
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub mod windows;
+
+#[cfg(target_os = "windows")]
+pub use windows as current;
+
+// 非 macOS / Windows 平台：桩实现，保证跨平台编译（权限功能仅 macOS 生效）。
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub mod current {
     pub mod permissions {
         use voice_core::permissions::{
@@ -74,5 +81,8 @@ pub mod current {
         ) {
         }
         pub fn hide_window_without_activating(_ns_window: *mut std::ffi::c_void) {}
+        pub fn get_selection() -> Option<String> {
+            None
+        }
     }
 }

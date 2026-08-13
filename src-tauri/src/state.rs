@@ -1,15 +1,18 @@
 //! 应用全局状态：DB + 配置 + pipeline（懒初始化，避免启动期 enigo 等副作用导致 abort）。
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tokio::sync::RwLock;
-use voice_core::pipeline::{Pipeline, PipelineDeps, PolishContext};
+use tauri::AppHandle;
+use voice_core::pipeline::{Pipeline, PipelineDeps, PolishContext, SessionIntent};
 use voice_core::{
-    AppConfig, BailianChatPolish, EnigoInserter, Error, HistoryStore, LocalGgufPolish, PolishMode,
-    PolishPolicy, PolishRouter, PolishRouterConfig, RoutingProvider, SqliteStore, TextInserter,
-    TextPolishProvider,
+    AppConfig, BailianChatPolish, CloudPolishProvider, Error, HistoryStore, LlmClient,
+    LocalGgufPolish, PolishMode, PolishPolicy, PolishRouter, PolishRouterConfig, RoutingProvider,
+    SqliteStore, TextInserter, TextPolishProvider,
 };
+
+use crate::insert_fallback::CompositeInserter;
 
 pub const CONFIG_KEY: &str = "app_config";
 
@@ -32,10 +35,17 @@ pub struct AppState {
     pub model_downloading: Arc<AtomicBool>,
     /// R2:润色取消标志；ESC 触发后置 true，apply_polish 看到→尽快返回 L0。
     pub polish_cancel: Arc<AtomicBool>,
+    /// P1：快捷键先写意图，toggle_recording 抢到 guard 后 take（见 p1-design 分支表）。
+    pub pending_intent: Mutex<SessionIntent>,
+    /// R7：组合插入器（Type-then-Paste）。与 pipeline 共享同一实例。
+    inserter: OnceLock<Arc<CompositeInserter>>,
+    /// Tauri 句柄（剪贴板主线程调度 / QA 插入用）。
+    app: AppHandle,
 }
 
 impl AppState {
     pub fn new(
+        app: AppHandle,
         store: SqliteStore,
         sherpa_root: Option<(std::path::PathBuf, std::path::PathBuf)>,
     ) -> Result<Self, Error> {
@@ -54,6 +64,8 @@ impl AppState {
             }
         }
         let _ = store.seed_builtin_style_packs_if_empty();
+        // R5：内置前缀角色包按 id 补缺失（不清用户改动）。
+        let _ = store.seed_builtin_prefix_packs_if_missing();
         let store_arc: Arc<SqliteStore> = Arc::new(store);
         Ok(Self {
             store: store_arc,
@@ -65,12 +77,25 @@ impl AppState {
             stop_flag: Arc::new(AtomicBool::new(false)),
             model_downloading: Arc::new(AtomicBool::new(false)),
             polish_cancel: Arc::new(AtomicBool::new(false)),
+            pending_intent: Mutex::new(SessionIntent::Dictate),
+            inserter: OnceLock::new(),
+            app,
         })
     }
 
     /// 本地模型根目录（下载/安装本地引擎用）。
     pub fn model_root(&self) -> Option<std::path::PathBuf> {
         self.sherpa_root.as_ref().map(|(root, _)| root.clone())
+    }
+
+    /// R7：组合插入器（懒初始化，与 pipeline 共享）。
+    pub fn composite_inserter(&self) -> Result<Arc<CompositeInserter>, Error> {
+        if let Some(i) = self.inserter.get() {
+            return Ok(i.clone());
+        }
+        let i = Arc::new(CompositeInserter::new(self.app.clone())?);
+        let _ = self.inserter.set(i.clone());
+        Ok(i)
     }
 
     /// 取得 pipeline；首次调用时构造。enigo 初始化失败则返回错误（不会 abort 启动）。
@@ -89,13 +114,18 @@ impl AppState {
         let provider: Arc<dyn voice_core::AsrProvider> = Arc::new(RoutingProvider {
             sherpa_root: self.sherpa_root.clone(),
         });
-        let inserter: Arc<dyn TextInserter> = Arc::new(EnigoInserter::new()?);
+        let inserter: Arc<dyn TextInserter> = self.composite_inserter()?;
         let polish = Some(self.build_polish_router().await);
+        // P1：分开的 cloud（LlmClient）与 local（GGUF）句柄。
+        let cloud = self.cloud_llm().await;
+        let local = self.local_polish().await;
         let deps = PipelineDeps {
             provider,
             inserter,
             store: self.store.clone() as Arc<dyn HistoryStore>,
             polish,
+            cloud,
+            local,
         };
         let p = Arc::new(Pipeline::new(deps));
         *guard = Some(p.clone());
@@ -111,53 +141,10 @@ impl AppState {
     /// 按当前配置构造润色路由（本地 GGUF + 可选云端 chat）。
     pub async fn build_polish_router(&self) -> Arc<dyn TextPolishProvider> {
         let cfg = self.config.read().await.clone();
-        let model_root = self.model_root();
-
-        let local: Option<Arc<dyn TextPolishProvider>> = model_root.as_ref().map(|root| {
-            let path = voice_core::polish_model_path(root);
-            Arc::new(LocalGgufPolish::new(path)) as Arc<dyn TextPolishProvider>
-        });
-
-        // 云端润色：优先用独立配置（polish_cloud_endpoint/api_key/protocol），
-        // 否则回退从 bailian provider 取 key + 默认 base。
-        let cloud: Option<Arc<dyn TextPolishProvider>> = {
-            // 独立配置优先
-            if !cfg.polish_cloud_endpoint.trim().is_empty()
-                && !cfg.polish_cloud_api_key.trim().is_empty()
-            {
-                let base = cfg.polish_cloud_endpoint.trim().to_string();
-                let key = cfg.polish_cloud_api_key.trim().to_string();
-                let model = if cfg.polish_cloud_model.trim().is_empty() {
-                    "qwen-turbo".into()
-                } else {
-                    cfg.polish_cloud_model.clone()
-                };
-                Some(Arc::new(BailianChatPolish::new_with_protocol(
-                    key,
-                    base,
-                    model,
-                    cfg.polish_cloud_protocol,
-                )) as Arc<dyn TextPolishProvider>)
-            } else {
-                // 回退：从 bailian provider 取 key + 默认 base。
-                cfg.providers
-                    .iter()
-                    .find(|p| {
-                        p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty()
-                    })
-                    .map(|p| {
-                        Arc::new(BailianChatPolish::new(
-                            p.api_key.clone(),
-                            BailianChatPolish::default_chat_base(),
-                            if cfg.polish_cloud_model.trim().is_empty() {
-                                "qwen-turbo".into()
-                            } else {
-                                cfg.polish_cloud_model.clone()
-                            },
-                        )) as Arc<dyn TextPolishProvider>
-                    })
-            }
-        };
+        let local = self.local_polish_from(&cfg);
+        let cloud = self
+            .cloud_polish_from(&cfg)
+            .map(|c| Arc::new(c) as Arc<dyn TextPolishProvider>);
 
         let polish_on = cfg.polish_mode != PolishMode::Off;
         Arc::new(PolishRouter {
@@ -174,8 +161,81 @@ impl AppState {
         })
     }
 
-    /// 录音插入前的润色上下文。
-    pub async fn polish_context(&self) -> PolishContext {
+    /// P1：云端 LLM 句柄（翻译 / 前缀角色 / QA）。与润色路由分开。
+    pub async fn cloud_llm(&self) -> Option<Arc<dyn LlmClient>> {
+        let cfg = self.config.read().await.clone();
+        self.cloud_polish_from(&cfg)
+            .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
+    }
+
+    /// P1：本地 GGUF 句柄（provider=local 的前缀角色）。
+    pub async fn local_polish(&self) -> Option<Arc<dyn TextPolishProvider>> {
+        let cfg = self.config.read().await.clone();
+        self.local_polish_from(&cfg)
+    }
+
+    fn local_polish_from(&self, _cfg: &AppConfig) -> Option<Arc<dyn TextPolishProvider>> {
+        let model_root = self.model_root();
+        model_root.map(|root| {
+            let path = voice_core::polish_model_path(&root);
+            Arc::new(LocalGgufPolish::new(path)) as Arc<dyn TextPolishProvider>
+        })
+    }
+
+    /// 云端润色：优先用独立配置（polish_cloud_endpoint/api_key/protocol），
+    /// 否则回退从 bailian provider 取 key + 默认 base。
+    fn cloud_polish_from(&self, cfg: &AppConfig) -> Option<CloudPolishProvider> {
+        if !cfg.polish_cloud_endpoint.trim().is_empty()
+            && !cfg.polish_cloud_api_key.trim().is_empty()
+        {
+            let base = cfg.polish_cloud_endpoint.trim().to_string();
+            let key = cfg.polish_cloud_api_key.trim().to_string();
+            let model = if cfg.polish_cloud_model.trim().is_empty() {
+                "qwen-turbo".into()
+            } else {
+                cfg.polish_cloud_model.clone()
+            };
+            Some(BailianChatPolish::new_with_protocol(
+                key,
+                base,
+                model,
+                cfg.polish_cloud_protocol,
+            ))
+        } else {
+            // 回退：从 bailian provider 取 key + 默认 base。
+            cfg.providers
+                .iter()
+                .find(|p| {
+                    p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty()
+                })
+                .map(|p| {
+                    BailianChatPolish::new(
+                        p.api_key.clone(),
+                        BailianChatPolish::default_chat_base(),
+                        if cfg.polish_cloud_model.trim().is_empty() {
+                            "qwen-turbo".into()
+                        } else {
+                            cfg.polish_cloud_model.clone()
+                        },
+                    )
+                })
+        }
+    }
+
+    /// 是否配置了可用云端 key（翻译 / QA 启动前的「可否开始」检查）。
+    pub fn has_cloud_key(&self) -> bool {
+        let cfg = self.config.blocking_read();
+        let independent = !cfg.polish_cloud_endpoint.trim().is_empty()
+            && !cfg.polish_cloud_api_key.trim().is_empty();
+        let via_provider = cfg.providers.iter().any(|p| {
+            p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty()
+        });
+        independent || via_provider
+    }
+
+    /// 录音插入前的润色上下文。P1 字段：intent / prefix_roles_enabled / style_packs /
+    /// translate_target_lang / translate_with_polish。
+    pub async fn polish_context(&self, intent: SessionIntent) -> PolishContext {
         let cfg = self.config.read().await.clone();
         // 兼容旧配置：polish_mode 缺失(Off) 但旧版 polish_enabled=true → 迁到 Light。
         let mode = if cfg.polish_mode != PolishMode::Off {
@@ -204,6 +264,7 @@ impl AppState {
             .into_iter()
             .map(|h| h.word)
             .collect();
+        let style_packs = self.store.list_style_packs().unwrap_or_default();
 
         PolishContext {
             enabled: mode != PolishMode::Off,
@@ -212,6 +273,11 @@ impl AppState {
             hotwords,
             timeout_ms: cfg.polish_timeout_ms.max(100),
             cancel: Some(self.polish_cancel.clone()),
+            intent,
+            prefix_roles_enabled: cfg.prefix_roles_enabled,
+            style_packs,
+            translate_target_lang: cfg.translate_target_lang.clone(),
+            translate_with_polish: cfg.translate_with_polish,
         }
     }
 

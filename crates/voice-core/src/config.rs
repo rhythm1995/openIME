@@ -130,6 +130,20 @@ pub enum PolishCloudProtocol {
     OpenAiResponses,
 }
 
+/// R7：文本插入策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InsertStrategy {
+    /// 先 enigo 逐字输入，失败自动回退粘贴（Type-then-Paste）。
+    #[default]
+    Auto,
+    /// 只 enigo 逐字输入，失败即 Failed。
+    #[serde(rename = "type")]
+    Type,
+    /// 只粘贴（剪贴板 + 平台和弦）。
+    Paste,
+}
+
 /// 润色路由策略。已简化为两态：本地优先（默认）/ 关闭。
 /// 旧配置中的 prefer_cloud / local_only / cloud_only 经 serde alias 归一为 PreferLocal。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -217,6 +231,41 @@ pub struct AppConfig {
     /// 默认识别语言：`zh` / `en` / `yue` / `auto`。默认 `zh`。
     #[serde(default = "default_local_language")]
     pub local_language: String,
+
+    // ── P1：R4 翻译 ──
+    /// 翻译快捷键（None = 不注册；P1 仅 Toggle）。
+    #[serde(default)]
+    pub translate_hotkey: Option<String>,
+    /// 翻译目标语言（BCP-47 短码，固定下拉闭集）。默认 "en"。
+    #[serde(default = "default_translate_target_lang")]
+    pub translate_target_lang: String,
+    /// 「先润色再翻译」一次调用（哨兵合成）。
+    #[serde(default)]
+    pub translate_with_polish: bool,
+
+    // ── P1：R5 前缀角色 ──
+    /// 识别结果前缀分流到角色（风格包）。开启时听写强制整段插入（关流式上屏）。
+    #[serde(default = "default_true")]
+    pub prefix_roles_enabled: bool,
+
+    // ── P1：R6 划词问答 ──
+    /// QA 快捷键（None = 不注册；P1 仅 Toggle）。
+    #[serde(default)]
+    pub qa_hotkey: Option<String>,
+    /// 是否把 QA 问答写入历史（sessions/utterances）。
+    #[serde(default)]
+    pub qa_save_history: bool,
+
+    // ── P1：R7 粘贴兜底 ──
+    /// 插入策略：auto / type / paste。
+    #[serde(default)]
+    pub insert_strategy: InsertStrategy,
+    /// 前台 app 标识命中任一条时视同 Paste（应对「Ok 但吞键」）。
+    #[serde(default)]
+    pub paste_fallback_apps: Vec<String>,
+    /// 粘贴后 750ms 恢复原剪贴板（内容仍相等才写回）。
+    #[serde(default = "default_true")]
+    pub restore_clipboard: bool,
 }
 
 fn default_local_mode() -> String {
@@ -236,6 +285,12 @@ fn default_polish_timeout_ms() -> u32 {
 }
 fn default_local_language() -> String {
     "zh".into()
+}
+fn default_translate_target_lang() -> String {
+    "en".into()
+}
+fn default_true() -> bool {
+    true
 }
 
 /// 默认本地润色模型（Qwen2.5-1.5B-Instruct GGUF Q4_K_M）。
@@ -275,6 +330,15 @@ impl Default for AppConfig {
             polish_timeout_ms: 800,
             punct_half_width_apps: Vec::new(),
             chinese_script_preference: ChineseScriptPreference::Auto,
+            translate_hotkey: None,
+            translate_target_lang: default_translate_target_lang(),
+            translate_with_polish: false,
+            prefix_roles_enabled: true,
+            qa_hotkey: None,
+            qa_save_history: false,
+            insert_strategy: InsertStrategy::Auto,
+            paste_fallback_apps: Vec::new(),
+            restore_clipboard: true,
         }
     }
 }
@@ -419,5 +483,34 @@ mod tests {
         }"#;
         let c: AppConfig = serde_json::from_str(json).unwrap();
         assert!(!c.launch_at_login);
+    }
+
+    #[test]
+    fn insert_strategy_serde_snake_case() {
+        // R7：serde 用 auto / type / paste（type 是 Rust 保留字，只能靠 rename）。
+        let s: InsertStrategy = serde_json::from_str("\"auto\"").unwrap();
+        assert_eq!(s, InsertStrategy::Auto);
+        let s: InsertStrategy = serde_json::from_str("\"type\"").unwrap();
+        assert_eq!(s, InsertStrategy::Type);
+        let s: InsertStrategy = serde_json::from_str("\"paste\"").unwrap();
+        assert_eq!(s, InsertStrategy::Paste);
+        assert_eq!(serde_json::to_string(&InsertStrategy::Auto).unwrap(), "\"auto\"");
+        assert_eq!(serde_json::to_string(&InsertStrategy::Type).unwrap(), "\"type\"");
+        assert_eq!(serde_json::to_string(&InsertStrategy::Paste).unwrap(), "\"paste\"");
+    }
+
+    #[test]
+    fn p1_fields_have_defaults() {
+        // P1 新字段全部 #[serde(default)]：旧 JSON 可反序列化且默认值符合设计。
+        let c = AppConfig::default();
+        assert_eq!(c.translate_hotkey, None);
+        assert_eq!(c.translate_target_lang, "en");
+        assert!(!c.translate_with_polish);
+        assert!(c.prefix_roles_enabled);
+        assert_eq!(c.qa_hotkey, None);
+        assert!(!c.qa_save_history);
+        assert_eq!(c.insert_strategy, InsertStrategy::Auto);
+        assert!(c.paste_fallback_apps.is_empty());
+        assert!(c.restore_clipboard);
     }
 }

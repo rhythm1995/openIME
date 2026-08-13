@@ -17,6 +17,7 @@ extern "C" {
     );
     fn openime_hide_window_without_activating(ns_window: *mut c_void);
     fn openime_get_selection() -> *const c_char;
+    fn openime_paste_cmd_v() -> i32;
 }
 
 static mut EDGE_CALLBACK: Option<fn(pressed: bool)> = None;
@@ -118,6 +119,11 @@ pub fn hide_window_without_activating(ns_window: *mut c_void) {
         return;
     }
     unsafe { openime_hide_window_without_activating(ns_window) };
+}
+
+/// R7：发送 Cmd+V 粘贴和弦（CGEvent）。成功 true。
+pub fn paste_cmd_v() -> bool {
+    unsafe { openime_paste_cmd_v() != 0 }
 }
 
 extern "C" {

@@ -135,10 +135,22 @@
       "enable": "启用",
       "enabledTip": "已启用「{{title}}」",
       "models": {
-        "firered_large": { "title": "FireRedASR Large", "desc": "离线整段 · 中英高精度 · 约 1.7GB · 更准更慢，适合追求识别率" },
-        "zipformer_zh_xlarge": { "title": "Zipformer 中文 xlarge", "desc": "流式 xlarge int8 · 中文大模型 · 约 735MB · 比 large 更准" },
-        "zipformer_zh_2025": { "title": "Zipformer 中文 2025", "desc": "流式 large int8 · 中文 · 约 167MB · 体积与速度折中" },
-        "sensevoice": { "title": "SenseVoice", "desc": "离线整段 · 中英日韩粤 · 约 240MB · 快、省资源" }
+        "firered_large": {
+          "title": "FireRedASR Large",
+          "desc": "离线整段 · 中英高精度 · 约 1.7GB · 更准更慢，适合追求识别率"
+        },
+        "zipformer_zh_xlarge": {
+          "title": "Zipformer 中文 xlarge",
+          "desc": "流式 xlarge int8 · 中文大模型 · 约 735MB · 比 large 更准"
+        },
+        "zipformer_zh_2025": {
+          "title": "Zipformer 中文 2025",
+          "desc": "流式 large int8 · 中文 · 约 167MB · 体积与速度折中"
+        },
+        "sensevoice": {
+          "title": "SenseVoice",
+          "desc": "离线整段 · 中英日韩粤 · 约 240MB · 快、省资源"
+        }
       }
     },
     "hotkey": {
@@ -150,7 +162,13 @@
       "mode_hold": "按住说话（松开停止）",
       "styleSwitchLabel": "风格包切换快捷键（F1，可选）",
       "styleSwitchPh": "如 Ctrl+Shift+P（留空不启用）",
-      "fnWarning": "使用 Fn 键需在 系统设置 → 键盘 → 「按下 🌐 键时」选「不执行任何操作」，否则系统会拦截 Fn 事件。"
+      "fnWarning": "使用 Fn 键需在 系统设置 → 键盘 → 「按下 🌐 键时」选「不执行任何操作」，否则系统会拦截 Fn 事件。",
+      "translateLabel": "翻译快捷键（R4，可选）",
+      "translatePh": "如 Alt+Shift+T（留空不启用）",
+      "translateHint": "按一下开始说源语言，光标处插入目标语言；再按一下停止。",
+      "qaLabel": "划词问答快捷键（R6，可选）",
+      "qaPh": "如 Cmd+Shift+;（留空不启用）",
+      "qaHint": "选中文字后按下：弹出问答浮窗，语音提问，流式回答。"
     },
     "transcribe": {
       "title": "文件转录",
@@ -200,6 +218,64 @@
       "charCount": "{{count}} 字",
       "noResponseHint": "如果没反应，请确认引擎已配置并保存",
       "clear": "清空"
+    },
+    "translate": {
+      "title": "翻译（R4）",
+      "targetLangLabel": "目标语言",
+      "targetLangHint": "固定语言集；下次翻译会话生效。",
+      "lang_zh": "中文",
+      "lang_en": "English",
+      "lang_ja": "日本語",
+      "lang_ko": "한국어",
+      "lang_fr": "français",
+      "lang_de": "Deutsch",
+      "lang_es": "español",
+      "polishFirstName": "先润色再翻译",
+      "polishFirstDesc": "一次调用：先去掉口头禅、通顺化，再翻译（比纯翻译慢）。"
+    },
+    "insert": {
+      "title": "插入与剪贴板（R7）",
+      "strategyLabel": "插入策略",
+      "strategy_auto": "自动（先打字，失败自动粘贴）",
+      "strategy_type": "只模拟按键",
+      "strategy_paste": "只粘贴（Cmd+V / Ctrl+V）",
+      "strategyHint": "远程桌面 / 安全输入等吞掉模拟按键的应用，选「只粘贴」最稳。",
+      "fallbackAppsLabel": "粘贴兜底 App 列表",
+      "fallbackAppsPh": "如 mstsc, com.microsoft.rdc.macos（逗号分隔）",
+      "fallbackAppsHint": "前台 App 命中任一条时，即使策略为自动也直接粘贴。",
+      "restoreName": "恢复原剪贴板",
+      "restoreDesc": "粘贴约 0.75 秒后，若剪贴板仍是插入内容则恢复你原来复制的内容；期间你自己复制了别的则不覆盖。"
+    },
+    "roles": {
+      "title": "角色 / 风格包（R5 前缀指令）",
+      "enabledName": "启用前缀角色",
+      "enabledDesc": "听写结果以「邮件:」「翻译:」等前缀开头时，按对应角色处理。开启后听写改为整段上屏（不再逐字流式）。",
+      "hint": "前缀在单次输入中覆盖默认风格；翻译角色与翻译快捷键共用目标语言。清空前缀 = 退回纯风格包（重新进入风格循环）。",
+      "prefixBadge": "前缀：{{prefix}}",
+      "translateKind": "翻译角色",
+      "prefixPh": "前缀别名（| 分隔，如 邮件|mail）",
+      "providerCloud": "云端（默认）",
+      "providerLocal": "本地 GGUF",
+      "promptPh": "角色指令（system prompt）"
+    },
+    "qa": {
+      "title": "划词问答（R6）",
+      "hint": "选中一段文字 → 按问答快捷键打开浮窗 → 按录音键提问 → 流式回答。关窗即清空上下文。",
+      "saveHistoryName": "问答写入历史",
+      "saveHistoryDesc": "每次打开面板建一条会话，每轮问答写两条记录（Q: / A:）。"
+    },
+    "_qa": {
+      "title": "划词问答",
+      "subtitle": "按录音键提问 · 流式回答",
+      "refreshSelection": "刷新选区",
+      "clear": "清空对话",
+      "selectionLabel": "已选中的上下文",
+      "noSelection": "未检测到选区（打开面板时没有选中文字，可回原 App 选中后点刷新）",
+      "empty": "还没有问答。按录音键开始提问。",
+      "recording": "问答录音中…",
+      "cancel": "停止生成",
+      "copy": "复制回答",
+      "insert": "插入光标"
     }
   },
   "history": {
@@ -251,5 +327,19 @@
     "deleteTitle": "删除",
     "notFound": "未找到匹配词条",
     "empty": "词典为空"
+  },
+  "qa": {
+    "title": "划词问答",
+    "subtitle": "按录音键提问 · 流式回答",
+    "refreshSelection": "刷新选区",
+    "clear": "清空对话",
+    "selectionLabel": "已选中的上下文",
+    "noSelection": "未检测到选区（打开面板时没有选中文字，可回原 App 选中后点刷新）",
+    "empty": "还没有问答。按录音键开始提问。",
+    "recording": "问答录音中…",
+    "cancel": "停止生成",
+    "copy": "复制回答",
+    "insert": "插入光标",
+    "noKeyBanner": "未配置云端 LLM，无法问答：请到设置 → AI 润色 填写 Endpoint 与 API Key"
   }
 }

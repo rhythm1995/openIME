@@ -27,6 +27,8 @@ export default function App() {
   const { t, i18n } = useTranslation();
   const [pong, setPong] = useState("");
   const [page, setPage] = useState<Page>("settings");
+  // PR4：toast://info 事件（互斥提示 / 无 key 提示等）。
+  const [toast, setToast] = useState<string | null>(null);
   // 页面保活：首次进入后保持挂载，仅用 CSS 隐藏。
   // 避免每次切回「设置」都重建整页（IPC + 设备枚举 + 事件监听），造成侧栏切换卡顿。
   const [mounted, setMounted] = useState<Record<Page, boolean>>({
@@ -58,7 +60,21 @@ export default function App() {
     }).then((u) => {
       unlisten = u;
     });
-    return () => unlisten?.();
+    // PR4：toast://info（翻译/QA 互斥提示、无云端 key 等）。4s 自动消失。
+    let unlistenToast: (() => void) | undefined;
+    let toastTimer: ReturnType<typeof setTimeout> | undefined;
+    listen<string>("toast://info", (e) => {
+      setToast(e.payload);
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => setToast(null), 4000);
+    }).then((u) => {
+      unlistenToast = u;
+    });
+    return () => {
+      unlisten?.();
+      unlistenToast?.();
+      if (toastTimer) clearTimeout(toastTimer);
+    };
   }, []);
 
   const nav: { id: Page; label: string; icon: LucideIcon }[] = [
@@ -134,8 +150,7 @@ export default function App() {
           >
             <Settings />
           </div>
-        )}
-        {mounted.history && (
+        )}        {mounted.history && (
           <div
             className={page === "history" ? "page-panel" : "page-panel page-panel-hidden"}
             aria-hidden={page !== "history"}
@@ -152,6 +167,11 @@ export default function App() {
           </div>
         )}
       </main>
+      {toast && (
+        <div className="toast" role="status">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

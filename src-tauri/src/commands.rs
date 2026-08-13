@@ -79,17 +79,63 @@ pub async fn save_app_config(
     config.active().map_err(|e| e.to_string())?;
     // R3：保存期校验所有非空用户 endpoint（不强制 api_key；不合法整单不落盘）。
     validate_all_endpoints(&config).map_err(|e| e.to_string())?;
+    // PR4：热键两两不等 + 可解析（任一失败 → 不写 DB、不改内存）。
+    validate_hotkeys(&config)?;
     // 规范化 local_asr_model，同步 local_mode 与 sherpa provider.model。
     config.sync_local_asr_fields();
-    let hotkey_changed = state.config.read().await.hotkey != config.hotkey;
+    let hotkeys_changed = {
+        let old = state.config.read().await;
+        old.hotkey != config.hotkey
+            || old.style_switch_hotkey != config.style_switch_hotkey
+            || old.translate_hotkey != config.translate_hotkey
+            || old.qa_hotkey != config.qa_hotkey
+    };
     save_config(&state.store, &config).map_err(|e| e.to_string())?;
-    let new_hotkey = config.hotkey.clone();
-    *state.config.write().await = config;
+    *state.config.write().await = config.clone();
     // 润色/引擎等变更：丢弃 pipeline，下次录音按新配置重建。
     state.invalidate_pipeline().await;
-    // 快捷键变化立即生效（Fn 走原生监听，组合键走 global-shortcut）。
-    if hotkey_changed {
-        crate::apply_hotkey(&app, &new_hotkey);
+    // 任意快捷键字段变化 → 重新注册全部（PR4 收口）。
+    if hotkeys_changed {
+        crate::apply_hotkey(&app, &config);
+    }
+    Ok(())
+}
+
+/// PR4：保存校验——每个非空热键可解析（Fn 例外），且两两不等（A4.5 等）。
+fn validate_hotkeys(cfg: &AppConfig) -> Result<(), String> {
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for (name, hk) in [
+        ("录音", Some(cfg.hotkey.as_str())),
+        ("风格包切换", cfg.style_switch_hotkey.as_deref()),
+        ("翻译", cfg.translate_hotkey.as_deref()),
+        ("问答", cfg.qa_hotkey.as_deref()),
+    ] {
+        let Some(s) = hk else { continue };
+        let s = s.trim();
+        if s.is_empty() {
+            continue;
+        }
+        if s.eq_ignore_ascii_case("fn") {
+            if name != "录音" {
+                return Err(format!("仅录音快捷键支持 Fn（{name}快捷键请用组合键）"));
+            }
+            entries.push((name.into(), "fn".into()));
+            continue;
+        }
+        if crate::parse_shortcut(s).is_none() {
+            return Err(format!("{name}快捷键「{s}」无法解析"));
+        }
+        entries.push((name.into(), s.to_ascii_lowercase()));
+    }
+    for i in 0..entries.len() {
+        for j in (i + 1)..entries.len() {
+            if entries[i].1 == entries[j].1 {
+                return Err(format!(
+                    "快捷键冲突：「{}」与「{}」相同（{}）",
+                    entries[i].0, entries[j].0, entries[i].1
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -180,6 +226,7 @@ pub async fn test_cloud_polish(state: State<'_, AppState>) -> Result<String, Str
         style_prompt: None,
         hotwords: vec![],
         timeout: std::time::Duration::from_secs(20),
+        max_tokens: None,
     };
     match provider.polish(req).await {
         Ok(r) => {
@@ -761,6 +808,8 @@ fn hide_overlay_only(app: &AppHandle) {
 ///
 /// `frontmost`：录音前的前台 app bundle ID（由 trigger_toggle 在 overlay 显示前捕获）。
 /// overlay 显示会抢走焦点，录音结束后需先激活回原 app 再插入文本，否则 enigo 输入到错误窗口。
+///
+/// P1 分支表：intent 从 `pending_intent` take（Dictate / Translate / Qa）。
 #[tauri::command]
 pub async fn toggle_recording(
     app: AppHandle,
@@ -781,6 +830,16 @@ pub async fn toggle_recording(
         state.request_stop();
         return Ok(false);
     }
+
+    // 抢到 guard 后 take 意图（启动失败也会清回 Dictate，避免残留 Translate/Qa）。
+    let intent = match state.pending_intent.lock() {
+        Ok(mut g) => {
+            let i = *g;
+            *g = voice_core::SessionIntent::Dictate;
+            i
+        }
+        Err(p) => *p.into_inner(),
+    };
 
     // 读当前 provider 配置。
     let cfg = state.config.read().await.clone();
@@ -822,6 +881,12 @@ pub async fn toggle_recording(
         e.to_string()
     })?;
 
+    // 翻译 / QA 只用云端：防御性检查（lib.rs 已拦，双保险）。
+    if intent != voice_core::SessionIntent::Dictate && !state.has_cloud_key() {
+        release_recording_guard(&state);
+        return Err("请先配置云端 LLM（润色 endpoint + API Key）".into());
+    }
+
     // 懒初始化 pipeline（含 enigo，可能在无辅助功能权限时失败）。
     let pipeline = state.pipeline().await.map_err(|e| {
         release_recording_guard(&state);
@@ -841,30 +906,49 @@ pub async fn toggle_recording(
     // 通知 overlay：录音已开始（避免挂载时 race 读到 false 显示空白）。
     let _ = app.emit("recording://started", ());
 
-    // frontmost 由 trigger_toggle 在 overlay 显示前捕获并传入。
-    log_info!("录音前前台 app：{:?}", frontmost);
+    // frontmost 由 trigger_toggle 在 overlay 显示前捕获并传入（QA 为 None，还焦用开窗时的）。
+    log_info!("录音前前台 app：{:?}（intent={intent:?}）", frontmost);
 
     let recording = state.recording.clone();
     let guard = state.recording_guard.clone();
     let stop_flag = state.stop_flag.clone();
-    let polish_ctx = state.polish_context().await;
+    let polish_ctx = state.polish_context(intent).await;
+    // R7：插入选项独立于 PolishContext（薄壳从 config + 前台 app 组装）。
+    let insert_opts = voice_core::InsertOpts {
+        strategy: cfg.insert_strategy,
+        paste_fallback_apps: cfg.paste_fallback_apps.clone(),
+        restore_clipboard: cfg.restore_clipboard,
+        frontmost: frontmost.clone(),
+    };
     let app_handle = app.clone();
     let meta = SessionMeta {
-        engine: "cloud".into(),
+        engine: match intent {
+            voice_core::SessionIntent::Translate => "translate".into(),
+            voice_core::SessionIntent::Qa => "qa".into(),
+            voice_core::SessionIntent::Dictate => "dictate".into(),
+        },
         provider: format!("{:?}", provider_cfg.kind).to_lowercase(),
         model: provider_cfg.model.clone(),
     };
 
     tokio::spawn(async move {
-        // partial 回调：overlay 显示实时识别（不上屏；统一在 final 后一次性插入）。
+        // partial 回调：overlay 显示实时识别。QA 不推 partial（HUD 保持「问答录音中」）。
         let app_for_cb = app_handle.clone();
-        let on_partial: voice_core::pipeline::PartialCallback = Arc::new(move |text| {
-            let _ = app_for_cb.emit("recording://partial", text.to_string());
-        });
+        let on_partial: Option<voice_core::pipeline::PartialCallback> =
+            if intent == voice_core::SessionIntent::Qa {
+                None
+            } else {
+                Some(Arc::new(move |text| {
+                    let _ = app_for_cb.emit("recording://partial", text.to_string());
+                }))
+            };
 
-        // C1：流式引擎（百炼）边说边逐字上屏；离线引擎录完一次性插入。
-        let streaming = provider_cfg.kind == voice_core::ProviderKind::Bailian;
-        // 流式模式：录音期间就上屏，先还焦。
+        // C1：流式引擎（百炼）边说边逐字上屏；R5：前缀角色开 → 强制整段插入（A5.8）。
+        // 翻译 / QA 永不流式上屏。
+        let streaming = intent == voice_core::SessionIntent::Dictate
+            && provider_cfg.kind == voice_core::ProviderKind::Bailian
+            && !polish_ctx.prefix_roles_enabled;
+        // 流式模式：录音期间就上屏，先还焦（QA 无此路径）。
         if streaming {
             restore_frontmost_focus(&app_handle, frontmost.as_deref());
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
@@ -876,22 +960,47 @@ pub async fn toggle_recording(
                 audio,
                 &provider_cfg,
                 meta,
-                Some(on_partial),
+                on_partial,
                 Some(stop_flag),
                 streaming,
+                &insert_opts,
             )
             .await;
 
         match result {
-            Ok(r) => {
-                let _ = app_handle.emit("recording://processing", "正在输入…");
-                if streaming {
+            Ok(r) => match intent {
+                voice_core::SessionIntent::Dictate if streaming => {
                     // C1：已逐字上屏，只落库（不重复插入、不润色——流式模式优先实时性）。
+                    let _ = app_handle.emit("recording://processing", "正在输入…");
                     if let Err(e) = pipeline.persist_finals(&r.session_id, &r.utterances).await {
                         log_error!("流式结果落库失败：{e}");
                     }
-                } else {
-                    // 离线：录完还焦 + 一次性润色上屏。
+                    *recording.write().await = false;
+                    guard.store(false, std::sync::atomic::Ordering::SeqCst);
+                    hide_overlay_only(&app_handle);
+                    let deduped = voice_core::polish::dedupe_consecutive_finals(&r.utterances);
+                    let _ = app_handle.emit("recording://stopped", deduped.join(""));
+                }
+                voice_core::SessionIntent::Qa => {
+                    // QA：不插入、不落普通 utterances；把问题交给问答状态机。
+                    let question = voice_core::polish::dedupe_consecutive_finals(&r.utterances)
+                        .join("");
+                    *recording.write().await = false;
+                    guard.store(false, std::sync::atomic::Ordering::SeqCst);
+                    hide_overlay_only(&app_handle);
+                    crate::qa::mark_recording(&app_handle, false);
+                    crate::qa::begin_streaming();
+                    log_info!("QA 问题识别完成：{} 字", question.chars().count());
+                    crate::qa::ask_and_stream(&app_handle, &question).await;
+                }
+                _ => {
+                    // Dictate 非流式 / Translate：还焦 + 一次性处理上屏。
+                    let processing_text = if intent == voice_core::SessionIntent::Translate {
+                        "正在翻译…"
+                    } else {
+                        "正在输入…"
+                    };
+                    let _ = app_handle.emit("recording://processing", processing_text);
                     restore_frontmost_focus(&app_handle, frontmost.as_deref());
                     tokio::time::sleep(std::time::Duration::from_millis(120)).await;
 
@@ -918,28 +1027,71 @@ pub async fn toggle_recording(
                             .collect()
                     };
                     // R2:润色前清掉取消标志 + 动态注册 ESC 中断快捷键（润色结束注销）。
-                    app_handle
-                        .state::<AppState>()
-                        .clear_cancel_polish();
-                    let esc = Shortcut::new(None, Code::Escape);
-                    let _ = app_handle.global_shortcut().register(esc);
-                    let insert_res = pipeline
-                        .insert_finals_with_polish(&r.session_id, &finals, &polish_ctx)
-                        .await;
-                    // 润色结束（完成 / 取消 / 超时）注销 ESC，避免长期占用。
-                    let _ = app_handle.global_shortcut().unregister(esc);
-                    if let Err(e) = insert_res {
-                        log_error!("插入文本失败：{e}");
-                        let _ = app_handle.emit("recording://error", e.to_string());
+                    // 翻译走 cloud 直连不走 Router，ESC 取消只对听写润色有意义。
+                    let esc = (intent == voice_core::SessionIntent::Dictate)
+                        .then(|| Shortcut::new(None, Code::Escape));
+                    if esc.is_some() {
+                        app_handle
+                            .state::<AppState>()
+                            .clear_cancel_polish();
+                        let _ = app_handle.global_shortcut().register(esc.unwrap());
                     }
-                } // 闭合 else（非流式分支）
-
-                *recording.write().await = false;
-                guard.store(false, std::sync::atomic::Ordering::SeqCst);
-                hide_overlay_only(&app_handle);
-                let deduped = voice_core::polish::dedupe_consecutive_finals(&r.utterances);
-                let _ = app_handle.emit("recording://stopped", deduped.join(""));
-            }
+                    let insert_res = pipeline
+                        .insert_finals_with_polish(
+                            &r.session_id,
+                            &finals,
+                            &polish_ctx,
+                            &insert_opts,
+                        )
+                        .await;
+                    if let Some(e) = esc {
+                        let _ = app_handle.global_shortcut().unregister(e);
+                    }
+                    match insert_res {
+                        Ok(results) => {
+                            // P1：结构化结果 → HUD 文案（PolishOutcome.warning / InsertOutcome）。
+                            for res in &results {
+                                if let Some(w) = res.warning {
+                                    let text = match w {
+                                        voice_core::PolishWarn::TranslateFailed => {
+                                            "翻译失败，已插入原文"
+                                        }
+                                        voice_core::PolishWarn::RoleLlmFailed => {
+                                            "角色处理失败，已插入原文"
+                                        }
+                                        voice_core::PolishWarn::RoleNoBackend => {
+                                            "未配置角色后端，已插入原文"
+                                        }
+                                    };
+                                    let _ = app_handle.emit("recording://processing", text);
+                                }
+                                match res.outcome {
+                                    voice_core::InsertOutcome::CopiedFallback => {
+                                        let _ = app_handle
+                                            .emit("recording://processing", "已复制，请手动粘贴");
+                                    }
+                                    voice_core::InsertOutcome::Failed => {
+                                        let _ = app_handle.emit(
+                                            "recording://error",
+                                            "文字插入失败（模拟按键与粘贴均不可用）",
+                                        );
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log_error!("插入文本失败：{e}");
+                            let _ = app_handle.emit("recording://error", e.to_string());
+                        }
+                    }
+                    *recording.write().await = false;
+                    guard.store(false, std::sync::atomic::Ordering::SeqCst);
+                    hide_overlay_only(&app_handle);
+                    let deduped = voice_core::polish::dedupe_consecutive_finals(&r.utterances);
+                    let _ = app_handle.emit("recording://stopped", deduped.join(""));
+                }
+            },
             Err(e) => {
                 hide_overlay_only(&app_handle);
                 if let Some(ref bid) = frontmost {
@@ -1142,4 +1294,94 @@ pub fn export_diary(state: State<'_, AppState>) -> Result<String, String> {
         .store
         .export_diary_markdown()
         .map_err(|e| e.to_string())
+}
+
+// ──────────────── R6：QA 面板命令 ────────────────
+
+/// 还焦（QA 插入按钮用）：开窗时冻结的 frontmost。
+pub(crate) fn restore_frontmost(app: &AppHandle, frontmost: Option<&str>) {
+    restore_frontmost_focus(app, frontmost);
+}
+
+#[tauri::command]
+pub fn qa_refresh_selection(app: AppHandle) -> Result<Option<String>, String> {
+    Ok(crate::qa::refresh_selection(&app))
+}
+
+#[tauri::command]
+pub fn qa_cancel(app: AppHandle) -> Result<(), String> {
+    crate::qa::cancel_stream(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn qa_copy_last(app: AppHandle) -> Result<Option<String>, String> {
+    crate::qa::copy_last_answer(&app).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn qa_insert_last(app: AppHandle) -> Result<Option<String>, String> {
+    let outcome = crate::qa::insert_last_answer(&app)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(outcome.map(|o| format!("{o:?}")))
+}
+
+/// 清空当前 QA 对话（保持窗口打开）。
+#[tauri::command]
+pub fn qa_clear(app: AppHandle) -> Result<(), String> {
+    crate::qa::clear_messages(&app);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_cfg() -> AppConfig {
+        let mut c = AppConfig::default();
+        c.hotkey = "Fn".into();
+        c.style_switch_hotkey = Some("Ctrl+Shift+P".into());
+        c.translate_hotkey = Some("Alt+Shift+T".into());
+        c.qa_hotkey = Some("Cmd+Shift+;".into());
+        c
+    }
+
+    #[test]
+    fn hotkeys_accept_distinct_set() {
+        assert!(validate_hotkeys(&base_cfg()).is_ok());
+        let mut c = base_cfg();
+        c.translate_hotkey = None;
+        c.qa_hotkey = None;
+        assert!(validate_hotkeys(&c).is_ok());
+    }
+
+    #[test]
+    fn translate_equal_record_hotkey_rejected() {
+        // A4.5：翻译键 == 录音键 → 保存失败。
+        let mut c = base_cfg();
+        c.hotkey = "Alt+Shift+T".into(); // 与翻译键相同
+        assert!(validate_hotkeys(&c).is_err());
+    }
+
+    #[test]
+    fn qa_equal_style_hotkey_rejected() {
+        let mut c = base_cfg();
+        c.qa_hotkey = Some("Ctrl+Shift+P".into()); // 与风格键相同
+        assert!(validate_hotkeys(&c).is_err());
+    }
+
+    #[test]
+    fn unparseable_hotkey_rejected() {
+        let mut c = base_cfg();
+        c.translate_hotkey = Some("Cmd+Shift+不存在".into());
+        assert!(validate_hotkeys(&c).is_err());
+    }
+
+    #[test]
+    fn fn_only_allowed_for_recording() {
+        let mut c = base_cfg();
+        c.translate_hotkey = Some("Fn".into());
+        assert!(validate_hotkeys(&c).is_err());
+    }
 }

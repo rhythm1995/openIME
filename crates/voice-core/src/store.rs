@@ -65,6 +65,14 @@ const MIGRATIONS: &[&str] = &[
         ord           INTEGER NOT NULL DEFAULT 0
     );
     "#,
+    // v4（R5：前缀角色——风格包加 match_prefix / provider / model / role_kind / output_mode）
+    r#"
+    ALTER TABLE style_packs ADD COLUMN match_prefix TEXT;
+    ALTER TABLE style_packs ADD COLUMN provider TEXT;
+    ALTER TABLE style_packs ADD COLUMN model TEXT;
+    ALTER TABLE style_packs ADD COLUMN role_kind TEXT NOT NULL DEFAULT 'default';
+    ALTER TABLE style_packs ADD COLUMN output_mode TEXT NOT NULL DEFAULT 'insert';
+    "#,
 ];
 
 /// SQLite HistoryStore 实现。
@@ -304,8 +312,29 @@ pub struct Hotword {
     pub weight: i32,
 }
 
+/// R5：前缀角色的角色种类。`Translate` 命中走 `translate_text`（与 R4 共用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleKind {
+    /// 普通指令角色：用包自身 system_prompt 直连 LLM。
+    #[default]
+    Default,
+    /// 翻译角色：命中后走云翻译（目标语言用全局 translate_target_lang）。
+    Translate,
+}
+
+/// R5：输出模式。P1 仅 `Insert`（直接插入光标），`Panel` 预留。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputMode {
+    #[default]
+    Insert,
+    Panel,
+}
+
 /// 一个风格包（F1）：用户自定义输出风格的系统提示词。
 /// Heavy 润色模式下，若选中某风格包，用其 system_prompt 替代默认 Heavy prompt。
+/// R5 扩展：`match_prefix` 非空时也是「前缀角色」，听写结果命中前缀则强制按本包处理。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StylePack {
     pub id: String,
@@ -313,6 +342,31 @@ pub struct StylePack {
     pub system_prompt: String,
     pub is_builtin: bool,
     pub ord: i32,
+    /// R5：前缀别名，`|` 分隔多别名（如 `邮件|mail|写邮件`）。None/空 = 纯风格包。
+    #[serde(default)]
+    pub match_prefix: Option<String>,
+    /// R5：`None` = cloud（默认）、`cloud`、`local`。
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// R5：覆盖全局 cloud model（可选）。
+    #[serde(default)]
+    pub model: Option<String>,
+    /// R5：`default` / `translate`。
+    #[serde(default)]
+    pub role_kind: RoleKind,
+    /// R5：P1 仅 `insert`。
+    #[serde(default)]
+    pub output_mode: OutputMode,
+}
+
+impl StylePack {
+    /// 是否可作为前缀角色（match_prefix 非空）。
+    pub fn is_prefix_role(&self) -> bool {
+        self.match_prefix
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+    }
 }
 
 impl SqliteStore {
@@ -447,7 +501,8 @@ impl SqliteStore {
         let conn = self.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, system_prompt, is_builtin, ord FROM style_packs \
+                "SELECT id, name, system_prompt, is_builtin, ord, \
+                 match_prefix, provider, model, role_kind, output_mode FROM style_packs \
                  ORDER BY ord ASC, rowid ASC",
             )
             .map_err(|e| Error::Store(format!("list_style_packs prepare 失败: {e}")))?;
@@ -459,6 +514,11 @@ impl SqliteStore {
                     system_prompt: r.get(2)?,
                     is_builtin: r.get::<_, i32>(3)? != 0,
                     ord: r.get(4)?,
+                    match_prefix: r.get(5)?,
+                    provider: r.get(6)?,
+                    model: r.get(7)?,
+                    role_kind: parse_role_kind(&r.get::<_, String>(8)?),
+                    output_mode: parse_output_mode(&r.get::<_, String>(9)?),
                 })
             })
             .map_err(|e| Error::Store(format!("list_style_packs query 失败: {e}")))?;
@@ -470,17 +530,57 @@ impl SqliteStore {
     }
 
     pub fn upsert_style_pack(&self, p: &StylePack) -> Result<()> {
+        // FR-5.8：拒绝相同别名（忽略大小写、逐别名比较；与其它包冲突则整单失败）。
+        if let Some(spec) = p.match_prefix.as_deref() {
+            let aliases: Vec<String> = spec
+                .split('|')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_lowercase())
+                .collect();
+            if !aliases.is_empty() {
+                for other in self.list_style_packs()? {
+                    if other.id == p.id {
+                        continue;
+                    }
+                    let Some(other_spec) = other.match_prefix.as_deref() else {
+                        continue;
+                    };
+                    let clash = other_spec
+                        .split('|')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_lowercase())
+                        .any(|a| aliases.iter().any(|mine| mine == &a));
+                    if clash {
+                        return Err(Error::Store(format!(
+                            "前缀别名冲突：与「{}」存在相同别名（{}）",
+                            other.name, spec
+                        )));
+                    }
+                }
+            }
+        }
         let conn = self.conn()?;
         conn.execute(
-            "INSERT INTO style_packs(id, name, system_prompt, is_builtin, ord) VALUES(?,?,?,?,?) \
+            "INSERT INTO style_packs(id, name, system_prompt, is_builtin, ord, \
+             match_prefix, provider, model, role_kind, output_mode) \
+             VALUES(?,?,?,?,?,?,?,?,?,?) \
              ON CONFLICT(id) DO UPDATE SET name=excluded.name, system_prompt=excluded.system_prompt, \
-             is_builtin=excluded.is_builtin, ord=excluded.ord",
+             is_builtin=excluded.is_builtin, ord=excluded.ord, match_prefix=excluded.match_prefix, \
+             provider=excluded.provider, model=excluded.model, role_kind=excluded.role_kind, \
+             output_mode=excluded.output_mode",
             params![
                 p.id,
                 p.name,
                 p.system_prompt,
                 if p.is_builtin { 1 } else { 0 },
                 p.ord,
+                p.match_prefix,
+                p.provider,
+                p.model,
+                role_kind_str(p.role_kind),
+                output_mode_str(p.output_mode),
             ],
         )
         .map_err(|e| Error::Store(format!("upsert_style_pack 失败: {e}")))?;
@@ -526,9 +626,99 @@ impl SqliteStore {
                 system_prompt: prompt.into(),
                 is_builtin: true,
                 ord,
+                match_prefix: None,
+                provider: None,
+                model: None,
+                role_kind: RoleKind::Default,
+                output_mode: OutputMode::Insert,
             })?;
         }
         Ok(())
+    }
+
+    /// R5：内置前缀包种子——按 id 补缺失项（不清空用户对内置包的修改，
+    /// 只插入不存在的 id；用户厌恶种子时把 match_prefix 清空即可，不被重新种回）。
+    pub fn seed_builtin_prefix_packs_if_missing(&self) -> Result<()> {
+        let existing: Vec<String> = self
+            .list_style_packs()?
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        let builtins: [( &str, &str, &str, RoleKind, &str, i32); 3] = [
+            (
+                "builtin-role-mail",
+                "邮件",
+                "邮件|mail|写邮件",
+                RoleKind::Default,
+                "你是中文语音输入助手。请把语音内容改写为正式得体的邮件正文，\
+                 只输出邮件正文本身（含称呼与落款），不要解释、不要加引号。",
+                10,
+            ),
+            (
+                "builtin-role-translate",
+                "翻译",
+                "翻译|translate|译",
+                RoleKind::Translate,
+                // fallback prompt：命中 translate 角色实际走 translate_text；本 prompt 仅兜底。
+                "把语音内容翻译成目标语言，只输出译文。",
+                11,
+            ),
+            (
+                "builtin-role-cmd",
+                "命令",
+                "命令|command|指令",
+                RoleKind::Default,
+                "你是命令行助手。把语音内容转换为一条可直接粘贴执行的命令，\
+                 只输出命令本身，不要解释、不要代码块标记。",
+                12,
+            ),
+        ];
+        for (id, name, prefix, kind, prompt, ord) in builtins {
+            if existing.iter().any(|e| e == id) {
+                continue;
+            }
+            self.upsert_style_pack(&StylePack {
+                id: id.into(),
+                name: name.into(),
+                system_prompt: prompt.into(),
+                is_builtin: true,
+                ord,
+                match_prefix: Some(prefix.into()),
+                provider: None,
+                model: None,
+                role_kind: kind,
+                output_mode: OutputMode::Insert,
+            })?;
+        }
+        Ok(())
+    }
+}
+
+fn role_kind_str(k: RoleKind) -> String {
+    match k {
+        RoleKind::Default => "default".into(),
+        RoleKind::Translate => "translate".into(),
+    }
+}
+
+fn parse_role_kind(s: &str) -> RoleKind {
+    match s {
+        "translate" => RoleKind::Translate,
+        _ => RoleKind::Default,
+    }
+}
+
+fn output_mode_str(m: OutputMode) -> String {
+    match m {
+        OutputMode::Insert => "insert".into(),
+        OutputMode::Panel => "panel".into(),
+    }
+}
+
+fn parse_output_mode(s: &str) -> OutputMode {
+    match s {
+        "panel" => OutputMode::Panel,
+        _ => OutputMode::Insert,
     }
 }
 
@@ -712,6 +902,11 @@ mod tests {
                 system_prompt: "test".into(),
                 is_builtin: false,
                 ord: 10,
+                match_prefix: None,
+                provider: None,
+                model: None,
+                role_kind: RoleKind::Default,
+                output_mode: OutputMode::Insert,
             })
             .unwrap();
         assert_eq!(store.list_style_packs().unwrap().len(), 4);
@@ -720,5 +915,146 @@ mod tests {
         assert_eq!(store.list_style_packs().unwrap().len(), 3);
         store.delete_style_pack("builtin-formal").unwrap();
         assert_eq!(store.list_style_packs().unwrap().len(), 3); // 内置删不掉
+    }
+
+    #[test]
+    fn v4_role_fields_round_trip() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        assert_eq!(store.migration_version().unwrap(), 4);
+        let mut p = StylePack {
+            id: "role-1".into(),
+            name: "翻译".into(),
+            system_prompt: "把内容翻译成目标语言".into(),
+            is_builtin: true,
+            ord: 7,
+            match_prefix: Some("翻译|translate".into()),
+            provider: Some("cloud".into()),
+            model: Some("qwen-plus".into()),
+            role_kind: RoleKind::Translate,
+            output_mode: OutputMode::Insert,
+        };
+        store.upsert_style_pack(&p).unwrap();
+        let got = store.list_style_packs().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0], p);
+        assert!(got[0].is_prefix_role());
+        // 清空前缀 → 退回纯风格包。
+        p.match_prefix = None;
+        store.upsert_style_pack(&p).unwrap();
+        let got = store.list_style_packs().unwrap();
+        assert!(!got[0].is_prefix_role());
+    }
+
+    #[test]
+    fn v4_migrates_v3_table() {
+        // 从 v3 库升级：旧行 match_prefix=NULL、role_kind='default'。
+        let manager = SqliteConnectionManager::memory().with_init(|c| {
+            c.execute_batch("PRAGMA foreign_keys = ON;")
+        });
+        let pool = Pool::builder()
+            .max_size(1)
+            .build(manager)
+            .unwrap();
+        // 手工建到 v3。
+        {
+            let conn = pool.get().unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL, started_at TEXT NOT NULL,
+                    ended_at TEXT, engine TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS utterances (
+                    id TEXT PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL,
+                    final_text TEXT NOT NULL, audio_path TEXT, created_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS hotwords (id TEXT PRIMARY KEY, word TEXT NOT NULL UNIQUE, weight INTEGER NOT NULL DEFAULT 1);
+                CREATE TABLE IF NOT EXISTS style_packs (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, system_prompt TEXT NOT NULL,
+                    is_builtin INTEGER NOT NULL DEFAULT 0, ord INTEGER NOT NULL DEFAULT 0);
+                INSERT INTO style_packs(id,name,system_prompt,is_builtin,ord)
+                    VALUES('builtin-formal','正式','p',1,0);
+                PRAGMA user_version = 3;
+                "#,
+            )
+            .unwrap();
+        }
+        // 用迁移入口打开（SQLite v4 ALTER TABLE 直接作用在既有连接上）。
+        let conn = pool.get().unwrap();
+        let current: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(current, 3);
+        conn.execute_batch(MIGRATIONS[3]).unwrap();
+        conn.execute_batch("PRAGMA user_version = 4;").unwrap();
+        let packs: Vec<(Option<String>, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT match_prefix, role_kind FROM style_packs")
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(packs.len(), 1);
+        assert_eq!(packs[0].0, None);
+        assert_eq!(packs[0].1, "default");
+    }
+
+    #[test]
+    fn seed_prefix_packs_inserts_missing_only() {        let store = SqliteStore::open_in_memory().unwrap();
+        store.seed_builtin_prefix_packs_if_missing().unwrap();
+        let packs = store.list_style_packs().unwrap();
+        assert_eq!(packs.len(), 3);
+        let mail = packs.iter().find(|p| p.id == "builtin-role-mail").unwrap();
+        assert_eq!(mail.match_prefix.as_deref(), Some("邮件|mail|写邮件"));
+        let tr = packs
+            .iter()
+            .find(|p| p.id == "builtin-role-translate")
+            .unwrap();
+        assert_eq!(tr.role_kind, RoleKind::Translate);
+        // 再 seed 不重复、不清用户改动。
+        store
+            .upsert_style_pack(&StylePack {
+                id: "builtin-role-mail".into(),
+                name: "邮件".into(),
+                system_prompt: "自定义".into(),
+                is_builtin: true,
+                ord: 10,
+                match_prefix: None,
+                provider: None,
+                model: None,
+                role_kind: RoleKind::Default,
+                output_mode: OutputMode::Insert,
+            })
+            .unwrap();
+        store.seed_builtin_prefix_packs_if_missing().unwrap();
+        let packs = store.list_style_packs().unwrap();
+        assert_eq!(packs.len(), 3);
+        let mail = packs.iter().find(|p| p.id == "builtin-role-mail").unwrap();
+        assert_eq!(mail.match_prefix, None, "种子不得覆盖用户清空的前缀");
+        assert_eq!(mail.system_prompt, "自定义");
+    }
+
+    #[test]
+    fn upsert_rejects_duplicate_prefix_alias() {
+        // FR-5.8：与其它包存在相同别名 → 整单失败。
+        let store = SqliteStore::open_in_memory().unwrap();
+        let p = |id: &str, prefix: &str| StylePack {
+            id: id.into(),
+            name: id.into(),
+            system_prompt: "p".into(),
+            is_builtin: false,
+            ord: 0,
+            match_prefix: Some(prefix.into()),
+            provider: None,
+            model: None,
+            role_kind: RoleKind::Default,
+            output_mode: OutputMode::Insert,
+        };
+        store.upsert_style_pack(&p("a", "邮件|mail")).unwrap();
+        assert!(store.upsert_style_pack(&p("b", "mail")).is_err());
+        assert!(store.upsert_style_pack(&p("b", "MAIL")).is_err(), "忽略大小写");
+        // 同一包的自己更新不冲突。
+        assert!(store.upsert_style_pack(&p("a", "邮件|mail|写邮件")).is_ok());
+        // 无前缀包不参与冲突。
+        assert!(store.upsert_style_pack(&p("c", "")).is_ok());
     }
 }

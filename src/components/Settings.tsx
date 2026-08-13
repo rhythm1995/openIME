@@ -647,6 +647,195 @@ export default function Settings() {
         )}
       </div>
 
+      {/* P1：R6 划词问答 */}
+      <div className="card">
+        <h2 className="card-title">{t("settings.qa.title")}</h2>
+        <span className="field-hint" style={{ display: "block", marginBottom: 8 }}>
+          {t("settings.qa.hint")}
+        </span>
+        <div className="set-row">
+          <div>
+            <div className="set-name">{t("settings.qa.saveHistoryName")}</div>
+            <div className="set-desc">{t("settings.qa.saveHistoryDesc")}</div>
+          </div>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={config.qa_save_history ?? false}
+              onChange={(e) =>
+                setConfig({ ...config, qa_save_history: e.target.checked })
+              }
+            />
+            <span className="slider" />
+          </label>
+        </div>
+      </div>
+
+      {/* P1：R5 角色 / 风格包（不藏在 Heavy 里，任何润色模式可见） */}
+      <div className="card">
+        <h2 className="card-title">{t("settings.roles.title")}</h2>
+        <div className="set-row">
+          <div>
+            <div className="set-name">{t("settings.roles.enabledName")}</div>
+            <div className="set-desc">{t("settings.roles.enabledDesc")}</div>
+          </div>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={config.prefix_roles_enabled ?? true}
+              onChange={(e) =>
+                setConfig({ ...config, prefix_roles_enabled: e.target.checked })
+              }
+            />
+            <span className="slider" />
+          </label>
+        </div>
+        <span className="field-hint" style={{ display: "block", marginTop: 6 }}>
+          {t("settings.roles.hint")}
+        </span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
+          {stylePacks.map((p) => {
+            const prefix = p.match_prefix ?? "";
+            const isRole = !!prefix.trim();
+            const savePack = async (patch: Partial<StylePack>) => {
+              await ipc.upsertStylePack({
+                id: p.id,
+                name: p.name,
+                system_prompt: p.system_prompt,
+                is_builtin: p.is_builtin,
+                ord: p.ord,
+                match_prefix: p.match_prefix ?? null,
+                provider: p.provider ?? null,
+                model: p.model ?? null,
+                role_kind: p.role_kind ?? "default",
+                output_mode: p.output_mode ?? "insert",
+                ...patch,
+              });
+              ipc.listStylePacks().then(setStylePacks).catch(() => {});
+            };
+            return (
+              <div
+                key={p.id}
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: 10,
+                  padding: "10px 12px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 8,
+                    flexWrap: "wrap",
+                    gap: 6,
+                  }}
+                >
+                  <strong style={{ fontSize: 13 }}>
+                    {p.name}
+                    {p.is_builtin ? t("settings.polish.builtin") : ""}
+                  </strong>
+                  <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {isRole && (
+                      <span className="badge badge-success" style={{ fontSize: 11 }}>
+                        {t("settings.roles.prefixBadge", { prefix: prefix.split("|")[0] })}
+                      </span>
+                    )}
+                    {p.role_kind === "translate" && (
+                      <span className="badge" style={{ fontSize: 11 }}>
+                        {t("settings.roles.translateKind")}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <input
+                    key={`${p.id}-prefix`}
+                    defaultValue={prefix}
+                    placeholder={t("settings.roles.prefixPh")}
+                    style={{ flex: 2 }}
+                    onBlur={(e) => {
+                      const v = e.target.value.trim();
+                      if (v !== prefix) {
+                        savePack({ match_prefix: v || null });
+                      }
+                    }}
+                  />
+                  <select
+                    key={`${p.id}-provider`}
+                    defaultValue={p.provider ?? "cloud"}
+                    style={{ flex: 1 }}
+                    onChange={(e) => savePack({ provider: e.target.value || null })}
+                  >
+                    <option value="cloud">{t("settings.roles.providerCloud")}</option>
+                    <option value="local">{t("settings.roles.providerLocal")}</option>
+                  </select>
+                </div>
+                <textarea
+                  key={`${p.id}-prompt`}
+                  defaultValue={p.system_prompt}
+                  rows={2}
+                  style={{ fontSize: 12, width: "100%" }}
+                  placeholder={t("settings.roles.promptPh")}
+                  onBlur={(e) => {
+                    const v = e.target.value.trim();
+                    if (v && v !== p.system_prompt) {
+                      savePack({ system_prompt: v });
+                    }
+                  }}
+                />
+              </div>
+            );
+          })}
+        </div>
+        {!stylePacks.some((p) => !p.is_builtin) && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              marginTop: 12,
+            }}
+          >
+            <input
+              placeholder={t("settings.polish.styleNamePh")}
+              value={newStyleName}
+              onChange={(e) => setNewStyleName(e.target.value)}
+            />
+            <textarea
+              placeholder={t("settings.polish.stylePromptPh")}
+              value={newStylePrompt}
+              onChange={(e) => setNewStylePrompt(e.target.value)}
+              rows={2}
+            />
+            <button
+              className="btn"
+              disabled={!newStyleName.trim() || !newStylePrompt.trim()}
+              onClick={async () => {
+                await ipc.upsertStylePack({
+                  id: `user-${Date.now()}`,
+                  name: newStyleName.trim(),
+                  system_prompt: newStylePrompt.trim(),
+                  is_builtin: false,
+                  ord: 100,
+                  match_prefix: null,
+                  provider: null,
+                  model: null,
+                  role_kind: "default",
+                  output_mode: "insert",
+                });
+                setNewStyleName("");
+                setNewStylePrompt("");
+                ipc.listStylePacks().then(setStylePacks).catch(() => {});
+              }}
+            >
+              {t("settings.polish.addStylePack")}
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* 引擎 */}
       <div className="card">
         <h2 className="card-title">{t("settings.engine.title")}</h2>
@@ -1225,6 +1414,34 @@ export default function Settings() {
               placeholder={t("settings.hotkey.styleSwitchPh")}
             />
           </div>
+          <div style={{ marginTop: 10 }}>
+            <label className="field-label">{t("settings.hotkey.translateLabel")}</label>
+            <input
+              value={config.translate_hotkey ?? ""}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  translate_hotkey: e.target.value || null,
+                })
+              }
+              placeholder={t("settings.hotkey.translatePh")}
+            />
+            <span className="field-hint">{t("settings.hotkey.translateHint")}</span>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <label className="field-label">{t("settings.hotkey.qaLabel")}</label>
+            <input
+              value={config.qa_hotkey ?? ""}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  qa_hotkey: e.target.value || null,
+                })
+              }
+              placeholder={t("settings.hotkey.qaPh")}
+            />
+            <span className="field-hint">{t("settings.hotkey.qaHint")}</span>
+          </div>
           {config.hotkey.trim().toLowerCase() === "fn" && (
             <span
               className="field-hint"
@@ -1234,6 +1451,100 @@ export default function Settings() {
               {t("settings.hotkey.fnWarning")}
             </span>
           )}
+        </div>
+      </div>
+
+      {/* P1：R4 翻译 */}
+      <div className="card">
+        <h2 className="card-title">{t("settings.translate.title")}</h2>
+        <div className="field">
+          <label className="field-label">{t("settings.translate.targetLangLabel")}</label>
+          <select
+            value={config.translate_target_lang ?? "en"}
+            onChange={(e) =>
+              setConfig({ ...config, translate_target_lang: e.target.value })
+            }
+          >
+            <option value="zh">{t("settings.translate.lang_zh")}</option>
+            <option value="en">{t("settings.translate.lang_en")}</option>
+            <option value="ja">{t("settings.translate.lang_ja")}</option>
+            <option value="ko">{t("settings.translate.lang_ko")}</option>
+            <option value="fr">{t("settings.translate.lang_fr")}</option>
+            <option value="de">{t("settings.translate.lang_de")}</option>
+            <option value="es">{t("settings.translate.lang_es")}</option>
+          </select>
+          <span className="field-hint">{t("settings.translate.targetLangHint")}</span>
+        </div>
+        <div className="set-row">
+          <div>
+            <div className="set-name">{t("settings.translate.polishFirstName")}</div>
+            <div className="set-desc">{t("settings.translate.polishFirstDesc")}</div>
+          </div>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={config.translate_with_polish ?? false}
+              onChange={(e) =>
+                setConfig({ ...config, translate_with_polish: e.target.checked })
+              }
+            />
+            <span className="slider" />
+          </label>
+        </div>
+      </div>
+
+      {/* P1：R7 插入策略 + 剪贴板恢复 */}
+      <div className="card">
+        <h2 className="card-title">{t("settings.insert.title")}</h2>
+        <div className="field">
+          <label className="field-label">{t("settings.insert.strategyLabel")}</label>
+          <select
+            value={config.insert_strategy ?? "auto"}
+            onChange={(e) =>
+              setConfig({
+                ...config,
+                insert_strategy: e.target.value as "auto" | "type" | "paste",
+              })
+            }
+          >
+            <option value="auto">{t("settings.insert.strategy_auto")}</option>
+            <option value="type">{t("settings.insert.strategy_type")}</option>
+            <option value="paste">{t("settings.insert.strategy_paste")}</option>
+          </select>
+          <span className="field-hint">{t("settings.insert.strategyHint")}</span>
+        </div>
+        <div className="field">
+          <label className="field-label">{t("settings.insert.fallbackAppsLabel")}</label>
+          <input
+            value={(config.paste_fallback_apps ?? []).join(", ")}
+            onChange={(e) =>
+              setConfig({
+                ...config,
+                paste_fallback_apps: e.target.value
+                  .split(/[,，]/)
+                  .map((s) => s.trim())
+                  .filter(Boolean),
+              })
+            }
+            placeholder={t("settings.insert.fallbackAppsPh")}
+          />
+          <span className="field-hint">{t("settings.insert.fallbackAppsHint")}</span>
+        </div>
+        <div className="set-row">
+          <div>
+            <div className="set-name">{t("settings.insert.restoreName")}</div>
+            <div className="set-desc">{t("settings.insert.restoreDesc")}</div>
+          </div>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={config.restore_clipboard ?? true}
+              onChange={(e) =>
+                setConfig({ ...config, restore_clipboard: e.target.checked })
+              }
+            />
+            <span className="slider" />
+          </label>
         </div>
       </div>
 

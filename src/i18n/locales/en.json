@@ -135,22 +135,40 @@
       "enable": "Enable",
       "enabledTip": "Enabled \"{{title}}\"",
       "models": {
-        "firered_large": { "title": "FireRedASR Large", "desc": "Offline full-clip · high-accuracy CN/EN · ~1.7GB · more accurate but slower; for chasing accuracy" },
-        "zipformer_zh_xlarge": { "title": "Zipformer CN xlarge", "desc": "Streaming xlarge int8 · large CN model · ~735MB · more accurate than large" },
-        "zipformer_zh_2025": { "title": "Zipformer CN 2025", "desc": "Streaming large int8 · CN · ~167MB · balanced size and speed" },
-        "sensevoice": { "title": "SenseVoice", "desc": "Offline full-clip · CN/EN/JP/KO/Yue · ~240MB · fast, light on resources" }
+        "firered_large": {
+          "title": "FireRedASR Large",
+          "desc": "Offline full-clip · high-accuracy CN/EN · ~1.7GB · more accurate but slower; for chasing accuracy"
+        },
+        "zipformer_zh_xlarge": {
+          "title": "Zipformer CN xlarge",
+          "desc": "Streaming xlarge int8 · large CN model · ~735MB · more accurate than large"
+        },
+        "zipformer_zh_2025": {
+          "title": "Zipformer CN 2025",
+          "desc": "Streaming large int8 · CN · ~167MB · balanced size and speed"
+        },
+        "sensevoice": {
+          "title": "SenseVoice",
+          "desc": "Offline full-clip · CN/EN/JP/KO/Yue · ~240MB · fast, light on resources"
+        }
       }
     },
     "hotkey": {
-      "title": "Shortcuts",
-      "recordLabel": "Recording shortcut",
-      "recordHint": "Default Fn (🌐 key). You can also use a combo like Alt+Shift+D.",
+      "title": "Hotkeys",
+      "recordLabel": "Recording hotkey",
+      "recordHint": "Default Fn (🌐 key). Or a combo like Alt+Shift+D.",
       "modeLabel": "Trigger mode (A1)",
-      "mode_toggle": "Toggle (press once to start / again to stop)",
-      "mode_hold": "Push-to-talk (release to stop)",
-      "styleSwitchLabel": "Style pack switch shortcut (F1, optional)",
-      "styleSwitchPh": "e.g. Ctrl+Shift+P (leave empty to disable)",
-      "fnWarning": "To use the Fn key, set System Settings → Keyboard → \"Press 🌐 key\" to \"Do nothing\", otherwise the system intercepts Fn events."
+      "mode_toggle": "Toggle (press to start / stop)",
+      "mode_hold": "Hold (release to stop)",
+      "styleSwitchLabel": "Style pack cycle hotkey (F1, optional)",
+      "styleSwitchPh": "e.g. Ctrl+Shift+P (empty = off)",
+      "fnWarning": "Fn needs System Settings → Keyboard → “Press 🌐 key to” = “Do Nothing”, otherwise the system swallows the event.",
+      "translateLabel": "Translate hotkey (R4, optional)",
+      "translatePh": "e.g. Alt+Shift+T (empty = off)",
+      "translateHint": "Speak in the source language; the target language appears at the caret.",
+      "qaLabel": "Selection QA hotkey (R6, optional)",
+      "qaPh": "e.g. Cmd+Shift+; (empty = off)",
+      "qaHint": "Select text, press the key: a QA panel opens, ask by voice, streamed answer."
     },
     "transcribe": {
       "title": "File transcription",
@@ -200,6 +218,64 @@
       "charCount": "{{count}} chars",
       "noResponseHint": "If nothing happens, make sure the engine is configured and saved",
       "clear": "Clear"
+    },
+    "translate": {
+      "title": "Translate (R4)",
+      "targetLangLabel": "Target language",
+      "targetLangHint": "Fixed language set; takes effect on the next session.",
+      "lang_zh": "中文",
+      "lang_en": "English",
+      "lang_ja": "日本語",
+      "lang_ko": "한국어",
+      "lang_fr": "français",
+      "lang_de": "Deutsch",
+      "lang_es": "español",
+      "polishFirstName": "Polish before translating",
+      "polishFirstDesc": "One call: remove filler words and smooth the text, then translate (slower)."
+    },
+    "insert": {
+      "title": "Insertion & clipboard (R7)",
+      "strategyLabel": "Insertion strategy",
+      "strategy_auto": "Auto (type first, paste on failure)",
+      "strategy_type": "Type only",
+      "strategy_paste": "Paste only (Cmd+V / Ctrl+V)",
+      "strategyHint": "For remote desktops / secure input that swallow simulated keys, “paste only” is the most reliable.",
+      "fallbackAppsLabel": "Paste-fallback apps",
+      "fallbackAppsPh": "e.g. mstsc, com.microsoft.rdc.macos (comma separated)",
+      "fallbackAppsHint": "When the foreground app matches any entry, paste even in Auto mode.",
+      "restoreName": "Restore clipboard",
+      "restoreDesc": "About 0.75s after pasting, restore your previous clipboard content unless you copied something else meanwhile."
+    },
+    "roles": {
+      "title": "Roles / style packs (R5 prefix commands)",
+      "enabledName": "Enable prefix roles",
+      "enabledDesc": "Dictation starting with a prefix like “邮件:” or “翻译:” is handled by the matching role. Dictation then inserts as a whole (no streaming).",
+      "hint": "A prefix overrides the default style for that utterance; translate roles share the target language with the translate hotkey. Clear a prefix to turn it back into a plain style pack.",
+      "prefixBadge": "Prefix: {{prefix}}",
+      "translateKind": "translate role",
+      "prefixPh": "Prefix aliases (| separated, e.g. mail|email)",
+      "providerCloud": "Cloud (default)",
+      "providerLocal": "Local GGUF",
+      "promptPh": "Role instruction (system prompt)"
+    },
+    "qa": {
+      "title": "Selection voice QA (R6)",
+      "hint": "Select text → press the QA hotkey → ask by voice with the recording hotkey → streamed answer. Closing the panel clears context.",
+      "saveHistoryName": "Save QA to history",
+      "saveHistoryDesc": "Create one session per panel open, two utterances per round (Q: / A:)."
+    },
+    "_qa": {
+      "title": "Selection QA",
+      "subtitle": "Press the recording key to ask · streamed answers",
+      "refreshSelection": "Refresh selection",
+      "clear": "Clear conversation",
+      "selectionLabel": "Selected context",
+      "noSelection": "No selection detected (select text in the target app, then press refresh)",
+      "empty": "No questions yet. Press the recording key to ask.",
+      "recording": "Listening for question…",
+      "cancel": "Stop generating",
+      "copy": "Copy answer",
+      "insert": "Insert at caret"
     }
   },
   "history": {
@@ -251,5 +327,19 @@
     "deleteTitle": "Delete",
     "notFound": "No matching entries",
     "empty": "Dictionary is empty"
+  },
+  "qa": {
+    "title": "Selection QA",
+    "subtitle": "Press the recording key to ask · streamed answers",
+    "refreshSelection": "Refresh selection",
+    "clear": "Clear conversation",
+    "selectionLabel": "Selected context",
+    "noSelection": "No selection detected (select text in the target app, then press refresh)",
+    "empty": "No questions yet. Press the recording key to ask.",
+    "recording": "Listening for question…",
+    "cancel": "Stop generating",
+    "copy": "Copy answer",
+    "insert": "Insert at caret",
+    "noKeyBanner": "No cloud LLM configured: fill Endpoint + API Key under Settings → AI Polish to use QA"
   }
 }

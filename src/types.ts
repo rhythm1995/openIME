@@ -26,6 +26,15 @@ export type PolishMode = "off" | "light" | "heavy";
 /** 快捷键模式（A1）：toggle 切换 / hold 按住说话。 */
 export type HotkeyMode = "toggle" | "hold";
 
+/** R7 插入策略：auto（先打字失败粘贴）/ type（只打字）/ paste（只粘贴）。 */
+export type InsertStrategy = "auto" | "type" | "paste";
+
+/** R5 角色种类：default（普通指令角色）/ translate（翻译角色）。 */
+export type RoleKind = "default" | "translate";
+
+/** R5 输出模式：P1 仅 insert（预留 panel）。 */
+export type OutputMode = "insert" | "panel";
+
 export interface AppConfig {
   active_provider: number;
   providers: ProviderConfig[];
@@ -59,15 +68,55 @@ export interface AppConfig {
   /** 当前选中的风格包 id（F1，仅 heavy 模式生效；null = 默认 Heavy prompt） */
   active_style_pack_id?: string | null;
   polish_timeout_ms?: number;
+  /** 半角标点偏好 app 关键字（B5） */
+  punct_half_width_apps?: string[];
+  /** 繁简偏好（B6）：auto / simplified / traditional */
+  chinese_script_preference?: string;
+
+  // ── P1：R4 翻译 ──
+  /** 翻译快捷键（null = 不注册；P1 仅 Toggle） */
+  translate_hotkey?: string | null;
+  /** 翻译目标语言（BCP-47 短码，固定下拉） */
+  translate_target_lang?: string;
+  /** 「先润色再翻译」哨兵合成调用 */
+  translate_with_polish?: boolean;
+
+  // ── P1：R5 前缀角色 ──
+  /** 识别结果前缀分流到角色（开 → 听写整段插入，关 → 恢复流式上屏） */
+  prefix_roles_enabled?: boolean;
+
+  // ── P1：R6 划词问答 ──
+  /** QA 快捷键（null = 不注册） */
+  qa_hotkey?: string | null;
+  /** QA 问答写入历史（sessions/utterances） */
+  qa_save_history?: boolean;
+
+  // ── P1：R7 粘贴兜底 ──
+  insert_strategy?: InsertStrategy;
+  /** 前台 app 命中任一条时视同粘贴（应对「Ok 但吞键」） */
+  paste_fallback_apps?: string[];
+  /** 粘贴后 750ms 恢复原剪贴板 */
+  restore_clipboard?: boolean;
 }
 
-/** 一个风格包（F1）：用户自定义输出风格的 system prompt。 */
+/** 一个风格包（F1）：用户自定义输出风格的 system prompt。
+ *  R5 扩展：带 match_prefix 时也是「前缀角色」。 */
 export interface StylePack {
   id: string;
   name: string;
   system_prompt: string;
   is_builtin: boolean;
   ord: number;
+  /** 前缀别名，`|` 分隔（如 邮件|mail|写邮件）；null/空 = 纯风格包 */
+  match_prefix?: string | null;
+  /** null = cloud（默认）/ cloud / local */
+  provider?: string | null;
+  /** 覆盖全局 cloud model（可选） */
+  model?: string | null;
+  /** default / translate */
+  role_kind?: RoleKind;
+  /** P1 仅 insert */
+  output_mode?: OutputMode;
 }
 
 export interface PolishModelStatus {

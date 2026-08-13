@@ -2,7 +2,8 @@
 //!
 //! 一期用 enigo 模拟键盘逐字输入（macOS CGEvent）。
 //! 需 macOS 辅助功能权限（见 [`crate::permissions`]）。
-//! 二期再加剪贴板 + Cmd+V 兜底。
+//! R7 增加四态（Typed / Pasted / CopiedFallback / Failed）与剪贴板恢复纯逻辑；
+//! 剪贴板本体 + 平台粘贴和弦在 Tauri 薄壳（insert_fallback.rs），voice-core 不依赖 arboard。
 //!
 //! 为可测：核心是 [`TextInserter`] trait（在 traits.rs），本模块提供 [`EnigoInserter`]。
 //! Enigo 非 Send，故用 Mutex 包裹；测试用 RecordingInserter（见 tests）。
@@ -12,8 +13,21 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use enigo::{Enigo, Keyboard, Settings};
 
+use crate::config::InsertStrategy;
 use crate::traits::TextInserter;
 use crate::Error;
+
+/// R7：一次插入的选项（由薄壳从 AppConfig + 前台 app 组装）。
+#[derive(Debug, Clone, Default)]
+pub struct InsertOpts {
+    pub strategy: InsertStrategy,
+    /// 前台 app 标识命中任一条时视同 Paste（macOS bundle id / Windows exe basename）。
+    pub paste_fallback_apps: Vec<String>,
+    /// 粘贴后 750ms 恢复原剪贴板。
+    pub restore_clipboard: bool,
+    /// 本次插入时的前台 app 标识（粘贴策略命中判断用）。
+    pub frontmost: Option<String>,
+}
 
 /// enigo 实现的文本插入器。逐字（Unicode）输入到当前键盘焦点。
 pub struct EnigoInserter {
@@ -95,6 +109,90 @@ pub fn should_restore_clipboard(
     }
 }
 
+// ── R7：PendingRestore 状态机纯逻辑（薄壳持 Mutex，这里只做无锁决策）──
+
+/// 一次待恢复的粘贴快照（进程级单例在薄壳，见 `src-tauri/insert_fallback.rs`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRestore {
+    pub id: u64,
+    /// 恢复目标（粘贴前的内容）。连续粘贴期间沿用第一次的 original。
+    pub original: Option<String>,
+    /// 本次写入剪贴板的文字（恢复前与剪贴板比对用）。
+    pub last_inserted: String,
+}
+
+/// 粘贴成功后登记恢复。纯函数：
+/// - original 链：沿用未完成的上次 original，否则用「本次粘贴前剪贴板内容」；
+/// - 连续两句 Paste 的最终 original 是第一次之前的内容（A7.4）。
+pub fn remember_pending(
+    pending: Option<&PendingRestore>,
+    id: u64,
+    clipboard_before_overwrite: Option<&str>,
+    inserted_text: &str,
+) -> PendingRestore {
+    PendingRestore {
+        id,
+        original: pending
+            .and_then(|p| p.original.clone())
+            .or_else(|| clipboard_before_overwrite.map(str::to_string)),
+        last_inserted: inserted_text.to_string(),
+    }
+}
+
+/// 750ms 恢复点到达时的决策。纯函数：
+/// - id 不匹配（已有更新的粘贴）→ 不动作；
+/// - 剪贴板仍是 last_inserted → 写回 original（None 只清空）；
+/// - 剪贴板被用户改过（或非文本）→ 不覆盖，只清空登记。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestoreDecision {
+    DoNothing,
+    Restore(String),
+    Clear,
+}
+
+pub fn decide_restore(
+    pending: Option<&PendingRestore>,
+    my_id: u64,
+    clipboard_now: Option<&str>,
+) -> RestoreDecision {
+    let Some(p) = pending else {
+        return RestoreDecision::DoNothing;
+    };
+    if p.id != my_id {
+        return RestoreDecision::DoNothing;
+    }
+    if should_restore_clipboard(clipboard_now, &p.last_inserted) {
+        match &p.original {
+            Some(original) => RestoreDecision::Restore(original.clone()),
+            None => RestoreDecision::Clear,
+        }
+    } else {
+        RestoreDecision::Clear
+    }
+}
+
+/// 前台 app 标识是否命中粘贴兜底列表（FR-7.4）。
+/// - macOS：bundle id 包含关键字（与 punct_half_width_apps 一致）。
+/// - Windows：exe basename（小写）== kw、== kw+".exe" 或包含 kw。
+/// 实现取并集（== / +".exe" / contains），跨平台可单测（A7.7）。
+pub fn matches_paste_fallback(frontmost: Option<&str>, apps: &[String]) -> bool {
+    let Some(f) = frontmost else {
+        return false;
+    };
+    let f = f.trim();
+    if f.is_empty() {
+        return false;
+    }
+    let f_lower = f.to_lowercase();
+    apps.iter().any(|kw| {
+        let kw = kw.trim().to_lowercase();
+        if kw.is_empty() {
+            return false;
+        }
+        f_lower == kw || f_lower == format!("{kw}.exe") || f_lower.contains(&kw)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,5 +232,98 @@ mod tests {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let _ = rt.block_on(ins.insert(""));
         }
+    }
+
+    // ── R7：PendingRestore 状态机 ──
+
+    #[test]
+    fn remember_pending_first_paste_takes_clipboard_before() {
+        let p = remember_pending(None, 1, Some("SECRET"), "HELLO");
+        assert_eq!(p.original.as_deref(), Some("SECRET"));
+        assert_eq!(p.last_inserted, "HELLO");
+    }
+
+    #[test]
+    fn remember_pending_chains_original_across_pastes() {
+        // A7.4：连续两句 Paste，最终 original 是第一次之前的内容。
+        let p1 = remember_pending(None, 1, Some("SECRET"), "HELLO");
+        let p2 = remember_pending(Some(&p1), 2, Some("HELLO"), "WORLD");
+        assert_eq!(p2.original.as_deref(), Some("SECRET"));
+        assert_eq!(p2.last_inserted, "WORLD");
+    }
+
+    #[test]
+    fn remember_pending_without_prior_or_clipboard_text_has_no_original() {
+        // 剪贴板非文本（图片）→ previous=None，恢复不写回。
+        let p = remember_pending(None, 1, None, "HELLO");
+        assert_eq!(p.original, None);
+    }
+
+    #[test]
+    fn decide_restore_restores_when_unchanged() {
+        let p = remember_pending(None, 1, Some("SECRET"), "HELLO");
+        assert_eq!(
+            decide_restore(Some(&p), 1, Some("HELLO")),
+            RestoreDecision::Restore("SECRET".into())
+        );
+    }
+
+    #[test]
+    fn decide_restore_skips_when_user_copied_other() {
+        // A7.3：200ms 内用户复制 OTHER → 不覆盖。
+        let p = remember_pending(None, 1, Some("SECRET"), "HELLO");
+        assert_eq!(
+            decide_restore(Some(&p), 1, Some("OTHER")),
+            RestoreDecision::Clear
+        );
+    }
+
+    #[test]
+    fn decide_restore_skips_when_stale_id() {
+        // 750ms 前又发生了一次新粘贴：旧 id 的恢复任务不动作。
+        let p1 = remember_pending(None, 1, Some("SECRET"), "HELLO");
+        let p2 = remember_pending(Some(&p1), 2, Some("HELLO"), "WORLD");
+        assert_eq!(
+            decide_restore(Some(&p2), 1, Some("HELLO")),
+            RestoreDecision::DoNothing
+        );
+        // 新 id 到期且未变 → 恢复第一次之前的内容。
+        assert_eq!(
+            decide_restore(Some(&p2), 2, Some("WORLD")),
+            RestoreDecision::Restore("SECRET".into())
+        );
+    }
+
+    #[test]
+    fn decide_restore_non_text_clipboard_clears() {
+        let p = remember_pending(None, 1, Some("SECRET"), "HELLO");
+        assert_eq!(
+            decide_restore(Some(&p), 1, None),
+            RestoreDecision::Clear
+        );
+    }
+
+    #[test]
+    fn decide_restore_no_pending_is_noop() {
+        assert_eq!(decide_restore(None, 1, Some("HELLO")), RestoreDecision::DoNothing);
+    }
+
+    #[test]
+    fn paste_fallback_matching() {
+        // A7.7：mstsc.exe 命中 mstsc。
+        assert!(matches_paste_fallback(Some("mstsc.exe"), &["mstsc".into()]));
+        // macOS bundle id contains。
+        assert!(matches_paste_fallback(
+            Some("com.microsoft.rdc.macos"),
+            &["rdc".into()]
+        ));
+        assert!(matches_paste_fallback(Some("notepad.exe"), &["notepad".into()]));
+        // 不区分大小写。
+        assert!(matches_paste_fallback(Some("MSTSC.EXE"), &["mstsc".into()]));
+        // 不命中 / 空列表 / 无前台。
+        assert!(!matches_paste_fallback(Some("com.apple.notes"), &["mstsc".into()]));
+        assert!(!matches_paste_fallback(Some("mstsc.exe"), &[]));
+        assert!(!matches_paste_fallback(None, &["mstsc".into()]));
+        assert!(!matches_paste_fallback(Some("mstsc.exe"), &["".into()]));
     }
 }

@@ -35,6 +35,21 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 # H2 凭据钥匙串（API key 存系统 keychain，不落明文 JSON）
 keyring = "3"
+# R7：剪贴板（粘贴兜底 + 750ms 恢复）。只在薄壳，不进 voice-core。
+arboard = "3"
+# P1：QA 状态机 / 插入器 trait 实现
+async-trait = { workspace = true }
+uuid = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# R7：Win32 前台 exe 捕获 / 还焦（GetForegroundWindow / SetForegroundWindow）。
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_Threading",
+  "Win32_System_ProcessStatus",
+] }
 
 [features]
 # 默认走自定义协议（生产）+ 本地 sherpa-onnx；开发时 tauri 会注入 devUrl

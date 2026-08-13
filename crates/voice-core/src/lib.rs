@@ -38,10 +38,13 @@ pub use asr_catalog::{
     FIRERED_LARGE_DIR, FUNASR_NANO_FP16_DIR, FUNASR_NANO_INT8_DIR,
 };
 pub use config::{
-    AppConfig, ChineseScriptPreference, HotkeyMode, PolishCloudProtocol, PolishPolicy,
-    ProviderConfig, ProviderKind, POLISH_DEFAULT_LOCAL_MODEL,
+    AppConfig, ChineseScriptPreference, HotkeyMode, InsertStrategy, PolishCloudProtocol,
+    PolishPolicy, ProviderConfig, ProviderKind, POLISH_DEFAULT_LOCAL_MODEL,
 };
-pub use insert::EnigoInserter;
+pub use insert::{
+    decide_restore, matches_paste_fallback, remember_pending, should_restore_clipboard,
+    EnigoInserter, InsertOpts, InsertOutcome, PendingRestore, RestoreDecision,
+};
 pub use model_download::{
     install_local_engine, install_polish_model, is_local_engine_installed,
     is_local_engine_installed_for, is_polish_model_installed, local_model_files,
@@ -50,11 +53,16 @@ pub use model_download::{
     SENSEVOICE_MODEL_NAME, SHERPA_MODEL_NAME, VAD_DIR,
 };
 pub use model_mgr::ModelManager;
-pub use polish::{BailianChatPolish, LocalGgufPolish, PolishRouter, PolishRouterConfig};
+pub use pipeline::{FinalInsertResult, Pipeline, PipelineDeps, PolishContext, PolishOutcome, PolishWarn, SessionIntent};
+pub use polish::{
+    detect_prefix_role, parse_polish_translate, parse_sse_line, BailianChatPolish, ChatRequest,
+    CloudPolishProvider, LlmClient, LocalGgufPolish, PolishRouter, PolishRouterConfig,
+    PolishTranslate, SseLine, TranslateRequest,
+};
 pub use providers::bailian::test_connection;
 pub use providers::sherpa::{SherpaModelPaths, SherpaProvider};
 pub use providers::RoutingProvider;
-pub use store::{Hotword, SqliteStore, StylePack};
+pub use store::{Hotword, OutputMode, RoleKind, SqliteStore, StylePack};
 pub use system::{collect_system_info, compute_model_tag, ModelPerfTag, SystemInfo};
 pub use traits::{
     AsrProvider, AsrSession, AudioFormat, AudioFrame, AudioSource, HistoryStore, PolishMode,

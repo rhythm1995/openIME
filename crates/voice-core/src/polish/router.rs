@@ -122,6 +122,7 @@ mod tests {
             style_prompt: None,
             hotwords: vec![],
             timeout: Duration::from_secs(1),
+            max_tokens: None,
         }
     }
 
