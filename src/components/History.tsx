@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, Copy, Mic, MoreHorizontal, Trash2 } from "lucide-react";
 import type { SessionSummary, UtteranceRecord } from "../types";
 import { ipc } from "../ipc";
@@ -23,12 +24,10 @@ interface HistoryItem {
 }
 interface DayGroup {
   key: string;
-  label: string;
+  date: Date;
   items: HistoryItem[];
   sessionIds: string[];
 }
-
-const WEEK = ["日", "一", "二", "三", "四", "五", "六"];
 
 /** 虚拟列表估算高度（px） */
 const HEADER_H = 40;
@@ -40,22 +39,14 @@ const OVERSCAN = 6;
 function dayKey(d: Date): string {
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 }
-function dayLabel(d: Date): string {
-  const now = new Date();
-  if (dayKey(d) === dayKey(now)) return "今天";
-  const yest = new Date(now);
-  yest.setDate(now.getDate() - 1);
-  if (dayKey(d) === dayKey(yest)) return "昨天";
-  return `${d.getMonth() + 1}月${d.getDate()}日 星期${WEEK[d.getDay()]}`;
-}
 function timeLabel(d: Date): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 function estimateRowHeight(text: string): number {
-  // 粗估：约 36 字/行，含上下 padding + 时间行
-  const lines = Math.max(1, Math.ceil((text || "（空）").length / 36));
+  // 粗估：约 36 字/行，含上下 padding + 时间行（占位用空格，与语言无关）
+  const lines = Math.max(1, Math.ceil((text || " ").length / 36));
   return Math.max(ROW_BASE_H, 14 + 14 + lines * ROW_LINE_H + 4 + 18);
 }
 
@@ -74,6 +65,7 @@ type FlatNode =
 type ToastState = { id: number; message: string } | null;
 
 export default function History() {
+  const { t, i18n } = useTranslation();
   const [groups, setGroups] = useState<DayGroup[] | null>(null);
   const [menuKey, setMenuKey] = useState<string | null>(null);
   const [confirmGroup, setConfirmGroup] = useState<DayGroup | null>(null);
@@ -87,12 +79,29 @@ export default function History() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<UtteranceRecord[] | null>(null);
 
+  // 日期分组标签：渲染时按当前界面语言计算（语言切换即时生效，无需重新拉数据）。
+  const dayLabel = (d: Date): string => {
+    const now = new Date();
+    if (dayKey(d) === dayKey(now)) return t("history.today");
+    const yest = new Date(now);
+    yest.setDate(now.getDate() - 1);
+    if (dayKey(d) === dayKey(yest)) return t("history.yesterday");
+    return t("history.monthDayWeek", {
+      month: d.getMonth() + 1,
+      day: d.getDate(),
+      week: t(`history.week.${d.getDay()}`),
+    });
+  };
+
+  // toLocaleString 的 locale：跟随界面语言。
+  const dateLocale = i18n.language === "en" ? "en-US" : "zh-CN";
+
   const showToast = useCallback((message: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     const id = Date.now();
     setToast({ id, message });
     toastTimer.current = setTimeout(() => {
-      setToast((t) => (t?.id === id ? null : t));
+      setToast((t_state) => (t_state?.id === id ? null : t_state));
     }, 2200);
   }, []);
 
@@ -146,7 +155,7 @@ export default function History() {
       const list: DayGroup[] = [...byDay.entries()]
         .map(([key, g]) => ({
           key,
-          label: dayLabel(g.date),
+          date: g.date,
           items: g.items.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
           sessionIds: [...g.sids],
         }))
@@ -165,8 +174,8 @@ export default function History() {
   useEffect(() => {
     if (!menuKey) return;
     const onDown = (e: MouseEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t?.closest?.("[data-day-menu]")) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.("[data-day-menu]")) return;
       setMenuKey(null);
     };
     document.addEventListener("mousedown", onDown);
@@ -245,7 +254,7 @@ export default function History() {
       }
       setConfirmGroup(null);
       await refresh();
-      showToast("已删除");
+      showToast(t("history.deleted"));
     } finally {
       setDeleting(false);
     }
@@ -254,9 +263,9 @@ export default function History() {
   const copy = async (text: string) => {
     try {
       await navigator.clipboard?.writeText(text);
-      showToast("已复制");
+      showToast(t("history.copied"));
     } catch {
-      showToast("已复制");
+      showToast(t("history.copied"));
     }
   };
 
@@ -267,13 +276,13 @@ export default function History() {
   return (
     <div className="history-page">
       <div className="history-head">
-        <h1 className="page-title">历史记录</h1>
-        <p className="page-subtitle">所有语音转写内容</p>
+        <h1 className="page-title">{t("history.title")}</h1>
+        <p className="page-subtitle">{t("history.subtitle")}</p>
       </div>
 
       <div className="field" style={{ marginBottom: 12 }}>
         <input
-          placeholder="搜索历史记录…"
+          placeholder={t("history.searchPh")}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
         />
@@ -285,7 +294,7 @@ export default function History() {
         >
           {searchResults.length === 0 ? (
             <p style={{ color: "var(--text-tertiary)", padding: 16 }}>
-              无匹配结果
+              {t("history.noMatch")}
             </p>
           ) : (
             searchResults.map((u) => (
@@ -301,7 +310,7 @@ export default function History() {
                   className="day-row-time"
                   style={{ fontSize: 11, color: "var(--text-tertiary)" }}
                 >
-                  {new Date(u.created_at).toLocaleString()}
+                  {new Date(u.created_at).toLocaleString(dateLocale)}
                 </div>
               </div>
             ))
@@ -310,14 +319,14 @@ export default function History() {
       )}
 
       {groups === null ? (
-        <p style={{ color: "var(--text-tertiary)" }}>加载中…</p>
+        <p style={{ color: "var(--text-tertiary)" }}>{t("common.loading")}</p>
       ) : groups.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon">
             <Mic />
           </div>
-          <div>还没有录音记录</div>
-          <div className="empty-state-sub">按 Fn 开始第一次语音输入</div>
+          <div>{t("history.empty")}</div>
+          <div className="empty-state-sub">{t("history.emptySub")}</div>
         </div>
       ) : (
         <div
@@ -325,7 +334,7 @@ export default function History() {
           ref={scrollRef}
           onScroll={onScroll}
           role="list"
-          aria-label="历史记录列表"
+          aria-label={t("history.title")}
         >
           <div className="history-virtual" style={{ height: totalH, position: "relative" }}>
             <div style={{ height: padTop }} aria-hidden />
@@ -340,12 +349,12 @@ export default function History() {
                     style={{ minHeight: node.height }}
                     data-day-menu
                   >
-                    <span>{g.label}</span>
+                    <span>{dayLabel(g.date)}</span>
                     <div className="day-menu-wrap">
                       <button
                         type="button"
                         className="btn-icon btn-icon-neutral"
-                        title="更多"
+                        title={t("history.more")}
                         aria-haspopup="menu"
                         aria-expanded={open}
                         onClick={(e) => {
@@ -367,7 +376,7 @@ export default function History() {
                             }}
                           >
                             <Trash2 size={14} />
-                            删除
+                            {t("history.deleteBtn")}
                           </button>
                         </div>
                       )}
@@ -397,14 +406,14 @@ export default function History() {
                   role="listitem"
                 >
                   <div className="day-row-main">
-                    <div className="day-row-text">{item.text || "（空）"}</div>
+                    <div className="day-row-text">{item.text || t("history.emptyText")}</div>
                     <div className="day-row-time">{timeLabel(item.createdAt)}</div>
                   </div>
                   <button
                     type="button"
                     className="btn-icon btn-icon-neutral day-row-copy"
-                    title="复制"
-                    aria-label="复制"
+                    title={t("history.copyTitle")}
+                    aria-label={t("history.copyTitle")}
                     onClick={() => copy(item.text || "")}
                   >
                     <Copy />
@@ -428,10 +437,13 @@ export default function History() {
         >
           <div className="modal" role="dialog" aria-modal="true" aria-labelledby="hist-del-title">
             <h2 id="hist-del-title" className="modal-title">
-              删除记录
+              {t("history.deleteTitle")}
             </h2>
             <p className="modal-body">
-              确定删除「{confirmGroup.label}」的 {confirmGroup.items.length} 条记录？此操作不可恢复。
+              {t("history.confirmDelete", {
+                label: dayLabel(confirmGroup.date),
+                count: confirmGroup.items.length,
+              })}
             </p>
             <div className="modal-actions">
               <button
@@ -440,7 +452,7 @@ export default function History() {
                 disabled={deleting}
                 onClick={() => setConfirmGroup(null)}
               >
-                取消
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
@@ -448,7 +460,7 @@ export default function History() {
                 disabled={deleting}
                 onClick={() => onDeleteDay(confirmGroup)}
               >
-                {deleting ? "删除中…" : "删除"}
+                {deleting ? t("common.delete") + "…" : t("common.delete")}
               </button>
             </div>
           </div>

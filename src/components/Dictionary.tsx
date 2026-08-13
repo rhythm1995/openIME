@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Lightbulb, Trash2, BookOpen, Search, AlertTriangle, Upload } from "lucide-react";
 import type { Hotword } from "../types";
 import { ipc } from "../ipc";
@@ -8,6 +9,7 @@ import { ipc } from "../ipc";
 //       + 润色时让 LLM 保留这些专有名词的写法。
 // 注：本地 sherpa 模型非 transducer，无解码层热词偏置；纠音发生在识别后。
 export default function Dictionary() {
+  const { t } = useTranslation();
   const [words, setWords] = useState<Hotword[] | null>(null);
   const [newWord, setNewWord] = useState("");
   const [query, setQuery] = useState("");
@@ -29,9 +31,9 @@ export default function Dictionary() {
       const text = await file.text();
       const res = await ipc.importHotwordsCsv(text);
       await refresh();
-      alert(`导入完成：新增 ${res.imported} 个，词典共 ${res.total} 个。`);
+      alert(t("dict.importDone", { imported: res.imported, total: res.total }));
     } catch (e) {
-      alert(`导入失败：${String(e)}`);
+      alert(t("dict.importFailed", { error: String(e) }));
     } finally {
       setImporting(false);
     }
@@ -45,7 +47,7 @@ export default function Dictionary() {
     if (!w) return;
     // 防重复：与已有词条完全相同（忽略大小写）则拒绝。
     if (words?.some((x) => x.word.toLowerCase() === w.toLowerCase())) {
-      alert(`「${w}」已在词典中，无需重复添加。`);
+      alert(t("dict.duplicateTip", { word: w }));
       return;
     }
     try {
@@ -72,8 +74,8 @@ export default function Dictionary() {
 
   return (
     <div>
-      <h1 className="page-title">词典</h1>
-      <p className="page-subtitle">自定义术语，提升语音引擎对专有名词的识别准确率</p>
+      <h1 className="page-title">{t("dict.title")}</h1>
+      <p className="page-subtitle">{t("dict.subtitle")}</p>
 
       {/* 说明卡 */}
       <div className="card" style={{ background: "var(--accent-soft)", boxShadow: "none" }}>
@@ -82,36 +84,35 @@ export default function Dictionary() {
             <Lightbulb size={20} />
           </span>
           <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>
-            添加你常用的<strong>人名、专业术语、产品名、缩写</strong>，语音引擎会提升这些词的识别权重。
-            例如「智谱」「Paraformer」「AutoGLM」。词频越高、越专业，越值得加入词典。
+            {t("dict.tipStart")}<strong>{t("dict.tipBold")}</strong>{t("dict.tipEnd")}
           </div>
         </div>
       </div>
 
       {/* 添加 */}
       <div className="card">
-        <h2 className="card-title">添加词条</h2>
+        <h2 className="card-title">{t("dict.addTitle")}</h2>
         <div className="hotword-add">
           <input
             value={newWord}
             onChange={(e) => setNewWord(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && onAdd()}
-            placeholder="输入术语，自动匹配已有词条"
+            placeholder={t("dict.inputPh")}
             style={duplicate ? { borderColor: "var(--warning)" } : undefined}
           />
           <button className="btn" onClick={onAdd} disabled={!trimmed || duplicate}>
-            添加
+            {t("dict.addBtn")}
           </button>
         </div>
         {duplicate && (
           <span className="field-hint" style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--warning)" }}>
             <AlertTriangle size={13} style={{ flexShrink: 0 }} />
-            「{trimmed}」已在词典中，无需重复添加。
+            {t("dict.duplicateTip", { word: trimmed })}
           </span>
         )}
         {!duplicate && trimmed && filtered.length > 0 && (
           <span className="field-hint" style={{ display: "block" }}>
-            已有 {filtered.length} 个相近词条（见下方列表）。
+            {t("dict.similarCount", { count: filtered.length })}
           </span>
         )}
 
@@ -126,7 +127,7 @@ export default function Dictionary() {
             disabled={importing}
           >
             <Upload size={14} style={{ marginRight: 6, verticalAlign: "-2px" }} />
-            {importing ? "导入中…" : "导入 CSV"}
+            {importing ? t("dict.importing") : t("dict.importBtn")}
           </button>
           <input
             ref={fileRef}
@@ -140,7 +141,7 @@ export default function Dictionary() {
             }}
           />
           <span className="field-hint">
-            热词用于识别后纠音（同音/模糊音改回正确写法）+ 润色时保留专有名词
+            {t("dict.importHint")}
           </span>
         </div>
       </div>
@@ -149,7 +150,7 @@ export default function Dictionary() {
       <div className="card">
         <div className="row-between" style={{ marginBottom: 12 }}>
           <h2 className="card-title" style={{ margin: 0 }}>
-            已有词条 {words && words.length > 0 ? `(${words.length})` : ""}
+            {t("dict.listTitle")} {words && words.length > 0 ? `(${words.length})` : ""}
           </h2>
           {words && words.length > 0 && (
             <div style={{ position: "relative", width: 180 }}>
@@ -161,18 +162,18 @@ export default function Dictionary() {
                 style={{ width: "100%", height: 30, paddingLeft: 30, fontSize: 13 }}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="搜索…"
+                placeholder={t("common.searchPh")}
               />
             </div>
           )}
         </div>
 
         {words === null ? (
-          <p style={{ color: "var(--text-tertiary)" }}>加载中…</p>
+          <p style={{ color: "var(--text-tertiary)" }}>{t("common.loading")}</p>
         ) : filtered.length === 0 ? (
           <div className="empty-state" style={{ padding: "32px 16px" }}>
             <div className="empty-state-icon"><BookOpen /></div>
-            <div>{filterText ? "未找到匹配词条" : "词典为空"}</div>
+            <div>{filterText ? t("dict.notFound") : t("dict.empty")}</div>
           </div>
         ) : (
           <div className="hotword-list">
@@ -180,9 +181,9 @@ export default function Dictionary() {
               <div key={w.id} className="hotword-item">
                 <div>
                   <span className="hotword-word">{w.word}</span>
-                  <span className="hotword-weight">权重 {w.weight}</span>
+                  <span className="hotword-weight">{t("dict.weight", { weight: w.weight })}</span>
                 </div>
-                <button className="btn-icon" onClick={() => onDelete(w.id)} title="删除">
+                <button className="btn-icon" onClick={() => onDelete(w.id)} title={t("dict.deleteTitle")}>
                   <Trash2 />
                 </button>
               </div>

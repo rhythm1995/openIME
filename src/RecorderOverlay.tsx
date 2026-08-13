@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { ipc } from "./ipc";
 import { logger } from "./logger";
@@ -9,9 +10,11 @@ type Phase = "idle" | "listening" | "processing" | "error";
 // 路由 index.html#overlay 时渲染本组件。
 // 注意：不要 window.close()；收起由原生 orderOut 负责，否则会和 HUD 生命周期打架。
 export default function RecorderOverlay() {
+  const { t } = useTranslation();
   const [phase, setPhase] = useState<Phase>("listening");
   const [partial, setPartial] = useState("");
-  const [status, setStatus] = useState("正在聆听…");
+  // processing 阶段后端可能下发自定义状态文案；存原始 payload，渲染时再走 i18n。
+  const [processingMsg, setProcessingMsg] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
 
@@ -23,7 +26,7 @@ export default function RecorderOverlay() {
       .then((r) => {
         if (r) {
           setPhase("listening");
-          setStatus("正在聆听…");
+          setProcessingMsg("");
         }
       })
       .catch((e) => {
@@ -36,7 +39,7 @@ export default function RecorderOverlay() {
       setLeaving(false);
       setPartial("");
       setPhase("listening");
-      setStatus("正在聆听…");
+      setProcessingMsg("");
     }).then((u) => unlisteners.push(u));
     // 流式逐字走输入组件直入，不再在左下角大段回显；仅保持"正在聆听"状态。
     listen<string>("recording://partial", () => {
@@ -44,14 +47,14 @@ export default function RecorderOverlay() {
     }).then((u) => unlisteners.push(u));
     listen<string>("recording://processing", (e) => {
       setPhase("processing");
-      setStatus(e.payload || "正在识别…");
+      setProcessingMsg(e.payload || "");
     }).then((u) => unlisteners.push(u));
     listen<string>("recording://stopped", () => {
       // 先触发淡出动画，原生侧随后 hide 窗口；这里复位文案，不 close 窗口。
       setLeaving(true);
       setPhase("idle");
       setPartial("");
-      setStatus("");
+      setProcessingMsg("");
       setError(null);
     }).then((u) => unlisteners.push(u));
     listen<string>("recording://error", (e) => {
@@ -64,9 +67,10 @@ export default function RecorderOverlay() {
   }, []);
 
   const active = phase === "listening" || phase === "processing";
-  const text = error
-    ? error
-    : partial || status || (active ? "正在聆听…" : "…");
+  let statusText = "";
+  if (phase === "processing") statusText = processingMsg || t("overlay.processing");
+  else if (active) statusText = t("overlay.listening");
+  const text = error ? error : partial || statusText || t("overlay.ellipsis");
 
   return (
     <div

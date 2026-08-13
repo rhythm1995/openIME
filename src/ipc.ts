@@ -22,12 +22,12 @@ export interface PermissionStatus {
   hint: string;
 }
 
-// 权限状态的中文映射（修 bug2：不再裸显英文枚举）。
-export const permissionLabel: Record<PermissionStatus["state"], string> = {
-  not_determined: "未授权",
-  granted: "已授权",
-  denied: "已拒绝",
-  restricted: "受限",
+// 权限状态 → i18n key（文案由组件用 t() 渲染，随界面语言切换）。
+export const permissionLabelKey: Record<PermissionStatus["state"], string> = {
+  not_determined: "perm.not_determined",
+  granted: "perm.granted",
+  denied: "perm.denied",
+  restricted: "perm.restricted",
 };
 
 export const ipc = {

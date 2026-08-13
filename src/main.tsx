@@ -4,6 +4,7 @@ import App from "./App";
 import RecorderOverlay from "./RecorderOverlay";
 import { installErrorHooks, logger } from "./logger";
 import "./styles.css";
+import "./i18n";
 
 // 最先安装错误钩子：任何 JS 崩溃都要留痕。
 installErrorHooks();

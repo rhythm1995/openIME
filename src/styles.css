@@ -204,6 +204,22 @@ textarea,
 }
 .status-dot.ready { background: var(--success); box-shadow: 0 0 0 3px rgba(52, 199, 89, 0.18); }
 .status-dot.connecting { background: var(--text-tertiary); }
+/* 左下角界面语言切换（与 ASR 录入语言隔离：纯前端 localStorage） */
+.lang-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.lang-toggle:hover { background: var(--card-hover); color: var(--text-secondary); }
 
 /* ──────────────── 内容区 ──────────────── */
 .content {

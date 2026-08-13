@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -24,7 +25,7 @@ import type {
   SystemInfo,
   TranscribeResult,
 } from "../types";
-import { ipc, permissionLabel, type PermissionKind, type PermissionStatus } from "../ipc";
+import { ipc, permissionLabelKey, type PermissionKind, type PermissionStatus } from "../ipc";
 
 // 默认本地 ASR id（与 voice-core asr_catalog 对齐；未安装时不算「使用中」）。
 const DEFAULT_LOCAL_ASR = "sensevoice";
@@ -46,6 +47,7 @@ function StatusIcon({ ok, warn, spin }: { ok?: boolean; warn?: boolean; spin?: b
 }
 
 export default function Settings() {
+  const { t } = useTranslation();
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -188,7 +190,7 @@ export default function Settings() {
     }).then((u) => unlisteners.push(u));
     listen<string>("recording://error", (e) => {
       setRecording(false);
-      setMsg({ ok: false, text: `录音错误：${e.payload}` });
+      setMsg({ ok: false, text: t("settings.recordingError", { error: e.payload }) });
     }).then((u) => unlisteners.push(u));
 
     // 权限轮询：用户可能在系统设置里随时变更，勾选后这里自动更新。
@@ -234,7 +236,7 @@ export default function Settings() {
     try {
       await ipc.setLaunchAtLogin(checked);
     } catch (e) {
-      setMsg({ ok: false, text: `设置开机自启失败：${e}` });
+      setMsg({ ok: false, text: t("settings.autoStartFailed", { error: e }) });
     }
   };
 
@@ -246,17 +248,17 @@ export default function Settings() {
       const pct = Math.round(level * 100);
       setMicTest(
         level > 0.01
-          ? { ok: true, warn: false, text: `麦克风正常，检测音量约 ${pct}%` }
-          : { ok: false, warn: true, text: "未检测到声音，请检查麦克风或换一个设备" }
+          ? { ok: true, warn: false, text: t("settings.audio.micOk", { pct }) }
+          : { ok: false, warn: true, text: t("settings.audio.micNoSound") }
       );
     } catch (e) {
-      setMicTest({ ok: false, warn: false, text: `测试失败：${e}` });
+      setMicTest({ ok: false, warn: false, text: t("settings.audio.micTestFailed", { error: e }) });
     } finally {
       setTestingMic(false);
     }
   };
 
-  if (!config) return <p>加载中…</p>;
+  if (!config) return <p>{t("common.loading")}</p>;
 
   const active = config.providers[config.active_provider] ?? config.providers[0];
   const setActive = (patch: Partial<ProviderConfig>) =>
@@ -273,7 +275,7 @@ export default function Settings() {
     try {
       await ipc.validateProvider(active);
       await ipc.saveConfig(config);
-      setMsg({ ok: true, text: "已保存" });
+      setMsg({ ok: true, text: t("settings.saved") });
     } catch (e) {
       setMsg({ ok: false, text: String(e) });
     } finally {
@@ -282,12 +284,12 @@ export default function Settings() {
   };
 
   const permBadge = (s: PermissionStatus | null) => {
-    if (!s) return <span className="badge badge-warning"><span className="badge-dot" />未知</span>;
+    if (!s) return <span className="badge badge-warning"><span className="badge-dot" />{t("perm.unknown")}</span>;
     const cls = s.state === "granted" ? "badge-success" : s.state === "denied" ? "badge-danger" : "badge-warning";
     return (
       <span className={`badge ${cls}`}>
         <span className="badge-dot" />
-        {permissionLabel[s.state]}
+        {t(permissionLabelKey[s.state])}
       </span>
     );
   };
@@ -301,28 +303,32 @@ export default function Settings() {
 
   return (
     <div>
-      <h1 className="page-title">设置</h1>
-      <p className="page-subtitle">配置语音识别引擎、AI 润色与快捷键</p>
+      <h1 className="page-title">{t("settings.title")}</h1>
+      <p className="page-subtitle">{t("settings.subtitle")}</p>
 
       {/* AI 润色 */}
       <div className="card">
-        <h2 className="card-title">AI 润色</h2>
+        <h2 className="card-title">{t("settings.polish.title")}</h2>
         <div className="field">
-          <label className="field-label">润色程度</label>
+          <label className="field-label">{t("settings.polish.modeLabel")}</label>
           <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
             {([
               {
-                v: "off",
-                t: "保持原样",
-                d: "不做 LLM 校对，仅本地规则清理（去口头禅/补标点/纠同音字）。",
+                v: "off" as const,
+                t: t("settings.polish.off_t"),
+                d: t("settings.polish.off_d"),
               },
-              { v: "light", t: "中度润色", d: "本地规则 + LLM 仅校对（修 ASR 错，不改措辞）。" },
               {
-                v: "heavy",
-                t: "高度润色",
-                d: "本地规则 + LLM 改写润色（通顺化、调整语序，保留原意）。",
+                v: "light" as const,
+                t: t("settings.polish.light_t"),
+                d: t("settings.polish.light_d"),
               },
-            ] as const).map((opt) => {
+              {
+                v: "heavy" as const,
+                t: t("settings.polish.heavy_t"),
+                d: t("settings.polish.heavy_d"),
+              },
+            ]).map((opt) => {
               const selected = (config.polish_mode ?? "off") === opt.v;
               return (
                 <div
@@ -381,7 +387,7 @@ export default function Settings() {
           <>
             {(config.polish_mode ?? "off") === "heavy" && stylePacks.length > 0 && (
               <div className="field" style={{ marginTop: 14 }}>
-                <label className="field-label">风格包</label>
+                <label className="field-label">{t("settings.polish.stylePackLabel")}</label>
                 <select
                   value={config.active_style_pack_id ?? ""}
                   onChange={(e) => {
@@ -390,23 +396,23 @@ export default function Settings() {
                     ipc.setActiveStylePack(id).catch(() => {});
                   }}
                 >
-                  <option value="">默认 Heavy（通用润色）</option>
+                  <option value="">{t("settings.polish.stylePackDefault")}</option>
                   {stylePacks.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
-                      {p.is_builtin ? "（内置）" : ""}
+                      {p.is_builtin ? t("settings.polish.builtin") : ""}
                     </option>
                   ))}
                 </select>
                 <span className="field-hint">
-                  Heavy 模式下，用所选风格包的指令替代默认润色（F1）
+                  {t("settings.polish.stylePackHint")}
                 </span>
               </div>
             )}
 
             {(config.polish_mode ?? "off") === "heavy" && (
               <div className="field" style={{ marginTop: 14 }}>
-                <label className="field-label">管理风格包</label>
+                <label className="field-label">{t("settings.polish.manageStylePacks")}</label>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {stylePacks.map((p) => (
                     <div
@@ -420,7 +426,7 @@ export default function Settings() {
                     >
                       <span>
                         {p.name}
-                        {p.is_builtin ? "（内置）" : ""}
+                        {p.is_builtin ? t("settings.polish.builtin") : ""}
                       </span>
                       {!p.is_builtin && (
                         <button
@@ -434,7 +440,7 @@ export default function Settings() {
                               .catch(() => {});
                           }}
                         >
-                          删除
+                          {t("common.delete")}
                         </button>
                       )}
                     </div>
@@ -449,12 +455,12 @@ export default function Settings() {
                   }}
                 >
                   <input
-                    placeholder="风格包名称（如：客服回复）"
+                    placeholder={t("settings.polish.styleNamePh")}
                     value={newStyleName}
                     onChange={(e) => setNewStyleName(e.target.value)}
                   />
                   <textarea
-                    placeholder="system prompt 指令（如：请把内容改写成礼貌的客服回复）"
+                    placeholder={t("settings.polish.stylePromptPh")}
                     value={newStylePrompt}
                     onChange={(e) => setNewStylePrompt(e.target.value)}
                     rows={2}
@@ -475,7 +481,7 @@ export default function Settings() {
                       ipc.listStylePacks().then(setStylePacks).catch(() => {});
                     }}
                   >
-                    添加风格包
+                    {t("settings.polish.addStylePack")}
                   </button>
                 </div>
               </div>
@@ -483,12 +489,12 @@ export default function Settings() {
 
             <div className="field" style={{ marginTop: 14 }}>
               <span className="field-hint">
-                运行策略：本地模型优先，未下载或失败时自动回退云端（无需配置）
+                {t("settings.polish.policyHint")}
               </span>
             </div>
 
             <div className="field">
-              <label className="field-label">云端模型 ID</label>
+              <label className="field-label">{t("settings.polish.cloudModelIdLabel")}</label>
               <input
                 value={config.polish_cloud_model ?? "qwen-turbo"}
                 onChange={(e) =>
@@ -499,7 +505,7 @@ export default function Settings() {
             </div>
 
             <div className="field">
-              <label className="field-label">云端 LLM 协议</label>
+              <label className="field-label">{t("settings.polish.cloudProtocolLabel")}</label>
               <select
                 value={config.polish_cloud_protocol ?? "openai_chat"}
                 onChange={(e) =>
@@ -509,32 +515,32 @@ export default function Settings() {
                   })
                 }
               >
-                <option value="openai_chat">OpenAI Chat Completions（/chat/completions）</option>
-                <option value="anthropic">Anthropic Messages（/v1/messages）</option>
-                <option value="openai_responses">OpenAI Responses（/v1/responses）</option>
+                <option value="openai_chat">{t("settings.polish.cloudProtocol_openai_chat")}</option>
+                <option value="anthropic">{t("settings.polish.cloudProtocol_anthropic")}</option>
+                <option value="openai_responses">{t("settings.polish.cloudProtocol_openai_responses")}</option>
               </select>
             </div>
 
             <div className="field">
-              <label className="field-label">云端 Endpoint（可选）</label>
+              <label className="field-label">{t("settings.polish.cloudEndpointLabel")}</label>
               <input
                 value={config.polish_cloud_endpoint ?? ""}
                 onChange={(e) =>
                   setConfig({ ...config, polish_cloud_endpoint: e.target.value })
                 }
-                placeholder="留空 = 用百炼兼容地址 / 自填 https://openrouter.ai/api/v1"
+                placeholder={t("settings.polish.cloudEndpointPh")}
               />
             </div>
 
             <div className="field">
-              <label className="field-label">云端 API Key（可选）</label>
+              <label className="field-label">{t("settings.polish.cloudApiKeyLabel")}</label>
               <input
                 type="password"
                 value={config.polish_cloud_api_key ?? ""}
                 onChange={(e) =>
                   setConfig({ ...config, polish_cloud_api_key: e.target.value })
                 }
-                placeholder="留空 = 用识别引擎的百炼 API Key"
+                placeholder={t("settings.polish.cloudApiKeyPh")}
               />
             </div>
 
@@ -558,25 +564,24 @@ export default function Settings() {
                   }
                 }}
               >
-                {polishTesting ? "测试中…" : "测试连接"}
+                {polishTesting ? t("common.testing") : t("common.testConnection")}
               </button>
             </div>
 
             <div className="row-between" style={{ marginTop: 8, alignItems: "flex-start" }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
-                  本地模型 Qwen2.5-1.5B-Instruct Q4_K_M
+                  {t("settings.polish.localPolishModelTitle")}
                 </div>
                 {polishStatus ? (
                   <span className="field-hint">
                     {polishStatus.installed
-                      ? `已安装 · ${fmtSize(polishStatus.total_size)}`
-                      : `未安装 · 约 ${fmtSize(polishStatus.total_size)}`}
-                    {!polishStatus.llm_feature &&
-                      " · 当前构建未启用本地推理（需用 ./scripts/build.sh 重新打包）"}
+                      ? t("settings.polish.installedSize", { size: fmtSize(polishStatus.total_size) })
+                      : t("settings.polish.notInstalledSize", { size: fmtSize(polishStatus.total_size) })}
+                    {!polishStatus.llm_feature && t("settings.polish.llmFeatureOff")}
                   </span>
                 ) : (
-                  <span className="field-hint">状态加载中…</span>
+                  <span className="field-hint">{t("settings.polish.statusLoading")}</span>
                 )}
               </div>
               <button
@@ -598,10 +603,10 @@ export default function Settings() {
                 }}
               >
                 {polishStatus?.installed
-                  ? "已就绪"
+                  ? t("common.ready")
                   : polishStatus?.downloading || (dl && dlTargetId === "polish")
-                    ? "下载中…"
-                    : "下载模型"}
+                    ? t("common.downloading")
+                    : t("settings.polish.downloadModel")}
               </button>
             </div>
             {dl && dlTargetId === "polish" && (
@@ -644,9 +649,9 @@ export default function Settings() {
 
       {/* 引擎 */}
       <div className="card">
-        <h2 className="card-title">识别引擎</h2>
+        <h2 className="card-title">{t("settings.engine.title")}</h2>
         <div className="field">
-          <label className="field-label">引擎类型</label>
+          <label className="field-label">{t("settings.engine.typeLabel")}</label>
           <select
             value={active.kind}
             onChange={(e) => {
@@ -659,17 +664,17 @@ export default function Settings() {
               }
             }}
           >
-            <option value="sherpa">sherpa-onnx（本地模型，隐私，推荐）</option>
-            <option value="bailian">百炼 WebSocket 流式（云端）</option>
-            <option value="openai_asr">OpenAI 兼容 REST（OpenRouter/OpenAI 等）</option>
-            <option value="multimodal_asr">Multimodal REST（百炼 Qwen3 ASR 非流式）</option>
+            <option value="sherpa">{t("settings.engine.sherpa")}</option>
+            <option value="bailian">{t("settings.engine.bailian")}</option>
+            <option value="openai_asr">{t("settings.engine.openai_asr")}</option>
+            <option value="multimodal_asr">{t("settings.engine.multimodal_asr")}</option>
           </select>
         </div>
 
         {active.kind === "openai_asr" || active.kind === "multimodal_asr" ? (
           <>
             <div className="field">
-              <label className="field-label">模型</label>
+              <label className="field-label">{t("settings.engine.modelLabel")}</label>
               <input
                 value={active.model}
                 onChange={(e) => setActive({ model: e.target.value })}
@@ -681,12 +686,12 @@ export default function Settings() {
               />
               <span className="field-hint">
                 {active.kind === "openai_asr"
-                  ? "OpenAI 兼容模型 ID（如 openai/whisper-1、qwen/qwen3-asr-flash）"
-                  : "百炼 multimodal 模型 ID（如 qwen-audio-3.0-asr-flash）"}
+                  ? t("settings.engine.modelHintOpenai")
+                  : t("settings.engine.modelHintMultimodal")}
               </span>
             </div>
             <div className="field">
-              <label className="field-label">Endpoint（HTTP 地址）</label>
+              <label className="field-label">{t("settings.engine.endpointLabel")}</label>
               <input
                 value={active.base_url}
                 onChange={(e) => setActive({ base_url: e.target.value })}
@@ -694,12 +699,12 @@ export default function Settings() {
               />
               <span className="field-hint">
                 {active.kind === "openai_asr"
-                  ? "REST /audio/transcriptions 端点 base URL"
-                  : "REST chat/completions 端点 base URL"}
+                  ? t("settings.engine.endpointHintOpenai")
+                  : t("settings.engine.endpointHintMultimodal")}
               </span>
             </div>
             <div className="field">
-              <label className="field-label">API Key</label>
+              <label className="field-label">{t("settings.engine.apiKeyLabel")}</label>
               <input
                 type="password"
                 value={active.api_key}
@@ -727,7 +732,7 @@ export default function Settings() {
                   }
                 }}
               >
-                {testing ? "测试中…" : "测试连接"}
+                {testing ? t("common.testing") : t("common.testConnection")}
               </button>
             </div>
           </>
@@ -736,37 +741,36 @@ export default function Settings() {
         {active.kind === "bailian" && (
           <>
             <div className="field">
-              <label className="field-label">模型</label>
+              <label className="field-label">{t("settings.engine.modelLabel")}</label>
               <input
                 value={active.model}
                 onChange={(e) => setActive({ model: e.target.value })}
                 placeholder="fun-asr-realtime"
               />
               <span className="field-hint">
-                填写服务商支持的模型 ID（如 fun-asr-realtime、paraformer-realtime-v2 等）
+                {t("settings.engine.modelHintBailian")}
               </span>
             </div>
             <div className="field">
-              <label className="field-label">服务地址</label>
+              <label className="field-label">{t("settings.engine.serviceAddrLabel")}</label>
               <input
                 value={active.base_url}
                 onChange={(e) => setActive({ base_url: e.target.value })}
                 placeholder="ws-xxx.ap-southeast-1.maas.aliyuncs.com"
               />
               <span className="field-hint">
-                填控制台里的 OpenAI 兼容地址 / DashScope 地址 / 纯域名均可，
-                自动转换为 WebSocket 地址（如填 https://…/compatible-mode/v1）
+                {t("settings.engine.serviceAddrHint")}
               </span>
             </div>
             <div className="field">
-              <label className="field-label">API Key</label>
+              <label className="field-label">{t("settings.engine.apiKeyLabel")}</label>
               <input
                 type="password"
                 value={active.api_key}
                 onChange={(e) => setActive({ api_key: e.target.value })}
                 placeholder="sk-..."
               />
-              <span className="field-hint">在 ASR 服务商控制台获取 API Key</span>
+              <span className="field-hint">{t("settings.engine.apiKeyHintBailian")}</span>
             </div>
             <div className="row-between" style={{ alignItems: "flex-end" }}>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -788,7 +792,7 @@ export default function Settings() {
                   }
                 }}
               >
-                {testing ? "测试中…" : "测试连接"}
+                {testing ? t("common.testing") : t("common.testConnection")}
               </button>
             </div>
           </>
@@ -797,26 +801,26 @@ export default function Settings() {
         {active.kind === "sherpa" && (
           <div style={{ marginTop: 4 }}>
             <div className="field-label" style={{ marginBottom: 8 }}>
-              本地 ASR 模型
+              {t("settings.localAsr.title")}
             </div>
             <span className="field-hint" style={{ display: "block", marginBottom: 10 }}>
-              下载后可启用；同时只启用一个，录音时走该模型识别。完全离线，音频不出本机。
+              {t("settings.localAsr.hint")}
             </span>
             <div className="field" style={{ gap: 6, marginBottom: 10 }}>
               <label className="field-label" htmlFor="local-language">
-                默认语言
+                {t("settings.localAsr.defaultLangLabel")}
               </label>
               <select
                 id="local-language"
                 value={config.local_language || "zh"}
                 onChange={(e) => setConfig({ ...config, local_language: e.target.value })}
               >
-                <option value="zh">中文（zh）</option>
-                <option value="en">英文（en）</option>
-                <option value="yue">粤语（yue）</option>
-                <option value="auto">自动（auto）</option>
+                <option value="zh">{t("settings.localAsr.lang_zh")}</option>
+                <option value="en">{t("settings.localAsr.lang_en")}</option>
+                <option value="yue">{t("settings.localAsr.lang_yue")}</option>
+                <option value="auto">{t("settings.localAsr.lang_auto")}</option>
               </select>
-              <span className="field-hint">传入各本地模型的 language 参数（SenseVoice/FunASR-Nano 直接提升识别率）</span>
+              <span className="field-hint">{t("settings.localAsr.defaultLangHint")}</span>
             </div>
 
             {/* 本机信息小条 + 不显眼的"重新采集" */}
@@ -836,19 +840,25 @@ export default function Settings() {
             >
               {systemInfo ? (
                 <span style={{ flex: 1, minWidth: 120 }}>
-                  本机：{systemInfo.cpu_brand || "未知CPU"} ·{" "}
-                  {fmtSize(systemInfo.total_mem)} (可用 {fmtSize(systemInfo.avail_mem)}) ·{" "}
-                  {systemInfo.os_version} · 磁盘剩余 {fmtSize(systemInfo.disk_free)}
-                  {systemInfo.is_apple_silicon ? " · Apple Silicon" : ""}
+                  {t("settings.localAsr.machineInfo", {
+                    cpu: systemInfo.cpu_brand || t("settings.localAsr.unknownCpu"),
+                    mem: fmtSize(systemInfo.total_mem),
+                    availLabel: t("settings.localAsr.availLabel"),
+                    avail: fmtSize(systemInfo.avail_mem),
+                    os: systemInfo.os_version,
+                    diskLabel: t("settings.localAsr.diskLabel"),
+                    disk: fmtSize(systemInfo.disk_free),
+                    silicon: systemInfo.is_apple_silicon ? t("settings.localAsr.appleSilicon") : "",
+                  })}
                 </span>
               ) : (
-                <span style={{ flex: 1 }}>正在采集本机信息…</span>
+                <span style={{ flex: 1 }}>{t("settings.localAsr.collecting")}</span>
               )}
               <button
                 className="btn btn-sm btn-ghost"
                 style={{ fontSize: 11, flexShrink: 0 }}
                 disabled={systemRefreshing}
-                title="重新采集本机 CPU/内存/磁盘信息并给模型打标签"
+                title={t("settings.localAsr.recollectTitle")}
                 onClick={async () => {
                   setSystemRefreshing(true);
                   try {
@@ -862,7 +872,7 @@ export default function Settings() {
                 {systemRefreshing ? (
                   <Loader2 size={11} className="spin" />
                 ) : (
-                  "重新采集"
+                  t("settings.localAsr.recollect")
                 )}
               </button>
             </div>
@@ -873,9 +883,8 @@ export default function Settings() {
                 : [
                     {
                       id: "firered-large",
-                      title: "FireRedASR Large",
-                      description:
-                        "离线整段 · 中英高精度 · 约 1.7GB · 更准更慢，适合追求识别率",
+                      title: t("settings.localAsr.models.firered_large.title"),
+                      description: t("settings.localAsr.models.firered_large.desc"),
                       backend: "offline_fire_red",
                       recommended: true,
                       approx_size: 1_739_000_000,
@@ -885,9 +894,8 @@ export default function Settings() {
                     },
                     {
                       id: "zipformer-zh-xlarge",
-                      title: "Zipformer 中文 xlarge",
-                      description:
-                        "流式 xlarge int8 · 中文大模型 · 约 735MB · 比 large 更准",
+                      title: t("settings.localAsr.models.zipformer_zh_xlarge.title"),
+                      description: t("settings.localAsr.models.zipformer_zh_xlarge.desc"),
                       backend: "streaming_zipformer",
                       recommended: false,
                       approx_size: 771_000_000,
@@ -897,9 +905,8 @@ export default function Settings() {
                     },
                     {
                       id: "zipformer-zh-2025",
-                      title: "Zipformer 中文 2025",
-                      description:
-                        "流式 large int8 · 中文 · 约 167MB · 体积与速度折中",
+                      title: t("settings.localAsr.models.zipformer_zh_2025.title"),
+                      description: t("settings.localAsr.models.zipformer_zh_2025.desc"),
                       backend: "streaming_zipformer",
                       recommended: false,
                       approx_size: 167_000_000,
@@ -909,9 +916,8 @@ export default function Settings() {
                     },
                     {
                       id: "sensevoice",
-                      title: "SenseVoice",
-                      description:
-                        "离线整段 · 中英日韩粤 · 约 240MB · 快、省资源",
+                      title: t("settings.localAsr.models.sensevoice.title"),
+                      description: t("settings.localAsr.models.sensevoice.desc"),
                       backend: "offline_sense_voice",
                       recommended: false,
                       approx_size: 240_000_000,
@@ -958,12 +964,12 @@ export default function Settings() {
                           {m.title}
                           {m.recommended && (
                             <span className="badge badge-success" style={{ fontSize: 11 }}>
-                              推荐
+                              {t("settings.localAsr.recommended")}
                             </span>
                           )}
                           {selected && (
                             <span className="badge badge-success" style={{ fontSize: 11 }}>
-                              使用中
+                              {t("settings.localAsr.inUse")}
                             </span>
                           )}
                           {m.perf_tag && (
@@ -1001,12 +1007,12 @@ export default function Settings() {
                       {m.installed ? (
                         <span className="badge badge-success">
                           <span className="badge-dot" />
-                          已安装
+                          {t("settings.localAsr.installedBadge")}
                         </span>
                       ) : (
                         <span className="badge badge-warning">
                           <span className="badge-dot" />
-                          未安装
+                          {t("settings.localAsr.notInstalledBadge")}
                         </span>
                       )}
                     </div>
@@ -1015,7 +1021,7 @@ export default function Settings() {
                       <div style={{ marginBottom: 8 }}>
                         <div className="row-between" style={{ marginBottom: 4 }}>
                           <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                            {dl.message}（{dl.file_index + 1}/{dl.file_count}）
+                            {t("settings.localAsr.dlProgress", { msg: dl.message, i: dl.file_index + 1, n: dl.file_count })}
                           </span>
                           <span style={{ fontSize: 12, color: "var(--text-secondary)", flexShrink: 0 }}>
                             {dl.total_size > 0
@@ -1052,8 +1058,8 @@ export default function Settings() {
                     <div className="row-between" style={{ marginTop: 8, gap: 8, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
                         {m.installed
-                          ? `约 ${fmtSize(m.approx_size)}`
-                          : `约需下载 ${fmtSize(m.missing_size || m.approx_size)}`}
+                          ? t("settings.localAsr.approxSize", { size: fmtSize(m.approx_size) })
+                          : t("settings.localAsr.needDownloadSize", { size: fmtSize(m.missing_size || m.approx_size) })}
                       </span>
                       <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
                         {!m.installed && (
@@ -1071,16 +1077,16 @@ export default function Settings() {
                               }
                             }}
                           >
-                            {isDownloadingThis ? "下载中…" : "下载"}
+                            {isDownloadingThis ? t("common.downloading") : t("settings.localAsr.downloadBtn")}
                           </button>
                         )}
                         {m.installed && !selected && (
                           <button
                             className="btn btn-sm btn-icon"
-                            title="删除该模型（释放磁盘）"
+                            title={t("settings.localAsr.deleteModelTitle")}
                             disabled={enablingId === m.id || deletingId === m.id}
                             onClick={async () => {
-                              if (!window.confirm(`删除已安装的「${m.title}」模型文件？此操作不可撤销。`)) return;
+                              if (!window.confirm(t("settings.localAsr.confirmDeleteModel", { title: m.title }))) return;
                               setDeletingId(m.id);
                               setEnableTip(null);
                               try {
@@ -1093,7 +1099,7 @@ export default function Settings() {
                                 setAsrModels(list);
                                 setConfig(cfg);
                               } catch (e) {
-                                alert(`删除失败：${e}`);
+                                alert(t("settings.localAsr.deleteFailed", { error: e }));
                               } finally {
                                 setDeletingId(null);
                               }
@@ -1107,10 +1113,10 @@ export default function Settings() {
                           disabled={!m.installed || selected || enablingId === m.id}
                           title={
                             !m.installed
-                              ? "请先下载安装后再启用"
+                              ? t("settings.localAsr.enableTipInstallFirst")
                               : selected
-                                ? "当前已启用"
-                                : "启用该模型"
+                                ? t("settings.localAsr.enableTipCurrent")
+                                : t("settings.localAsr.enableTipAction")
                           }
                           onClick={async () => {
                             setEnablingId(m.id);
@@ -1121,7 +1127,7 @@ export default function Settings() {
                               const [cfg, list] = await Promise.all([ipc.getConfig(), ipc.listLocalAsrModels()]);
                               setConfig(cfg);
                               setAsrModels(list);
-                              setEnableTip({ id: m.id, ok: true, text: `已启用「${m.title}」` });
+                              setEnableTip({ id: m.id, ok: true, text: t("settings.localAsr.enabledTip", { title: m.title }) });
                               setTimeout(() => setEnableTip((t) => (t && t.id === m.id ? null : t)), 3000);
                             } catch (e) {
                               setEnableTip({ id: m.id, ok: false, text: String(e) });
@@ -1133,9 +1139,9 @@ export default function Settings() {
                           {enablingId === m.id ? (
                             <Loader2 size={13} className="spin" />
                           ) : selected ? (
-                            "已启用"
+                            t("settings.localAsr.enabled")
                           ) : (
-                            "启用"
+                            t("settings.localAsr.enable")
                           )}
                         </button>
                       </div>
@@ -1181,18 +1187,18 @@ export default function Settings() {
 
       {/* 快捷键 */}
       <div className="card">
-        <h2 className="card-title">快捷键</h2>
+        <h2 className="card-title">{t("settings.hotkey.title")}</h2>
         <div className="field" style={{ margin: 0 }}>
-          <label className="field-label">录音快捷键</label>
+          <label className="field-label">{t("settings.hotkey.recordLabel")}</label>
           <input
             value={config.hotkey}
             onChange={(e) => setConfig({ ...config, hotkey: e.target.value })}
           />
           <span className="field-hint">
-            默认 Fn（🌐 键）。也可填组合键如 Alt+Shift+D。
+            {t("settings.hotkey.recordHint")}
           </span>
           <div style={{ marginTop: 10 }}>
-            <label className="field-label">触发模式（A1）</label>
+            <label className="field-label">{t("settings.hotkey.modeLabel")}</label>
             <select
               value={config.hotkey_mode ?? "toggle"}
               onChange={(e) =>
@@ -1202,12 +1208,12 @@ export default function Settings() {
                 })
               }
             >
-              <option value="toggle">切换（按一次开 / 再按一次停）</option>
-              <option value="hold">按住说话（松开停止）</option>
+              <option value="toggle">{t("settings.hotkey.mode_toggle")}</option>
+              <option value="hold">{t("settings.hotkey.mode_hold")}</option>
             </select>
           </div>
           <div style={{ marginTop: 10 }}>
-            <label className="field-label">风格包切换快捷键（F1，可选）</label>
+            <label className="field-label">{t("settings.hotkey.styleSwitchLabel")}</label>
             <input
               value={config.style_switch_hotkey ?? ""}
               onChange={(e) =>
@@ -1216,7 +1222,7 @@ export default function Settings() {
                   style_switch_hotkey: e.target.value || null,
                 })
               }
-              placeholder="如 Ctrl+Shift+P（留空不启用）"
+              placeholder={t("settings.hotkey.styleSwitchPh")}
             />
           </div>
           {config.hotkey.trim().toLowerCase() === "fn" && (
@@ -1225,8 +1231,7 @@ export default function Settings() {
               style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4, color: "var(--warning)" }}
             >
               <StatusIcon warn />
-              使用 Fn 键需在 系统设置 → 键盘 → 「按下 🌐 键时」选「不执行任何操作」，
-              否则系统会拦截 Fn 事件。
+              {t("settings.hotkey.fnWarning")}
             </span>
           )}
         </div>
@@ -1234,14 +1239,14 @@ export default function Settings() {
 
       {/* D3 文件转录 */}
       <div className="card">
-        <h2 className="card-title">文件转录</h2>
+        <h2 className="card-title">{t("settings.transcribe.title")}</h2>
         <button
           className="btn"
           disabled={transcribing}
           onClick={async () => {
             const selected = await open({
               multiple: false,
-              filters: [{ name: "音频", extensions: ["mp3", "wav", "flac", "ogg", "m4a"] }],
+              filters: [{ name: t("settings.transcribe.audioFilter"), extensions: ["mp3", "wav", "flac", "ogg", "m4a"] }],
             });
             const path = typeof selected === "string" ? selected : null;
             if (!path) return;
@@ -1251,13 +1256,13 @@ export default function Settings() {
               const r = await ipc.transcribeFile(path);
               setTranscribeResult(r);
             } catch (e) {
-              alert(`转录失败：${String(e)}`);
+              alert(t("settings.transcribe.failed", { error: String(e) }));
             } finally {
               setTranscribing(false);
             }
           }}
         >
-          {transcribing ? "转录中…" : "选择音频文件转录"}
+          {transcribing ? t("settings.transcribe.transcribing") : t("settings.transcribe.selectFile")}
         </button>
         {transcribeResult && (
           <>
@@ -1285,7 +1290,7 @@ export default function Settings() {
                 URL.revokeObjectURL(url);
               }}
             >
-              导出 SRT 字幕
+              {t("settings.transcribe.exportSrt")}
             </button>
           </>
         )}
@@ -1293,11 +1298,11 @@ export default function Settings() {
 
       {/* App 行为 */}
       <div className="card">
-        <div className="section-head"><Monitor /> App 行为</div>
+        <div className="section-head"><Monitor /> {t("settings.appBehavior.title")}</div>
         <div className="set-row">
           <div>
-            <div className="set-name">开机时启动应用</div>
-            <div className="set-desc">登录 macOS 时自动启动，静默常驻菜单栏。</div>
+            <div className="set-name">{t("settings.appBehavior.launchName")}</div>
+            <div className="set-desc">{t("settings.appBehavior.launchDesc")}</div>
           </div>
           <label className="switch">
             <input
@@ -1310,8 +1315,8 @@ export default function Settings() {
         </div>
         <div className="set-row">
           <div>
-            <div className="set-name">录音时静音其他应用</div>
-            <div className="set-desc">开启后，语音输入时暂停系统音频播放，完成后自动恢复。</div>
+            <div className="set-name">{t("settings.appBehavior.muteName")}</div>
+            <div className="set-desc">{t("settings.appBehavior.muteDesc")}</div>
           </div>
           <label className="switch">
             <input
@@ -1326,11 +1331,11 @@ export default function Settings() {
 
       {/* 音频 */}
       <div className="card">
-        <div className="section-head"><Mic /> 音频</div>
+        <div className="section-head"><Mic /> {t("settings.audio.title")}</div>
         <div className="set-row">
           <div>
-            <div className="set-name">麦克风</div>
-            <div className="set-desc">切换和测试当前麦克风。</div>
+            <div className="set-name">{t("settings.audio.micName")}</div>
+            <div className="set-desc">{t("settings.audio.micDesc")}</div>
           </div>
           <div className="set-ctrl">
             <select
@@ -1340,7 +1345,7 @@ export default function Settings() {
                 setConfig({ ...config, audio_device: e.target.value || null })
               }
             >
-              <option value="">自动检测（默认输入）</option>
+              <option value="">{t("settings.audio.autoDetect")}</option>
               {devices.map((d) => (
                 <option key={d} value={d}>
                   {d}
@@ -1348,7 +1353,7 @@ export default function Settings() {
               ))}
             </select>
             <button className="btn btn-sm" onClick={testMic} disabled={testingMic}>
-              {testingMic ? "测试中…" : "测试"}
+              {testingMic ? t("common.testing") : t("common.test")}
             </button>
           </div>
         </div>
@@ -1362,24 +1367,24 @@ export default function Settings() {
 
       {/* 系统权限（唯一入口：不再在顶部横幅重复） */}
       <div className="card">
-        <h2 className="card-title">系统权限</h2>
+        <h2 className="card-title">{t("settings.permission.title")}</h2>
         <div className="perm-item">
           <div>
-            <div className="perm-name">麦克风</div>
-            <div className="perm-desc">用于采集语音</div>
+            <div className="perm-name">{t("settings.permission.micName")}</div>
+            <div className="perm-desc">{t("settings.permission.micDesc")}</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {permBadge(mic)}
             {mic?.state !== "granted" && (
               <>
                 <button className="btn btn-sm" onClick={() => ipc.requestMicrophone()}>
-                  授权
+                  {t("settings.permission.authorize")}
                 </button>
                 <button
                   className="btn btn-sm btn-ghost"
                   onClick={() => ipc.openPermissionSettings("microphone" as PermissionKind)}
                 >
-                  系统设置
+                  {t("settings.permission.openSysSettings")}
                 </button>
               </>
             )}
@@ -1387,21 +1392,21 @@ export default function Settings() {
         </div>
         <div className="perm-item">
           <div>
-            <div className="perm-name">辅助功能</div>
-            <div className="perm-desc">用于将识别文字输入到当前光标</div>
+            <div className="perm-name">{t("settings.permission.axName")}</div>
+            <div className="perm-desc">{t("settings.permission.axDesc")}</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {permBadge(ax)}
             {ax?.state !== "granted" && (
               <>
                 <button className="btn btn-sm" onClick={() => ipc.requestAccessibility()}>
-                  授权
+                  {t("settings.permission.authorize")}
                 </button>
                 <button
                   className="btn btn-sm btn-ghost"
                   onClick={() => ipc.openPermissionSettings("accessibility" as PermissionKind)}
                 >
-                  系统设置
+                  {t("settings.permission.openSysSettings")}
                 </button>
               </>
             )}
@@ -1409,18 +1414,16 @@ export default function Settings() {
         </div>
         {(mic?.state !== "granted" || ax?.state !== "granted") && (
           <span className="field-hint" style={{ display: "block", marginTop: 8 }}>
-            请用 ./scripts/build.sh install（固定签名 openIME Local Dev）安装后再授权；
-            同一证书重装一般不必再授。若系统里有旧 openIME 条目仍无效：删掉旧条目后点上方「授权」。
-            tauri dev 不走稳定签名，调试时授权可能反复失效。
+            {t("settings.permission.hint")}
           </span>
         )}
       </div>
 
       {/* 功能测试 */}
       <div className="card">
-        <h2 className="card-title">功能测试</h2>
+        <h2 className="card-title">{t("settings.fnTest.title")}</h2>
         <span className="field-hint" style={{ display: "block", marginBottom: 12 }}>
-          按 Fn（🌐）键开始录音，对麦克风说话，识别结果实时显示在下方文本框中。再按 Fn 停止。
+          {t("settings.fnTest.hint")}
         </span>
 
         {/* 状态指示 */}
@@ -1447,16 +1450,16 @@ export default function Settings() {
               <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
                 {recording ? (
                   <>
-                    <CircleDot size={13} color="var(--danger)" /> 录音中…
+                    <CircleDot size={13} color="var(--danger)" /> {t("settings.fnTest.recording")}
                   </>
                 ) : fnCount > 0 ? (
-                  `已触发 ${fnCount} 次`
+                  t("settings.fnTest.triggered", { count: fnCount })
                 ) : (
-                  "就绪"
+                  t("settings.fnTest.ready")
                 )}
               </div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                {fnState === "down" ? "● Fn 按下" : "等待按键"}
+                {fnState === "down" ? t("settings.fnTest.fnDown") : t("settings.fnTest.waitingKey")}
               </div>
             </div>
           </div>
@@ -1471,9 +1474,9 @@ export default function Settings() {
               }
             }}
           >
-            {recording ? "■ 停止" : (
+            {recording ? t("settings.fnTest.stop") : (
               <>
-                <Mic2 size={13} /> 手动录音
+                <Mic2 size={13} /> {t("settings.fnTest.manualRecord")}
               </>
             )}
           </button>
@@ -1483,7 +1486,7 @@ export default function Settings() {
         <textarea
           value={testText}
           onChange={(e) => setTestText(e.target.value)}
-          placeholder="识别结果会显示在这里（也可手动输入编辑）…"
+          placeholder={t("settings.fnTest.resultPh")}
           style={{
             width: "100%",
             minHeight: 100,
@@ -1501,14 +1504,14 @@ export default function Settings() {
         />
         <div className="row-between" style={{ marginTop: 8 }}>
           <span className="field-hint">
-            {testText ? `${testText.length} 字` : "如果没反应，请确认引擎已配置并保存"}
+            {testText ? t("settings.fnTest.charCount", { count: testText.length }) : t("settings.fnTest.noResponseHint")}
           </span>
           {testText && (
             <button
               className="btn btn-sm btn-ghost"
               onClick={() => setTestText("")}
             >
-              清空
+              {t("settings.fnTest.clear")}
             </button>
           )}
         </div>
@@ -1517,7 +1520,7 @@ export default function Settings() {
       {/* 保存 */}
       <div className="save-bar">
         <button className="btn" onClick={onSave} disabled={saving}>
-          {saving ? "保存中…" : "保存设置"}
+          {saving ? t("common.saving") : t("settings.saveBtn")}
         </button>
         {msg && (
           <span className="save-msg" style={{ color: msg.ok ? "var(--success)" : "var(--danger)" }}>

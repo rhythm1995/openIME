@@ -1,4 +1,5 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Settings as SettingsIcon, History as HistoryIcon, BookOpen, type LucideIcon } from "lucide-react";
@@ -23,6 +24,7 @@ function onDragRegionMouseDown(e: ReactMouseEvent) {
 }
 
 export default function App() {
+  const { t, i18n } = useTranslation();
   const [pong, setPong] = useState("");
   const [page, setPage] = useState<Page>("settings");
   // 页面保活：首次进入后保持挂载，仅用 CSS 隐藏。
@@ -60,9 +62,9 @@ export default function App() {
   }, []);
 
   const nav: { id: Page; label: string; icon: LucideIcon }[] = [
-    { id: "settings", label: "设置", icon: SettingsIcon },
-    { id: "history", label: "历史记录", icon: HistoryIcon },
-    { id: "dictionary", label: "词典", icon: BookOpen },
+    { id: "settings", label: t("nav.settings"), icon: SettingsIcon },
+    { id: "history", label: t("nav.history"), icon: HistoryIcon },
+    { id: "dictionary", label: t("nav.dictionary"), icon: BookOpen },
   ];
 
   return (
@@ -112,7 +114,15 @@ export default function App() {
         </nav>
         <div className="sidebar-footer">
           <span className={`status-dot ${pong ? "ready" : "connecting"}`} />
-          {pong ? "已就绪" : "连接中"}
+          {pong ? t("status.ready") : t("status.connecting")}
+          <button
+            type="button"
+            className="lang-toggle"
+            onClick={() => i18n.changeLanguage(i18n.language === "zh" ? "en" : "zh")}
+            title={t("lang.switchTitle")}
+          >
+            🌐 {i18n.language === "zh" ? t("lang.zh") : t("lang.en")}
+          </button>
         </div>
       </aside>
 
