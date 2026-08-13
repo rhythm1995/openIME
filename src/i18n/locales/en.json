@@ -30,7 +30,8 @@
   "overlay": {
     "listening": "Listening…",
     "processing": "Recognizing…",
-    "ellipsis": "…"
+    "ellipsis": "…",
+    "cancelled": "Cancelled"
   },
   "perm": {
     "not_determined": "Not authorized",

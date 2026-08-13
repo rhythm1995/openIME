@@ -17,6 +17,8 @@ pub mod asr_catalog;
 pub mod audio;
 pub mod bailian_proto;
 pub mod config;
+pub mod endpoint;
+pub mod http;
 pub mod insert;
 pub mod model_download;
 pub mod model_mgr;

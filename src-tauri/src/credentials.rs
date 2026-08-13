@@ -45,6 +45,33 @@ pub fn fetch_provider_key(index: usize) -> Option<String> {
     }
 }
 
+/// 存云端润色 API key 到 keychain（username=`polish_cloud`）。PR1：不再落明文 JSON。
+pub fn store_polish_key(key: &str) -> Result<(), String> {
+    #[cfg(test)]
+    {
+        MOCK.with(|m| m.borrow_mut().insert("polish_cloud".to_string(), key.to_string()));
+        Ok(())
+    }
+    #[cfg(not(test))]
+    {
+        let entry = keyring::Entry::new(SERVICE, "polish_cloud").map_err(|e| e.to_string())?;
+        entry.set_password(key).map_err(|e| e.to_string())
+    }
+}
+
+/// 从 keychain 取云端润色 API key；无则 None。
+pub fn fetch_polish_key() -> Option<String> {
+    #[cfg(test)]
+    {
+        MOCK.with(|m| m.borrow().get("polish_cloud").cloned())
+    }
+    #[cfg(not(test))]
+    {
+        let entry = keyring::Entry::new(SERVICE, "polish_cloud").ok()?;
+        entry.get_password().ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,5 +84,13 @@ mod tests {
         assert_eq!(fetch_provider_key(0), Some("sk-secret-0".into()));
         assert_eq!(fetch_provider_key(1), Some("sk-secret-1".into()));
         assert_eq!(fetch_provider_key(2), None);
+    }
+
+    #[test]
+    fn polish_key_roundtrip() {
+        MOCK.with(|m| m.borrow_mut().clear());
+        assert_eq!(fetch_polish_key(), None);
+        store_polish_key("sk-polish").unwrap();
+        assert_eq!(fetch_polish_key(), Some("sk-polish".into()));
     }
 }

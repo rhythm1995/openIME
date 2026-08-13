@@ -49,6 +49,11 @@ export default function RecorderOverlay() {
       setPhase("processing");
       setProcessingMsg(e.payload || "");
     }).then((u) => unlisteners.push(u));
+    // R2:用户按 ESC 取消润色 → 显示「已取消」（润色实际回退为 L0 结果上屏）。
+    listen("recording://polish-cancelled", () => {
+      setPhase("processing");
+      setProcessingMsg(t("overlay.cancelled"));
+    }).then((u) => unlisteners.push(u));
     listen<string>("recording://stopped", () => {
       // 先触发淡出动画，原生侧随后 hide 窗口；这里复位文案，不 close 窗口。
       setLeaving(true);

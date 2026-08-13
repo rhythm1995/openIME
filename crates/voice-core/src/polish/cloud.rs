@@ -190,10 +190,7 @@ impl CloudPolishProvider {
         auth: AuthType,
         timeout: std::time::Duration,
     ) -> Result<String> {
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(|e| Error::Provider(format!("创建 HTTP 客户端失败: {e}")))?;
+        let client = crate::http::http_client_no_redirect(timeout);
         let mut req_builder = client.post(url).json(body);
         req_builder = match auth {
             AuthType::Bearer => req_builder.bearer_auth(self.api_key.trim()),

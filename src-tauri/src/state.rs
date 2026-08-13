@@ -30,6 +30,8 @@ pub struct AppState {
     pub stop_flag: Arc<AtomicBool>,
     /// 本地模型下载中（防并发重复下载）。
     pub model_downloading: Arc<AtomicBool>,
+    /// R2:润色取消标志；ESC 触发后置 true，apply_polish 看到→尽快返回 L0。
+    pub polish_cancel: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -62,6 +64,7 @@ impl AppState {
             recording_guard: Arc::new(AtomicBool::new(false)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             model_downloading: Arc::new(AtomicBool::new(false)),
+            polish_cancel: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -208,6 +211,7 @@ impl AppState {
             style_prompt,
             hotwords,
             timeout_ms: cfg.polish_timeout_ms.max(100),
+            cancel: Some(self.polish_cancel.clone()),
         }
     }
 
@@ -219,6 +223,16 @@ impl AppState {
     pub fn clear_stop(&self) {
         self.stop_flag.store(false, Ordering::SeqCst);
     }
+
+    /// R2:请求取消进行中的润色（ESC 触发）。
+    pub fn request_cancel_polish(&self) {
+        self.polish_cancel.store(true, Ordering::SeqCst);
+    }
+
+    /// R2:清掉润色取消标志（每次润色开始前调用）。
+    pub fn clear_cancel_polish(&self) {
+        self.polish_cancel.store(false, Ordering::SeqCst);
+    }
 }
 
 pub fn load_config(store: &SqliteStore) -> Result<Option<AppConfig>, Error> {
@@ -226,12 +240,24 @@ pub fn load_config(store: &SqliteStore) -> Result<Option<AppConfig>, Error> {
         Some(json) => {
             let mut cfg: AppConfig = serde_json::from_str(&json)
                 .map_err(|e| Error::Store(format!("解析 app_config 失败: {e}")))?;
-            // H2：api_key 从 keychain 填充（save 时已置空，明文不落 JSON）。
+            // H2：provider api_key 从 keychain 填充（save 时已置空，明文不落 JSON）。
             for (i, p) in cfg.providers.iter_mut().enumerate() {
                 if p.api_key.is_empty() {
                     p.api_key = crate::credentials::fetch_provider_key(i).unwrap_or_default();
                 }
             }
+            // PR1：polish_cloud_api_key 迁移到 keychain（若 JSON 仍残留明文）。
+            if !cfg.polish_cloud_api_key.trim().is_empty() {
+                let _ = crate::credentials::store_polish_key(cfg.polish_cloud_api_key.trim());
+                cfg.polish_cloud_api_key.clear();
+            }
+            // PR1：从 keychain 回填 polish_cloud_api_key 到内存（运行时使用）。
+            if cfg.polish_cloud_api_key.is_empty() {
+                cfg.polish_cloud_api_key =
+                    crate::credentials::fetch_polish_key().unwrap_or_default();
+            }
+            // R3：启动期 fail-open——清空无法通过校验的非空 endpoint（不阻断启动）。
+            sanitize_endpoints(&mut cfg);
             Ok(Some(cfg))
         }
         None => Ok(None),
@@ -247,8 +273,42 @@ pub fn save_config(store: &SqliteStore, cfg: &AppConfig) -> Result<(), Error> {
             p.api_key.clear();
         }
     }
+    // PR1：polish_cloud_api_key 存 keychain，JSON 置空（不落明文）。
+    if !cfg.polish_cloud_api_key.trim().is_empty() {
+        let _ = crate::credentials::store_polish_key(cfg.polish_cloud_api_key.trim());
+        cfg.polish_cloud_api_key.clear();
+    }
     let json = serde_json::to_string(&cfg)
         .map_err(|e| Error::Store(format!("序列化 app_config 失败: {e}")))?;
     store.set_setting(CONFIG_KEY, &json)?;
     Ok(())
+}
+
+/// R3：启动期 fail-open 校验——把无法通过 `validate_endpoint` 的非空 URL 清空并 warn。
+fn sanitize_endpoints(cfg: &mut voice_core::AppConfig) {
+    use voice_core::ProviderKind;
+    for p in cfg.providers.iter_mut() {
+        let url = p.base_url.trim().to_string();
+        if url.is_empty() {
+            continue;
+        }
+        let target = match p.kind {
+            ProviderKind::Bailian => voice_core::providers::bailian::normalize_ws_url(&url),
+            ProviderKind::OpenAiAsr | ProviderKind::MultimodalAsr => url.clone(),
+            ProviderKind::Sherpa => continue,
+        };
+        if voice_core::endpoint::validate_endpoint(&target).is_err() {
+            crate::log_warn!("启动时清空无效 endpoint：{}（归一化 {}）", p.base_url, target);
+            p.base_url.clear();
+        }
+    }
+    if !cfg.polish_cloud_endpoint.trim().is_empty()
+        && voice_core::endpoint::validate_endpoint(cfg.polish_cloud_endpoint.trim()).is_err()
+    {
+        crate::log_warn!(
+            "启动时清空无效 polish_cloud_endpoint：{}",
+            cfg.polish_cloud_endpoint
+        );
+        cfg.polish_cloud_endpoint.clear();
+    }
 }

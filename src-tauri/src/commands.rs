@@ -16,6 +16,7 @@ use voice_core::{AppConfig, Hotword, ProviderConfig, SessionSummary, UtteranceRe
 use crate::platform::current::permissions::MacPermissionChecker;
 use crate::state::{save_config, AppState};
 use crate::{log_debug, log_error, log_info, log_warn};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
 
 #[tauri::command]
 pub fn ping() -> String {
@@ -76,6 +77,8 @@ pub async fn save_app_config(
     mut config: AppConfig,
 ) -> Result<(), String> {
     config.active().map_err(|e| e.to_string())?;
+    // R3：保存期校验所有非空用户 endpoint（不强制 api_key；不合法整单不落盘）。
+    validate_all_endpoints(&config).map_err(|e| e.to_string())?;
     // 规范化 local_asr_model，同步 local_mode 与 sherpa provider.model。
     config.sync_local_asr_fields();
     let hotkey_changed = state.config.read().await.hotkey != config.hotkey;
@@ -87,6 +90,30 @@ pub async fn save_app_config(
     // 快捷键变化立即生效（Fn 走原生监听，组合键走 global-shortcut）。
     if hotkey_changed {
         crate::apply_hotkey(&app, &new_hotkey);
+    }
+    Ok(())
+}
+
+/// R3：保存期校验所有非空用户 endpoint（provider base_url + polish_cloud_endpoint）。
+/// 百炼验归一化 wss；REST 验原文。Sherpa 无 URL 跳过。不强制 api_key。
+fn validate_all_endpoints(cfg: &AppConfig) -> Result<(), String> {
+    use voice_core::ProviderKind;
+    for p in &cfg.providers {
+        let url = p.base_url.trim();
+        if url.is_empty() {
+            continue;
+        }
+        let target = match p.kind {
+            ProviderKind::Bailian => voice_core::providers::bailian::normalize_ws_url(url),
+            ProviderKind::OpenAiAsr | ProviderKind::MultimodalAsr => url.to_string(),
+            ProviderKind::Sherpa => continue,
+        };
+        voice_core::endpoint::validate_endpoint(&target)
+            .map_err(|e| format!("endpoint「{}」校验失败：{e}", p.base_url))?;
+    }
+    if !cfg.polish_cloud_endpoint.trim().is_empty() {
+        voice_core::endpoint::validate_endpoint(cfg.polish_cloud_endpoint.trim())
+            .map_err(|e| format!("润色 endpoint 校验失败：{e}"))?;
     }
     Ok(())
 }
@@ -132,8 +159,11 @@ pub async fn test_cloud_polish(state: State<'_, AppState>) -> Result<String, Str
                 .iter()
                 .find(|p| {
                     p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty()
-                })
-                .ok_or("未配置云端润色 API Key（请填 polish 独立配置或百炼 provider key）")?;
+                });
+            let Some(p) = p else {
+                // 没配云端润色 key 属正常状态（本地优先运行，不影响使用），不算错误。
+                return Ok("未配置云端润色 API Key。本地优先运行，不影响使用；如需云端润色，请填 polish 独立配置或百炼 provider key。".into());
+            };
             (
                 voice_core::BailianChatPolish::default_chat_base(),
                 p.api_key.clone(),
@@ -887,10 +917,18 @@ pub async fn toggle_recording(
                             })
                             .collect()
                     };
-                    if let Err(e) = pipeline
+                    // R2:润色前清掉取消标志 + 动态注册 ESC 中断快捷键（润色结束注销）。
+                    app_handle
+                        .state::<AppState>()
+                        .clear_cancel_polish();
+                    let esc = Shortcut::new(None, Code::Escape);
+                    let _ = app_handle.global_shortcut().register(esc);
+                    let insert_res = pipeline
                         .insert_finals_with_polish(&r.session_id, &finals, &polish_ctx)
-                        .await
-                    {
+                        .await;
+                    // 润色结束（完成 / 取消 / 超时）注销 ESC，避免长期占用。
+                    let _ = app_handle.global_shortcut().unregister(esc);
+                    if let Err(e) = insert_res {
                         log_error!("插入文本失败：{e}");
                         let _ = app_handle.emit("recording://error", e.to_string());
                     }

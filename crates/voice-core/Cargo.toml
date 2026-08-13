@@ -48,6 +48,8 @@ symphonia = { version = "0.5", features = ["mp3", "wav", "flac", "ogg", "pcm"] }
 # 后续扩展 L0 同音字：pinyin / jieba-rs（届时再引入）
 # 模型下载：stream 特性用于流式进度；rustls 避免系统 TLS 依赖。
 reqwest = { workspace = true, features = ["stream"] }
+# R3：endpoint URL 解析（host/IP 分类）。
+url = "2"
 bytes = "1"
 sherpa-onnx = { version = "1.13", optional = true }
 # 本地 GGUF 推理（Qwen2.5-1.5B 等）；仅 llm feature。

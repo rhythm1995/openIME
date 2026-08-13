@@ -52,19 +52,23 @@ impl ProviderConfig {
                 }
             }
             ProviderKind::Bailian => {
-                if self.base_url.trim().is_empty() {
+                let url = self.base_url.trim();
+                if url.is_empty() {
                     return Err(Error::Config("bailian provider 缺少 base_url".into()));
                 }
-                let url = self.base_url.trim();
-                let valid = url.starts_with("wss://")
+                let valid_scheme = url.starts_with("wss://")
                     || url.starts_with("ws://")
                     || url.starts_with("https://")
                     || url.starts_with("http://");
-                if !valid {
+                if !valid_scheme {
                     return Err(Error::Config(
                         "base_url 必须以 ws://, wss://, http:// 或 https:// 开头".into(),
                     ));
                 }
+                // R3：百炼只校验归一化后的 wss URL（用户常贴 http://…/compatible-mode/v1）。
+                let normalized = crate::providers::bailian::normalize_ws_url(url);
+                crate::endpoint::validate_endpoint(&normalized)
+                    .map_err(|e| Error::Config(format!("base_url 校验失败：{e}")))?;
                 if self.api_key.trim().is_empty() {
                     return Err(Error::Config("bailian provider 缺少 api_key".into()));
                 }
@@ -73,18 +77,15 @@ impl ProviderConfig {
                 }
             }
             ProviderKind::OpenAiAsr | ProviderKind::MultimodalAsr => {
-                if self.base_url.trim().is_empty() {
+                let url = self.base_url.trim();
+                if url.is_empty() {
                     return Err(Error::Config(
                         "云端 ASR provider 缺少 base_url（endpoint）".into(),
                     ));
                 }
-                let url = self.base_url.trim();
-                let valid = url.starts_with("https://") || url.starts_with("http://");
-                if !valid {
-                    return Err(Error::Config(
-                        "云端 ASR base_url 必须以 http:// 或 https:// 开头".into(),
-                    ));
-                }
+                // R3：REST 校验用户填写的原始 URL（含 scheme + host/IP 分类）。
+                crate::endpoint::validate_endpoint(url)
+                    .map_err(|e| Error::Config(format!("base_url 校验失败：{e}")))?;
                 if self.api_key.trim().is_empty() {
                     return Err(Error::Config("云端 ASR provider 缺少 api_key".into()));
                 }

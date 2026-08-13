@@ -37,6 +37,8 @@ pub struct PolishContext {
     pub style_prompt: Option<String>,
     pub hotwords: Vec<String>,
     pub timeout_ms: u32,
+    /// R2:润色取消标志；`Some` 且被置 true 时，apply_polish 在当前 await 点尽快返回 L0 结果。
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// partial 增量回调（UI 用）。一期可忽略返回。
@@ -314,8 +316,20 @@ impl Pipeline {
             hotwords: ctx.hotwords.clone(),
             timeout: std::time::Duration::from_millis(ctx.timeout_ms.max(100) as u64),
         };
-        match polish.polish(req).await {
-            Ok(r) => {
+        // R2:支持 ESC 取消——润色进行中若 cancel 标志被置 true，尽快返回 L0 结果。
+        let polish_fut = polish.polish(req);
+        let result = match &ctx.cancel {
+            Some(flag) => tokio::select! {
+                r = polish_fut => Some(r),
+                _ = wait_cancel(flag.clone()) => {
+                    tracing::info!("润色被用户取消（ESC），使用 L0 结果");
+                    None
+                }
+            },
+            None => Some(polish_fut.await),
+        };
+        match result {
+            Some(Ok(r)) => {
                 if r.text.trim().is_empty() {
                     l0.text
                 } else {
@@ -331,11 +345,23 @@ impl Pipeline {
                     cleaned
                 }
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 tracing::warn!("润色失败，使用 L0 结果：{e}");
                 l0.text
             }
+            None => l0.text,
         }
+    }
+}
+
+/// R2:轮询取消标志（30ms），用于 `tokio::select!` 与润色 future 竞速。
+async fn wait_cancel(flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    use std::sync::atomic::Ordering;
+    loop {
+        if flag.load(Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     }
 }
 
@@ -647,6 +673,7 @@ mod tests {
             style_prompt: None,
             hotwords: vec![],
             timeout_ms: 1000,
+            cancel: None,
         }
     }
 

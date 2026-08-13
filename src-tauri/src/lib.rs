@@ -326,6 +326,14 @@ pub fn run() {
 
 /// 全局快捷键：若是风格包切换键则循环切风格包（F1），否则切换录音。
 fn on_hotkey(app: &tauri::AppHandle, shortcut: &Shortcut) {
+    // R2:润色中按 ESC → 取消润色（ESC 由润色流程动态注册，见 commands.rs）。
+    if shortcut.key == Code::Escape && shortcut.mods.is_empty() {
+        let state = app.state::<AppState>();
+        state.request_cancel_polish();
+        let _ = app.emit("recording://polish-cancelled", ());
+        log_info!("已请求取消润色（ESC）");
+        return;
+    }
     let style_sc = app
         .state::<AppState>()
         .config

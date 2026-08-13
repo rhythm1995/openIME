@@ -70,6 +70,31 @@ pub fn diff_prefix<'a>(previous: &'a str, current: &'a str) -> &'a str {
     &current[start..]
 }
 
+/// R7：插入结果四态（Type-then-Paste 兜底）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertOutcome {
+    /// enigo 模拟按键成功。
+    Typed,
+    /// 剪贴板粘贴（macOS Cmd+V / Windows Ctrl+V）成功。
+    Pasted,
+    /// 已写入剪贴板但粘贴和弦失败（用户需手动粘贴）。
+    CopiedFallback,
+    /// 打字与粘贴都失败。
+    Failed,
+}
+
+/// R7：是否恢复原剪贴板——仅当当前剪贴板内容仍是上次插入的文字时才恢复
+/// （用户中途复制了别的则不覆盖；设计 FR-7.6）。纯函数，可单测。
+pub fn should_restore_clipboard(
+    current_clipboard_text: Option<&str>,
+    last_inserted: &str,
+) -> bool {
+    match current_clipboard_text {
+        Some(t) => !last_inserted.is_empty() && t == last_inserted,
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,6 +105,26 @@ mod tests {
         assert_eq!(diff_prefix("", "你好"), "你好");
         assert_eq!(diff_prefix("你好", "你好"), "");
         assert_eq!(diff_prefix("abc", "abd"), "d");
+    }
+
+    #[test]
+    fn should_restore_when_unchanged() {
+        assert!(should_restore_clipboard(Some("HELLO"), "HELLO"));
+    }
+
+    #[test]
+    fn should_not_restore_when_user_copied_other() {
+        assert!(!should_restore_clipboard(Some("OTHER"), "HELLO"));
+    }
+
+    #[test]
+    fn should_not_restore_when_clipboard_non_text() {
+        assert!(!should_restore_clipboard(None, "HELLO"));
+    }
+
+    #[test]
+    fn should_not_restore_when_inserted_empty() {
+        assert!(!should_restore_clipboard(Some(""), ""));
     }
 
     #[test]

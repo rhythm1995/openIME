@@ -87,10 +87,7 @@ impl AsrSession for MultimodalAsrSession {
                 }],
                 "modalities": ["text"],
             });
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
-                .build()
-                .map_err(|e| Error::Provider(format!("创建 HTTP 客户端失败: {e}")))?;
+            let client = crate::http::http_client_no_redirect(std::time::Duration::from_secs(60));
             let resp = client
                 .post(&url)
                 .bearer_auth(cfg.api_key.trim())
@@ -161,10 +158,7 @@ pub async fn test_connection(cfg: &ProviderConfig) -> Result<String> {
         }],
         "modalities": ["text"],
     });
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| Error::Provider(format!("创建 HTTP 客户端失败: {e}")))?;
+    let client = crate::http::http_client_no_redirect(std::time::Duration::from_secs(30));
     let resp = client
         .post(&url)
         .bearer_auth(cfg.api_key.trim())

@@ -30,7 +30,8 @@
   "overlay": {
     "listening": "正在聆听…",
     "processing": "正在识别…",
-    "ellipsis": "…"
+    "ellipsis": "…",
+    "cancelled": "已取消"
   },
   "perm": {
     "not_determined": "未授权",
