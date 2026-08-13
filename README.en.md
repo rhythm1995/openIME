@@ -9,6 +9,7 @@
 <p align="center">
   <a href="./releases">Download</a> ·
   <a href="#quick-start">Quick Start</a> ·
+  <a href="docs/user-guide.md">User Guide</a> ·
   <a href="docs/development.md">Development</a> ·
   <a href="docs/troubleshooting.md">Troubleshooting</a>
 </p>
@@ -16,7 +17,7 @@
 <br />
 
 <p align="center">
-  <img src="docs/screenshots/main.png" alt="openIME main window" width="760" />
+  <img src="docs/screenshots/en.png" alt="openIME main window" width="760" />
 </p>
 
 > [!NOTE]
@@ -86,6 +87,8 @@ cargo test -p voice-core        # Core library
 - ✅ 3-tier AI polish, hotword dictionary, style packs, file transcription, simplified/traditional, selection injection, journal export, machine-profile → model-fit tagging
 - 🌐 UI i18n (Chinese / English)
 - 🔜 Windows
+
+> Full backlog of unimplemented ideas (in Chinese): [docs/roadmap.md](docs/roadmap.md).
 
 ## Acknowledgements
 
