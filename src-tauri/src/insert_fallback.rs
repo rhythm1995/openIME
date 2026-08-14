@@ -67,8 +67,10 @@ impl TextInserter for CompositeInserter {
         }
         // Auto + 前台 app 命中兜底列表 → 视同 Paste（FR-7.4）。
         let strategy = if opts.strategy == InsertStrategy::Auto
-            && voice_core::matches_paste_fallback(opts.frontmost.as_deref(), &opts.paste_fallback_apps)
-        {
+            && voice_core::matches_paste_fallback(
+                opts.frontmost.as_deref(),
+                &opts.paste_fallback_apps,
+            ) {
             InsertStrategy::Paste
         } else {
             opts.strategy
@@ -318,10 +320,11 @@ fn simulate_paste() -> Result<(), String> {
 #[cfg(target_os = "windows")]
 fn windows_ctrl_v() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| format!("enigo 初始化失败: {e}"))?;
+    let mut enigo =
+        Enigo::new(&Settings::default()).map_err(|e| format!("enigo 初始化失败: {e}"))?;
     let down = |e: &mut Enigo| -> Result<(), String> {
-        e.key(Key::Control, Direction::Press).map_err(|e| e.to_string())?;
+        e.key(Key::Control, Direction::Press)
+            .map_err(|e| e.to_string())?;
         e.key(Key::V, Direction::Click).map_err(|e| e.to_string())?;
         Ok(())
     };
@@ -396,10 +399,7 @@ mod tests {
             decide_restore(Some(&p), 1, Some("OTHER")),
             RestoreDecision::Clear
         );
-        assert_eq!(
-            decide_restore(Some(&p), 1, None),
-            RestoreDecision::Clear
-        );
+        assert_eq!(decide_restore(Some(&p), 1, None), RestoreDecision::Clear);
     }
 
     #[test]

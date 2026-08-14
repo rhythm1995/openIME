@@ -121,9 +121,13 @@ fn validate_hotkeys(cfg: &AppConfig) -> Result<(), String> {
         }
         // 单键（macOS Fn / Windows CapsLock）仅录音快捷键支持；
         // CapsLock 接受变体写法（"caps lock" / "CAPS_LOCK" / "caps"），归一化后查重。
-        if s.eq_ignore_ascii_case("fn") || crate::fn_policy::parse_watch_key(s) == crate::fn_policy::WatchKey::CapsLock {
+        if s.eq_ignore_ascii_case("fn")
+            || crate::fn_policy::parse_watch_key(s) == crate::fn_policy::WatchKey::CapsLock
+        {
             if name != "录音" {
-                return Err(format!("仅录音快捷键支持单键 Fn/CapsLock（{name}快捷键请用组合键）"));
+                return Err(format!(
+                    "仅录音快捷键支持单键 Fn/CapsLock（{name}快捷键请用组合键）"
+                ));
             }
             let canonical = if s.eq_ignore_ascii_case("fn") {
                 "fn".to_string()
@@ -211,12 +215,9 @@ pub async fn test_cloud_polish(state: State<'_, AppState>) -> Result<String, Str
             )
         } else {
             // 回退 bailian provider
-            let p = cfg
-                .providers
-                .iter()
-                .find(|p| {
-                    p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty()
-                });
+            let p = cfg.providers.iter().find(|p| {
+                p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty()
+            });
             let Some(p) = p else {
                 // 没配云端润色 key 属正常状态（本地优先运行，不影响使用），不算错误。
                 return Ok("未配置云端润色 API Key。本地优先运行，不影响使用；如需云端润色，请填 polish 独立配置或百炼 provider key。".into());
@@ -1068,8 +1069,8 @@ pub async fn toggle_recording(
                 }
                 voice_core::SessionIntent::Qa => {
                     // QA：不插入、不落普通 utterances；把问题交给问答状态机。
-                    let question = voice_core::polish::dedupe_consecutive_finals(&r.utterances)
-                        .join("");
+                    let question =
+                        voice_core::polish::dedupe_consecutive_finals(&r.utterances).join("");
                     *recording.write().await = false;
                     guard.store(false, std::sync::atomic::Ordering::SeqCst);
                     hide_overlay_only(&app_handle);
@@ -1335,12 +1336,10 @@ pub async fn transcribe_file(
     use std::sync::atomic::Ordering;
 
     // 防并发：CAS 抢占转录 guard，已有转录在进行则拒绝。
-    let acquired = state.transcribe_guard.compare_exchange(
-        false,
-        true,
-        Ordering::SeqCst,
-        Ordering::SeqCst,
-    );
+    let acquired =
+        state
+            .transcribe_guard
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst);
     if acquired.is_err() {
         return Err("已有转录在进行".into());
     }

@@ -11,8 +11,7 @@ use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM};
 // （来自 windows-strings：`pub struct PWSTR(pub *mut u16)`，非类型别名）。
 // `QueryFullProcessImageNameW` 形参即该结构体，需用 `PWSTR(ptr)` 构造。
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetForegroundWindow, GetLastActivePopup, GetWindowThreadProcessId, IsIconic,
@@ -41,8 +40,13 @@ fn exe_basename_of_window(hwnd: HWND) -> Option<String> {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buf = [0u16; 1024];
         let mut len: u32 = buf.len() as u32;
-        let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len)
-            .is_ok();
+        let ok = QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        )
+        .is_ok();
         let _ = CloseHandle(process);
         if !ok || len == 0 {
             return None;
@@ -125,8 +129,8 @@ pub(crate) mod test_util {
     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, ShowWindow, WNDCLASSW,
-        WNDCLASS_STYLES, WINDOW_EX_STYLE, SW_MINIMIZE, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, ShowWindow, SW_MINIMIZE,
+        WINDOW_EX_STYLE, WNDCLASSW, WNDCLASS_STYLES, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
     const TEST_CLASS: &str = "OpenImeTestWindowClass";
@@ -181,7 +185,10 @@ pub(crate) mod test_util {
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        let title: Vec<u16> = TEST_TITLE.encode_utf16().chain(std::iter::once(0)).collect();
+        let title: Vec<u16> = TEST_TITLE
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         let mut style = WS_OVERLAPPEDWINDOW;
         if visible {
             style |= WS_VISIBLE;

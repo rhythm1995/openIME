@@ -112,7 +112,12 @@ pub fn transcribe_file_full(
         &samples_16k,
         seg_secs,
         overlap_secs,
-        |piece| Ok(crate::providers::sherpa::engine::transcribe_offline(&recognizer, piece)),
+        |piece| {
+            Ok(crate::providers::sherpa::engine::transcribe_offline(
+                &recognizer,
+                piece,
+            ))
+        },
         cancel,
         on_progress,
     );
@@ -433,7 +438,10 @@ mod tests {
             vec![(0, 60 * sr), (56 * sr, 64 * sr)]
         );
         // 1800s → hop=56s，段数 1 + ceil((1800-60)/56) = 33。
-        assert_eq!(segment_ranges(1800 * sr, 60 * sr, 4 * sr).unwrap().len(), 33);
+        assert_eq!(
+            segment_ranges(1800 * sr, 60 * sr, 4 * sr).unwrap().len(),
+            33
+        );
     }
 
     #[test]

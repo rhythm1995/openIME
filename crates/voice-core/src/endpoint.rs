@@ -43,7 +43,9 @@ pub fn validate_endpoint(raw: &str) -> Result<(), EndpointError> {
     let parsed = Url::parse(raw).map_err(|e| EndpointError::InvalidUrl(e.to_string()))?;
     let scheme = parsed.scheme();
     if !matches!(scheme, "http" | "https" | "ws" | "wss") {
-        return Err(EndpointError::InvalidUrl(format!("不支持的 scheme: {scheme}")));
+        return Err(EndpointError::InvalidUrl(format!(
+            "不支持的 scheme: {scheme}"
+        )));
     }
     let raw_host = parsed
         .host_str()
@@ -53,7 +55,10 @@ pub fn validate_endpoint(raw: &str) -> Result<(), EndpointError> {
     let host_lower = host.to_ascii_lowercase();
 
     // 元数据 hostname（GCP）。
-    if matches!(host_lower.as_str(), "metadata.google.internal" | "metadata.goog") {
+    if matches!(
+        host_lower.as_str(),
+        "metadata.google.internal" | "metadata.goog"
+    ) {
         return Err(EndpointError::BlockedMetadata);
     }
 
@@ -170,7 +175,11 @@ mod tests {
             "http://168.63.129.16/",
         ];
         for u in reject {
-            assert!(validate_endpoint(u).is_err(), "应拒绝 {u:?}（得到 {:?}）", validate_endpoint(u));
+            assert!(
+                validate_endpoint(u).is_err(),
+                "应拒绝 {u:?}（得到 {:?}）",
+                validate_endpoint(u)
+            );
         }
     }
 
@@ -188,7 +197,11 @@ mod tests {
             "",
         ];
         for u in allow {
-            assert!(validate_endpoint(u).is_ok(), "应放行 {u:?}（得到 {:?}）", validate_endpoint(u));
+            assert!(
+                validate_endpoint(u).is_ok(),
+                "应放行 {u:?}（得到 {:?}）",
+                validate_endpoint(u)
+            );
         }
     }
 

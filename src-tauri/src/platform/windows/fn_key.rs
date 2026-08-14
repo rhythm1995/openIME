@@ -81,7 +81,9 @@ pub fn get_selection() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::windows::focus::test_util::{create_test_window, destroy_test_window, SERIAL};
+    use crate::platform::windows::focus::test_util::{
+        create_test_window, destroy_test_window, SERIAL,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindowVisible};
 
     /// 真机行为验证（3.2）：SW_SHOWNOACTIVATE 显示窗口但不改变前台窗口。
@@ -102,7 +104,10 @@ mod tests {
             }
             // 隐藏对称性：SW_HIDE 直调后必须立即不可见（overlay 残留修复的回归测试）。
             hide_window_raw(hwnd.0);
-            assert!(!IsWindowVisible(hwnd).as_bool(), "窗口应已隐藏（直调 SW_HIDE）");
+            assert!(
+                !IsWindowVisible(hwnd).as_bool(),
+                "窗口应已隐藏（直调 SW_HIDE）"
+            );
         }
         destroy_test_window(hwnd);
     }

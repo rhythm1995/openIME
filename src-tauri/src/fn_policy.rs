@@ -127,7 +127,14 @@ pub fn fn_tap_can_consume(hotkey: &str, hold: bool) -> bool {
 mod tests {
     use super::*;
 
-    fn ctx(pressed: bool, hold: bool, rec: bool, own: bool, is_fn: bool, repost: bool) -> FnEdgeContext {
+    fn ctx(
+        pressed: bool,
+        hold: bool,
+        rec: bool,
+        own: bool,
+        is_fn: bool,
+        repost: bool,
+    ) -> FnEdgeContext {
         FnEdgeContext {
             pressed,
             hold,
@@ -143,20 +150,108 @@ mod tests {
     fn classify_table_driven() {
         // (pressed, hold, rec, own, is_fn, repost, expected)
         let cases: Vec<(bool, bool, bool, bool, bool, bool, FnEdgeAction)> = vec![
-            (true, true, false, false, true, true, FnEdgeAction::ArmHoldTimer),
-            (true, true, true, false, true, true, FnEdgeAction::IgnorePress),
-            (true, false, false, false, true, true, FnEdgeAction::StartRecord),
-            (true, false, true, false, true, true, FnEdgeAction::ToggleStop),
-            (false, true, false, false, true, true, FnEdgeAction::RepostOnly),
-            (false, true, false, false, true, false, FnEdgeAction::IgnoreRelease),
-            (false, true, true, true, true, true, FnEdgeAction::StopAfterTail),
+            (
+                true,
+                true,
+                false,
+                false,
+                true,
+                true,
+                FnEdgeAction::ArmHoldTimer,
+            ),
+            (
+                true,
+                true,
+                true,
+                false,
+                true,
+                true,
+                FnEdgeAction::IgnorePress,
+            ),
+            (
+                true,
+                false,
+                false,
+                false,
+                true,
+                true,
+                FnEdgeAction::StartRecord,
+            ),
+            (
+                true,
+                false,
+                true,
+                false,
+                true,
+                true,
+                FnEdgeAction::ToggleStop,
+            ),
+            (
+                false,
+                true,
+                false,
+                false,
+                true,
+                true,
+                FnEdgeAction::RepostOnly,
+            ),
+            (
+                false,
+                true,
+                false,
+                false,
+                true,
+                false,
+                FnEdgeAction::IgnoreRelease,
+            ),
+            (
+                false,
+                true,
+                true,
+                true,
+                true,
+                true,
+                FnEdgeAction::StopAfterTail,
+            ),
             // 翻译/UI 已在录 + Hold Fn 短触：own=false → 停并插入（不 abort）。
-            (false, true, true, false, true, true, FnEdgeAction::StopAfterTail),
-            (false, false, true, false, true, true, FnEdgeAction::IgnoreRelease),
+            (
+                false,
+                true,
+                true,
+                false,
+                true,
+                true,
+                FnEdgeAction::StopAfterTail,
+            ),
+            (
+                false,
+                false,
+                true,
+                false,
+                true,
+                true,
+                FnEdgeAction::IgnoreRelease,
+            ),
             // 组合键（is_fn=false）松开：无可靠 key-up → 忽略。
-            (false, true, true, false, false, true, FnEdgeAction::IgnoreRelease),
+            (
+                false,
+                true,
+                true,
+                false,
+                false,
+                true,
+                FnEdgeAction::IgnoreRelease,
+            ),
             // 组合键按下：无 delay-start。
-            (true, true, false, false, false, true, FnEdgeAction::StartRecord),
+            (
+                true,
+                true,
+                false,
+                false,
+                false,
+                true,
+                FnEdgeAction::StartRecord,
+            ),
         ];
         for (pressed, hold, rec, own, is_fn, repost, expected) in cases {
             assert_eq!(
@@ -186,7 +281,7 @@ mod tests {
         assert!(fn_tap_can_consume("fn", true));
         assert!(fn_tap_can_consume(" Fn ", true));
         assert!(!fn_tap_can_consume("Fn", false)); // Toggle 不吞
-        // Windows CapsLock：两种模式都吞（Toggle 也要防止翻转大小写锁定）。
+                                                   // Windows CapsLock：两种模式都吞（Toggle 也要防止翻转大小写锁定）。
         assert!(fn_tap_can_consume("CapsLock", true));
         assert!(fn_tap_can_consume("caps lock", false));
         assert!(fn_tap_can_consume("CapsLock", false));

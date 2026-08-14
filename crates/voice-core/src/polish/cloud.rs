@@ -17,7 +17,9 @@ use futures::StreamExt;
 use serde_json::json;
 
 use crate::config::PolishCloudProtocol;
-use crate::polish::llm::{parse_sse_line, ChatRequest, LlmClient, PolishTranslate, TranslateRequest, SseLine};
+use crate::polish::llm::{
+    parse_sse_line, ChatRequest, LlmClient, PolishTranslate, SseLine, TranslateRequest,
+};
 use crate::polish::prompts::{
     build_messages, build_polish_translate_messages, build_translate_messages,
     POLISHED_SOURCE_SENTINEL, TRANSLATION_SENTINEL,
@@ -94,10 +96,12 @@ impl TextPolishProvider for CloudPolishProvider {
 
         let text = match self.protocol {
             PolishCloudProtocol::OpenAiChat => {
-                self.polish_openai_chat(&messages, &req, req.max_tokens.unwrap_or(256)).await?
+                self.polish_openai_chat(&messages, &req, req.max_tokens.unwrap_or(256))
+                    .await?
             }
             PolishCloudProtocol::Anthropic => {
-                self.polish_anthropic(&messages, &req, req.max_tokens.unwrap_or(256)).await?
+                self.polish_anthropic(&messages, &req, req.max_tokens.unwrap_or(256))
+                    .await?
             }
             PolishCloudProtocol::OpenAiResponses => {
                 self.polish_openai_responses(&messages, &req, req.max_tokens.unwrap_or(256))
@@ -134,13 +138,16 @@ impl LlmClient for CloudPolishProvider {
         let messages = build_translate_messages(&req.text, &req.target_lang);
         let text = match self.protocol {
             PolishCloudProtocol::OpenAiChat => {
-                self.chat_once_openai(&messages, req.timeout, req.max_tokens, 0.3).await?
+                self.chat_once_openai(&messages, req.timeout, req.max_tokens, 0.3)
+                    .await?
             }
             PolishCloudProtocol::Anthropic => {
-                self.chat_once_anthropic(&messages, req.timeout, req.max_tokens).await?
+                self.chat_once_anthropic(&messages, req.timeout, req.max_tokens)
+                    .await?
             }
             PolishCloudProtocol::OpenAiResponses => {
-                self.chat_once_responses(&messages, req.timeout, req.max_tokens).await?
+                self.chat_once_responses(&messages, req.timeout, req.max_tokens)
+                    .await?
             }
         };
         if text.trim().is_empty() {
@@ -160,13 +167,16 @@ impl LlmClient for CloudPolishProvider {
         let messages = build_polish_translate_messages(&req.text, &req.target_lang);
         let raw = match self.protocol {
             PolishCloudProtocol::OpenAiChat => {
-                self.chat_once_openai(&messages, req.timeout, req.max_tokens, 0.3).await?
+                self.chat_once_openai(&messages, req.timeout, req.max_tokens, 0.3)
+                    .await?
             }
             PolishCloudProtocol::Anthropic => {
-                self.chat_once_anthropic(&messages, req.timeout, req.max_tokens).await?
+                self.chat_once_anthropic(&messages, req.timeout, req.max_tokens)
+                    .await?
             }
             PolishCloudProtocol::OpenAiResponses => {
-                self.chat_once_responses(&messages, req.timeout, req.max_tokens).await?
+                self.chat_once_responses(&messages, req.timeout, req.max_tokens)
+                    .await?
             }
         };
         match parse_polish_translate(&raw) {
@@ -297,7 +307,9 @@ impl CloudPolishProvider {
             "temperature": temperature,
             "max_tokens": max_tokens,
         });
-        let raw = self.post_json(&url, &body, AuthType::Bearer, timeout).await?;
+        let raw = self
+            .post_json(&url, &body, AuthType::Bearer, timeout)
+            .await?;
         let v: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|e| Error::Provider(format!("解析 OpenAI Chat JSON 失败: {e}")))?;
         Ok(parse_openai_chat_text(&v))
@@ -318,7 +330,9 @@ impl CloudPolishProvider {
             "system": system_msg,
             "messages": chat_msgs,
         });
-        let raw = self.post_json(&url, &body, AuthType::Anthropic, timeout).await?;
+        let raw = self
+            .post_json(&url, &body, AuthType::Anthropic, timeout)
+            .await?;
         let v: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|e| Error::Provider(format!("解析 Anthropic JSON 失败: {e}")))?;
         Ok(parse_anthropic_text(&v))
@@ -345,7 +359,9 @@ impl CloudPolishProvider {
             "temperature": 0.3,
             "max_output_tokens": max_tokens,
         });
-        let raw = self.post_json(&url, &body, AuthType::Bearer, timeout).await?;
+        let raw = self
+            .post_json(&url, &body, AuthType::Bearer, timeout)
+            .await?;
         let v: serde_json::Value = serde_json::from_str(&raw)
             .map_err(|e| Error::Provider(format!("解析 Responses JSON 失败: {e}")))?;
         Ok(parse_responses_text(&v))
@@ -585,6 +601,9 @@ mod tests {
         // 只有一个哨兵 → 拒绝（回退纯翻译）。
         assert!(parse_polish_translate(&format!("{POLISHED_SOURCE_SENTINEL}\n只有一半")).is_none());
         // 空段 → 拒绝。
-        assert!(parse_polish_translate(&format!("{POLISHED_SOURCE_SENTINEL}\n{TRANSLATION_SENTINEL}")).is_none());
+        assert!(parse_polish_translate(&format!(
+            "{POLISHED_SOURCE_SENTINEL}\n{TRANSLATION_SENTINEL}"
+        ))
+        .is_none());
     }
 }

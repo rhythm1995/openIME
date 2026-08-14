@@ -3,8 +3,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tokio::sync::RwLock;
 use tauri::AppHandle;
+use tokio::sync::RwLock;
 use voice_core::pipeline::{Pipeline, PipelineDeps, PolishContext, SessionIntent};
 use voice_core::{
     AppConfig, BailianChatPolish, CloudPolishProvider, Error, HistoryStore, LlmClient,
@@ -236,9 +236,10 @@ impl AppState {
         let cfg = self.config.blocking_read();
         let independent = !cfg.polish_cloud_endpoint.trim().is_empty()
             && !cfg.polish_cloud_api_key.trim().is_empty();
-        let via_provider = cfg.providers.iter().any(|p| {
-            p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty()
-        });
+        let via_provider = cfg
+            .providers
+            .iter()
+            .any(|p| p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty());
         independent || via_provider
     }
 
@@ -388,7 +389,11 @@ fn sanitize_endpoints(cfg: &mut voice_core::AppConfig) {
             ProviderKind::Sherpa => continue,
         };
         if voice_core::endpoint::validate_endpoint(&target).is_err() {
-            crate::log_warn!("启动时清空无效 endpoint：{}（归一化 {}）", p.base_url, target);
+            crate::log_warn!(
+                "启动时清空无效 endpoint：{}（归一化 {}）",
+                p.base_url,
+                target
+            );
             p.base_url.clear();
         }
     }

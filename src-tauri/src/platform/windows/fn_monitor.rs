@@ -36,14 +36,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_CAPITAL,
 };
 use windows::Win32::UI::Input::{
-    GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE,
-    RAWINPUTHEADER, RIDEV_INPUTSINK, RID_INPUT, RIM_TYPEKEYBOARD,
+    GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER,
+    RIDEV_INPUTSINK, RID_INPUT, RIM_TYPEKEYBOARD,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetMessageW, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP, RegisterClassW,
-    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WINDOW_EX_STYLE, WNDCLASSW,
-    WNDCLASS_STYLES, WH_KEYBOARD_LL, WM_INPUT, RI_KEY_BREAK, RI_KEY_E0,
+    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+    RegisterClassW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, KBDLLHOOKSTRUCT,
+    LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP, RI_KEY_BREAK, RI_KEY_E0, WH_KEYBOARD_LL,
+    WINDOW_EX_STYLE, WM_INPUT, WNDCLASSW, WNDCLASS_STYLES,
 };
 
 /// 补发 CapsLock 后忽略自捕获注入事件的窗口（毫秒）。SendInput 事件同步派发，250ms 余量足够。
@@ -226,8 +226,13 @@ unsafe fn handle_raw_input(lparam: LPARAM) {
     let mut size: u32 = 0;
     let hr = HRAWINPUT(lparam.0 as *mut core::ffi::c_void);
     // 第一次调用取所需大小（pdata=None）。
-    if GetRawInputData(hr, RID_INPUT, None, &mut size, std::mem::size_of::<RAWINPUTHEADER>() as u32)
-        == u32::MAX
+    if GetRawInputData(
+        hr,
+        RID_INPUT,
+        None,
+        &mut size,
+        std::mem::size_of::<RAWINPUTHEADER>() as u32,
+    ) == u32::MAX
     {
         return;
     }
@@ -281,8 +286,8 @@ unsafe fn create_raw_input_window() -> HWND {
                 .encode_utf16()
                 .chain(std::iter::once(0))
                 .collect();
-            let module = windows::Win32::System::LibraryLoader::GetModuleHandleW(None)
-                .unwrap_or_default();
+            let module =
+                windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
             let wc = WNDCLASSW {
                 style: WNDCLASS_STYLES::default(),
                 lpfnWndProc: Some(wnd_proc),
@@ -364,10 +369,7 @@ fn hook_thread_main() {
                 dwFlags: RIDEV_INPUTSINK,
                 hwndTarget: raw_hwnd,
             };
-            match RegisterRawInputDevices(
-                &[rid],
-                std::mem::size_of::<RAWINPUTDEVICE>() as u32,
-            ) {
+            match RegisterRawInputDevices(&[rid], std::mem::size_of::<RAWINPUTDEVICE>() as u32) {
                 Ok(()) => crate::log_info!("raw input 观测已注册（#14770 兜底）"),
                 Err(e) => crate::log_warn!("raw input 注册失败（仅 #14770 兜底降级）：{e}"),
             }
@@ -521,7 +523,13 @@ mod tests {
     }
 
     fn ev(vk: u32, scan: u32, extended: bool, injected: bool, up: bool) -> HookEvent {
-        HookEvent { vk, scan, extended, injected, up }
+        HookEvent {
+            vk,
+            scan,
+            extended,
+            injected,
+            up,
+        }
     }
 
     #[test]
@@ -529,13 +537,28 @@ mod tests {
         // CapsLock 目标：只认 VK_CAPITAL。
         let caps = ev(VK_CAPITAL_CODE, 0x3A, false, false, false);
         assert!(matches_watch(&caps, WatchKey::CapsLock));
-        assert!(!matches_watch(&ev(0x41, 0x1E, false, false, false), WatchKey::CapsLock));
+        assert!(!matches_watch(
+            &ev(0x41, 0x1E, false, false, false),
+            WatchKey::CapsLock
+        ));
         // Fn 目标：只认 extended 0x63（厂商上报形态）。
-        assert!(matches_watch(&ev(0, 0x63, true, false, false), WatchKey::Fn));
+        assert!(matches_watch(
+            &ev(0, 0x63, true, false, false),
+            WatchKey::Fn
+        ));
         // 匹配只看扫描码形态（厂商 Fn 的 vkCode 无标准，可能是 0/0xFF/厂商值）。
-        assert!(matches_watch(&ev(0xFF, 0x63, true, false, false), WatchKey::Fn));
-        assert!(!matches_watch(&ev(0, 0x63, false, false, false), WatchKey::Fn));
-        assert!(!matches_watch(&ev(0, 0x64, true, false, false), WatchKey::Fn));
+        assert!(matches_watch(
+            &ev(0xFF, 0x63, true, false, false),
+            WatchKey::Fn
+        ));
+        assert!(!matches_watch(
+            &ev(0, 0x63, false, false, false),
+            WatchKey::Fn
+        ));
+        assert!(!matches_watch(
+            &ev(0, 0x64, true, false, false),
+            WatchKey::Fn
+        ));
         // None 目标：全部放行。
         assert!(!matches_watch(&caps, WatchKey::None));
     }
@@ -544,26 +567,47 @@ mod tests {
     fn classify_down_up_edges_and_repeat_dedupe() {
         let caps_down = ev(VK_CAPITAL_CODE, 0x3A, false, false, false);
         // 按下：触发 down 边沿；consume=true 时吞。
-        assert_eq!(classify_hook_event(&caps_down, WatchKey::CapsLock, true, 0, 1_000, false), (true, Some(true), true));
+        assert_eq!(
+            classify_hook_event(&caps_down, WatchKey::CapsLock, true, 0, 1_000, false),
+            (true, Some(true), true)
+        );
         // auto-repeat 的重复 down：吞但不重复触发。
-        assert_eq!(classify_hook_event(&caps_down, WatchKey::CapsLock, true, 0, 1_050, true), (true, None, true));
+        assert_eq!(
+            classify_hook_event(&caps_down, WatchKey::CapsLock, true, 0, 1_050, true),
+            (true, None, true)
+        );
         // 抬起：触发 up 边沿。
         let caps_up = ev(VK_CAPITAL_CODE, 0x3A, false, false, true);
-        assert_eq!(classify_hook_event(&caps_up, WatchKey::CapsLock, true, 0, 1_100, true), (true, Some(false), false));
+        assert_eq!(
+            classify_hook_event(&caps_up, WatchKey::CapsLock, true, 0, 1_100, true),
+            (true, Some(false), false)
+        );
         // 无按下状态的孤立 up：忽略。
-        assert_eq!(classify_hook_event(&caps_up, WatchKey::CapsLock, true, 0, 1_200, false), (true, None, false));
+        assert_eq!(
+            classify_hook_event(&caps_up, WatchKey::CapsLock, true, 0, 1_200, false),
+            (true, None, false)
+        );
         // consume=false：不吞但边沿照发。
-        assert_eq!(classify_hook_event(&caps_down, WatchKey::CapsLock, false, 0, 1_300, false), (false, Some(true), true));
+        assert_eq!(
+            classify_hook_event(&caps_down, WatchKey::CapsLock, false, 0, 1_300, false),
+            (false, Some(true), true)
+        );
     }
 
     #[test]
     fn classify_non_target_passes_through() {
         let a_down = ev(0x41, 0x1E, false, false, false);
         // 非目标键：即便 consume=true 也不吞、不触发。
-        assert_eq!(classify_hook_event(&a_down, WatchKey::CapsLock, true, 0, 1_000, false), (false, None, false));
+        assert_eq!(
+            classify_hook_event(&a_down, WatchKey::CapsLock, true, 0, 1_000, false),
+            (false, None, false)
+        );
         // watch=None（配置了组合键）：全放行。
         let caps_down = ev(VK_CAPITAL_CODE, 0x3A, false, false, false);
-        assert_eq!(classify_hook_event(&caps_down, WatchKey::None, true, 0, 1_000, false), (false, None, false));
+        assert_eq!(
+            classify_hook_event(&caps_down, WatchKey::None, true, 0, 1_000, false),
+            (false, None, false)
+        );
     }
 
     #[test]
@@ -571,12 +615,26 @@ mod tests {
         let injected_down = ev(VK_CAPITAL_CODE, 0x3A, false, true, false);
         // 补发窗口内：放行（系统要收到这对 CapsLock）、不吞、不触发边沿。
         assert_eq!(
-            classify_hook_event(&injected_down, WatchKey::CapsLock, true, 2_000, 1_800, false),
+            classify_hook_event(
+                &injected_down,
+                WatchKey::CapsLock,
+                true,
+                2_000,
+                1_800,
+                false
+            ),
             (false, None, false)
         );
         // 窗口外（比如其它程序注入）：按真实按键处理。
         assert_eq!(
-            classify_hook_event(&injected_down, WatchKey::CapsLock, true, 1_000, 1_800, false),
+            classify_hook_event(
+                &injected_down,
+                WatchKey::CapsLock,
+                true,
+                1_000,
+                1_800,
+                false
+            ),
             (true, Some(true), true)
         );
     }

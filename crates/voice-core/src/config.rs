@@ -600,9 +600,18 @@ mod tests {
         assert_eq!(s, InsertStrategy::Type);
         let s: InsertStrategy = serde_json::from_str("\"paste\"").unwrap();
         assert_eq!(s, InsertStrategy::Paste);
-        assert_eq!(serde_json::to_string(&InsertStrategy::Auto).unwrap(), "\"auto\"");
-        assert_eq!(serde_json::to_string(&InsertStrategy::Type).unwrap(), "\"type\"");
-        assert_eq!(serde_json::to_string(&InsertStrategy::Paste).unwrap(), "\"paste\"");
+        assert_eq!(
+            serde_json::to_string(&InsertStrategy::Auto).unwrap(),
+            "\"auto\""
+        );
+        assert_eq!(
+            serde_json::to_string(&InsertStrategy::Type).unwrap(),
+            "\"type\""
+        );
+        assert_eq!(
+            serde_json::to_string(&InsertStrategy::Paste).unwrap(),
+            "\"paste\""
+        );
     }
 
     #[test]
@@ -639,11 +648,20 @@ mod tests {
     fn hotkey_default_pairs_with_mode_per_platform() {
         let c = AppConfig::default();
         #[cfg(target_os = "macos")]
-        assert_eq!((&c.hotkey, c.hotkey_mode), (&"Fn".to_string(), HotkeyMode::Toggle));
+        assert_eq!(
+            (&c.hotkey, c.hotkey_mode),
+            (&"Fn".to_string(), HotkeyMode::Toggle)
+        );
         #[cfg(target_os = "windows")]
-        assert_eq!((&c.hotkey, c.hotkey_mode), (&"CapsLock".to_string(), HotkeyMode::Hold));
+        assert_eq!(
+            (&c.hotkey, c.hotkey_mode),
+            (&"CapsLock".to_string(), HotkeyMode::Hold)
+        );
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        assert_eq!((&c.hotkey, c.hotkey_mode), (&"Ctrl+Shift+D".to_string(), HotkeyMode::Toggle));
+        assert_eq!(
+            (&c.hotkey, c.hotkey_mode),
+            (&"Ctrl+Shift+D".to_string(), HotkeyMode::Toggle)
+        );
     }
 
     #[test]

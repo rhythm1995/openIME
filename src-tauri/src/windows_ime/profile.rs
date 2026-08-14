@@ -5,8 +5,15 @@
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImeProfileSnapshot {
-    KeyboardLayout { lang: u16, hkl: u64 },
-    TextService { lang: u16, clsid: String, profile_guid: String },
+    KeyboardLayout {
+        lang: u16,
+        hkl: u64,
+    },
+    TextService {
+        lang: u16,
+        clsid: String,
+        profile_guid: String,
+    },
 }
 
 /// 恢复决策：RestoreSavedProfile（还有快照且仍停在 openIME / 激活失败）｜KeepCurrentProfile。

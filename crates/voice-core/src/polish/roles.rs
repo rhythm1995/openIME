@@ -9,11 +9,16 @@
 use crate::store::StylePack;
 
 /// 最长别名匹配。返回命中的包与去前缀正文（已 trim）。
-pub fn detect_prefix_role<'a>(text: &str, packs: &'a [StylePack]) -> Option<(&'a StylePack, String)> {
+pub fn detect_prefix_role<'a>(
+    text: &str,
+    packs: &'a [StylePack],
+) -> Option<(&'a StylePack, String)> {
     let t = text.trim();
     let mut best: Option<(&StylePack, usize)> = None;
     for p in packs {
-        let Some(spec) = p.match_prefix.as_deref() else { continue };
+        let Some(spec) = p.match_prefix.as_deref() else {
+            continue;
+        };
         for alias in spec.split('|').map(str::trim).filter(|s| !s.is_empty()) {
             if !starts_with_ignore_case(t, alias) {
                 continue;

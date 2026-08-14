@@ -43,7 +43,11 @@ pub enum ImeErrorCode {
 
 /// 协议消息（黄金 fixture 四类）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ImeProtocolMessage {
     ClientReady {
         protocol_version: u32,
@@ -121,7 +125,9 @@ mod tests {
             ),
             (
                 "ping.json",
-                ImeProtocolMessage::Ping { protocol_version: 1 },
+                ImeProtocolMessage::Ping {
+                    protocol_version: 1,
+                },
             ),
         ];
         for (file, expected) in cases {
@@ -207,6 +213,8 @@ mod tests {
                 error_code: Some(ImeErrorCode::TooLarge),
             }
         );
-        assert!(serde_json::to_string(&parsed).unwrap().contains("too_large"));
+        assert!(serde_json::to_string(&parsed)
+            .unwrap()
+            .contains("too_large"));
     }
 }

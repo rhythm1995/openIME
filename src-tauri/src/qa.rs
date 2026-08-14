@@ -11,10 +11,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use tauri::{AppHandle, Emitter, Manager};
-use voice_core::polish::{build_qa_system, wrap_selected_text};
-use voice_core::TextInserter;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use voice_core::polish::{build_qa_system, wrap_selected_text};
 use voice_core::ChatRequest;
+use voice_core::TextInserter;
 
 use crate::log_info;
 use crate::state::AppState;
@@ -120,7 +120,11 @@ pub fn open_qa_panel(app: &AppHandle) {
         s.messages.clear();
         s.refresh_pending = true;
         s.stream_cancel.store(false, Ordering::SeqCst);
-        log_info!("QA 开窗：selection={:?} frontmost={:?}", s.selection.is_some(), s.frontmost);
+        log_info!(
+            "QA 开窗：selection={:?} frontmost={:?}",
+            s.selection.is_some(),
+            s.frontmost
+        );
     }
     crate::show_qa_window(app);
     // FR-6.11：qa_save_history → 面板每次打开建一条 sessions（engine=qa）。
@@ -227,16 +231,13 @@ pub fn clear_messages(app: &AppHandle) {
 
 /// 复制最后一条回答到剪贴板。
 pub fn copy_last_answer(app: &AppHandle) -> Result<Option<String>, String> {
-    let answer = state()
-        .lock()
-        .ok()
-        .and_then(|s| {
-            s.messages
-                .iter()
-                .rev()
-                .find(|m| m.role == "assistant")
-                .map(|m| m.text.clone())
-        });
+    let answer = state().lock().ok().and_then(|s| {
+        s.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "assistant")
+            .map(|m| m.text.clone())
+    });
     if let Some(text) = &answer {
         crate::insert_fallback::clipboard_set_text(app, text)?;
     }
@@ -244,7 +245,9 @@ pub fn copy_last_answer(app: &AppHandle) -> Result<Option<String>, String> {
 }
 
 /// 把最后一条回答插入到开窗时的前台 app（R7 四态）。
-pub async fn insert_last_answer(app: &AppHandle) -> Result<Option<voice_core::InsertOutcome>, String> {
+pub async fn insert_last_answer(
+    app: &AppHandle,
+) -> Result<Option<voice_core::InsertOutcome>, String> {
     let (answer, frontmost) = {
         let s = state().lock().map_err(|_| "QA 状态不可用".to_string())?;
         let answer = s
@@ -312,8 +315,7 @@ pub async fn ask_and_stream(app: &AppHandle, question: &str) {
             text: question.clone(),
         });
         let trimmed = trim_messages(s.messages.clone());
-        let mut msgs: Vec<(String, String)> =
-            vec![("system".into(), build_qa_system())];
+        let mut msgs: Vec<(String, String)> = vec![("system".into(), build_qa_system())];
         for m in trimmed {
             msgs.push((m.role, m.text));
         }
@@ -332,12 +334,7 @@ pub async fn ask_and_stream(app: &AppHandle, question: &str) {
         let gen = s.session_gen;
         (msgs, gen, s.stream_cancel.clone())
     };
-    let save_history = app
-        .state::<AppState>()
-        .config
-        .read()
-        .await
-        .qa_save_history;
+    let save_history = app.state::<AppState>().config.read().await.qa_save_history;
 
     let cloud = match app.state::<AppState>().cloud_llm().await {
         Some(c) => c,
@@ -355,9 +352,7 @@ pub async fn ask_and_stream(app: &AppHandle, question: &str) {
         None,
         tauri_plugin_global_shortcut::Code::Escape,
     );
-    let _ = app
-        .global_shortcut()
-        .register(esc);
+    let _ = app.global_shortcut().register(esc);
     let app_for_unreg = app.clone();
 
     // 累积流式输出（取消时保留已输出内容）。
@@ -366,7 +361,10 @@ pub async fn ask_and_stream(app: &AppHandle, question: &str) {
     let app_cb = app.clone();
     let on_delta = Box::new(move |delta: &str| {
         acc_cb.lock().unwrap().push_str(delta);
-        let _ = app_cb.emit("qa://delta", serde_json::json!({ "gen": gen, "delta": delta }));
+        let _ = app_cb.emit(
+            "qa://delta",
+            serde_json::json!({ "gen": gen, "delta": delta }),
+        );
     });
 
     let req = ChatRequest {
@@ -468,7 +466,10 @@ async fn save_qa_history(app: &AppHandle, question: &str, answer: &str) -> Resul
         (id, seq)
     };
     use voice_core::traits::HistoryStore;
-    for (i, text) in [format!("Q: {question}"), format!("A: {answer}")].iter().enumerate() {
+    for (i, text) in [format!("Q: {question}"), format!("A: {answer}")]
+        .iter()
+        .enumerate()
+    {
         store
             .save_utterance(&voice_core::UtteranceRecord {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -534,7 +535,14 @@ pub fn mark_recording(app: &AppHandle, started: bool) {
             QaPhase::Idle
         };
     }
-    emit_state(app, if started { "recording" } else { "recording-stopped" });
+    emit_state(
+        app,
+        if started {
+            "recording"
+        } else {
+            "recording-stopped"
+        },
+    );
 }
 
 #[cfg(test)]
@@ -545,8 +553,14 @@ mod tests {
     fn trim_keeps_recent_rounds() {
         let mut msgs = Vec::new();
         for i in 0..10 {
-            msgs.push(QaMessage { role: "user".into(), text: format!("Q{i}") });
-            msgs.push(QaMessage { role: "assistant".into(), text: format!("A{i}") });
+            msgs.push(QaMessage {
+                role: "user".into(),
+                text: format!("Q{i}"),
+            });
+            msgs.push(QaMessage {
+                role: "assistant".into(),
+                text: format!("A{i}"),
+            });
         }
         let out = trim_messages(msgs);
         // 10 轮 → 保留最近 8 轮（16 条）。
@@ -560,12 +574,21 @@ mod tests {
         // 8000 字上限：先到为准。
         let mut msgs = Vec::new();
         for _ in 0..4 {
-            msgs.push(QaMessage { role: "user".into(), text: "x".repeat(3000) });
-            msgs.push(QaMessage { role: "assistant".into(), text: "y".repeat(3000) });
+            msgs.push(QaMessage {
+                role: "user".into(),
+                text: "x".repeat(3000),
+            });
+            msgs.push(QaMessage {
+                role: "assistant".into(),
+                text: "y".repeat(3000),
+            });
         }
         let out = trim_messages(msgs);
         let chars: usize = out.iter().map(|m| m.text.chars().count()).sum();
-        assert!(chars <= 8000 + 3000, "至少保留最后一轮完整问答，得到 {chars}");
+        assert!(
+            chars <= 8000 + 3000,
+            "至少保留最后一轮完整问答，得到 {chars}"
+        );
         assert!(out.iter().any(|m| m.text.contains("xxx")));
     }
 
@@ -573,9 +596,18 @@ mod tests {
     fn second_round_keeps_first_round() {
         // A6.2：第二轮 messages 含第一轮。
         let msgs = vec![
-            QaMessage { role: "user".into(), text: "第一问".into() },
-            QaMessage { role: "assistant".into(), text: "第一答".into() },
-            QaMessage { role: "user".into(), text: "第二问".into() },
+            QaMessage {
+                role: "user".into(),
+                text: "第一问".into(),
+            },
+            QaMessage {
+                role: "assistant".into(),
+                text: "第一答".into(),
+            },
+            QaMessage {
+                role: "user".into(),
+                text: "第二问".into(),
+            },
         ];
         let out = trim_messages(msgs);
         assert_eq!(out.len(), 3);

@@ -80,10 +80,7 @@ pub fn parse_sse_line(line: &str) -> SseLine {
         // SSE 注释 / 心跳。
         return SseLine::Ignore;
     }
-    let json_str = line
-        .strip_prefix("data:")
-        .map(str::trim)
-        .unwrap_or(line);
+    let json_str = line.strip_prefix("data:").map(str::trim).unwrap_or(line);
     if json_str == "[DONE]" {
         return SseLine::Done;
     }
@@ -142,7 +139,10 @@ mod tests {
 
     #[test]
     fn parse_empty_delta_ignored() {
-        let line = format!("data: {}", json!({"choices": [{"delta": {"role": "assistant"}}]}));
+        let line = format!(
+            "data: {}",
+            json!({"choices": [{"delta": {"role": "assistant"}}]})
+        );
         assert_eq!(parse_sse_line(&line), SseLine::Ignore);
         assert_eq!(parse_sse_line(""), SseLine::Ignore);
         assert_eq!(parse_sse_line(": keep-alive"), SseLine::Ignore);
@@ -161,8 +161,14 @@ mod tests {
     #[test]
     fn multi_delta_fixture_concatenates_full_text() {
         // A6.1b：mock SSE fixture 推两条 delta，拼出全文。
-        let l1 = format!("data: {}", json!({"choices": [{"delta": {"content": "这段函数"}}]}));
-        let l2 = format!("data: {}", json!({"choices": [{"delta": {"content": "的作用是…"}}]}));
+        let l1 = format!(
+            "data: {}",
+            json!({"choices": [{"delta": {"content": "这段函数"}}]})
+        );
+        let l2 = format!(
+            "data: {}",
+            json!({"choices": [{"delta": {"content": "的作用是…"}}]})
+        );
         let mut full = String::new();
         for line in [&l1, &l2] {
             if let SseLine::Delta(d) = parse_sse_line(line) {

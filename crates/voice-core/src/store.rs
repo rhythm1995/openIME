@@ -639,12 +639,8 @@ impl SqliteStore {
     /// R5：内置前缀包种子——按 id 补缺失项（不清空用户对内置包的修改，
     /// 只插入不存在的 id；用户厌恶种子时把 match_prefix 清空即可，不被重新种回）。
     pub fn seed_builtin_prefix_packs_if_missing(&self) -> Result<()> {
-        let existing: Vec<String> = self
-            .list_style_packs()?
-            .into_iter()
-            .map(|p| p.id)
-            .collect();
-        let builtins: [( &str, &str, &str, RoleKind, &str, i32); 3] = [
+        let existing: Vec<String> = self.list_style_packs()?.into_iter().map(|p| p.id).collect();
+        let builtins: [(&str, &str, &str, RoleKind, &str, i32); 3] = [
             (
                 "builtin-role-mail",
                 "邮件",
@@ -948,13 +944,9 @@ mod tests {
     #[test]
     fn v4_migrates_v3_table() {
         // 从 v3 库升级：旧行 match_prefix=NULL、role_kind='default'。
-        let manager = SqliteConnectionManager::memory().with_init(|c| {
-            c.execute_batch("PRAGMA foreign_keys = ON;")
-        });
-        let pool = Pool::builder()
-            .max_size(1)
-            .build(manager)
-            .unwrap();
+        let manager = SqliteConnectionManager::memory()
+            .with_init(|c| c.execute_batch("PRAGMA foreign_keys = ON;"));
+        let pool = Pool::builder().max_size(1).build(manager).unwrap();
         // 手工建到 v3。
         {
             let conn = pool.get().unwrap();
@@ -980,7 +972,9 @@ mod tests {
         }
         // 用迁移入口打开（SQLite v4 ALTER TABLE 直接作用在既有连接上）。
         let conn = pool.get().unwrap();
-        let current: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        let current: u32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(current, 3);
         conn.execute_batch(MIGRATIONS[3]).unwrap();
         conn.execute_batch("PRAGMA user_version = 4;").unwrap();
@@ -988,9 +982,7 @@ mod tests {
             let mut stmt = conn
                 .prepare("SELECT match_prefix, role_kind FROM style_packs")
                 .unwrap();
-            let rows = stmt
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-                .unwrap();
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
             rows.map(|r| r.unwrap()).collect()
         };
         assert_eq!(packs.len(), 1);
@@ -999,7 +991,8 @@ mod tests {
     }
 
     #[test]
-    fn seed_prefix_packs_inserts_missing_only() {        let store = SqliteStore::open_in_memory().unwrap();
+    fn seed_prefix_packs_inserts_missing_only() {
+        let store = SqliteStore::open_in_memory().unwrap();
         store.seed_builtin_prefix_packs_if_missing().unwrap();
         let packs = store.list_style_packs().unwrap();
         assert_eq!(packs.len(), 3);
@@ -1051,7 +1044,10 @@ mod tests {
         };
         store.upsert_style_pack(&p("a", "邮件|mail")).unwrap();
         assert!(store.upsert_style_pack(&p("b", "mail")).is_err());
-        assert!(store.upsert_style_pack(&p("b", "MAIL")).is_err(), "忽略大小写");
+        assert!(
+            store.upsert_style_pack(&p("b", "MAIL")).is_err(),
+            "忽略大小写"
+        );
         // 同一包的自己更新不冲突。
         assert!(store.upsert_style_pack(&p("a", "邮件|mail|写邮件")).is_ok());
         // 无前缀包不参与冲突。

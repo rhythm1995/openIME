@@ -250,9 +250,8 @@ impl Pipeline {
                                 match broken.take() {
                                     Some(before) => {
                                         // 停止逐字后：对剩余差异粘贴一次。
-                                        let delta =
-                                            crate::insert::diff_prefix(&before, &d.text)
-                                                .to_string();
+                                        let delta = crate::insert::diff_prefix(&before, &d.text)
+                                            .to_string();
                                         if !delta.is_empty() {
                                             let mut paste_opts = opts.clone();
                                             paste_opts.strategy =
@@ -264,8 +263,7 @@ impl Pipeline {
                                         let delta = {
                                             let mut s = inserted.lock().unwrap();
                                             let delta =
-                                                crate::insert::diff_prefix(&s, &d.text)
-                                                    .to_string();
+                                                crate::insert::diff_prefix(&s, &d.text).to_string();
                                             s.clear(); // 句末：下一句从零开始
                                             delta
                                         };
@@ -698,9 +696,7 @@ async fn wait_cancel(flag: Arc<std::sync::atomic::AtomicBool>) {
 mod tests {
     use super::*;
     use crate::config::InsertStrategy;
-    use crate::traits::{
-        AsrSession, AudioFormat, AudioFrame, PolishResponse, TranscriptDelta,
-    };
+    use crate::traits::{AsrSession, AudioFormat, AudioFrame, PolishResponse, TranscriptDelta};
     use crate::ProviderConfig;
     use async_trait::async_trait;
     use std::collections::VecDeque;
@@ -1033,14 +1029,9 @@ mod tests {
             enabled: false,
             ..Default::default()
         };
-        pipe.insert_finals_with_polish(
-            "s1",
-            &["嗯那个今天天气不错".into()],
-            &ctx,
-            &opts_default(),
-        )
-        .await
-        .unwrap();
+        pipe.insert_finals_with_polish("s1", &["嗯那个今天天气不错".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
         let out = ins.out.lock().unwrap().clone();
         assert!(
             out.contains("今天天气不错"),
@@ -1305,12 +1296,7 @@ mod tests {
         ctx.intent = SessionIntent::Translate;
         ctx.translate_with_polish = true;
         let results = pipe
-            .insert_finals_with_polish(
-                "s1",
-                &["哨兵失败 明天开会".into()],
-                &ctx,
-                &opts_default(),
-            )
+            .insert_finals_with_polish("s1", &["哨兵失败 明天开会".into()], &ctx, &opts_default())
             .await
             .unwrap();
         // 合成调用把空译文解析成「失败」→ 回退纯翻译。
@@ -1347,12 +1333,7 @@ mod tests {
         ctx.prefix_roles_enabled = true;
         ctx.style_packs = vec![role_pack("mail", "邮件", RoleKind::Default)];
         let results = pipe
-            .insert_finals_with_polish(
-                "s1",
-                &["邮件: 明天开会".into()],
-                &ctx,
-                &opts_default(),
-            )
+            .insert_finals_with_polish("s1", &["邮件: 明天开会".into()], &ctx, &opts_default())
             .await
             .unwrap();
         assert_eq!(results[0].text, "正式邮件正文");
@@ -1375,7 +1356,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(results[0].text, "你好");
-        assert_eq!(translate_calls.load(Ordering::SeqCst), 1, "应走 translate_text");
+        assert_eq!(
+            translate_calls.load(Ordering::SeqCst),
+            1,
+            "应走 translate_text"
+        );
         assert_eq!(*ins.out.lock().unwrap(), "你好");
     }
 
@@ -1459,14 +1444,10 @@ mod tests {
         let (deps, ins) = ctx_with_cloud(mock);
         let pipe = Pipeline::new(deps);
         let mut ctx = ctx_enabled(PolishMode::Off);
-        ctx.prefix_roles_enabled = false;        ctx.style_packs = vec![role_pack("mail", "邮件", RoleKind::Default)];
+        ctx.prefix_roles_enabled = false;
+        ctx.style_packs = vec![role_pack("mail", "邮件", RoleKind::Default)];
         let results = pipe
-            .insert_finals_with_polish(
-                "s1",
-                &["邮件: 明天开会".into()],
-                &ctx,
-                &opts_default(),
-            )
+            .insert_finals_with_polish("s1", &["邮件: 明天开会".into()], &ctx, &opts_default())
             .await
             .unwrap();
         assert_eq!(results[0].text, "邮件: 明天开会");
@@ -1570,7 +1551,10 @@ mod tests {
             } else {
                 InsertOutcome::Typed
             };
-            self.outcomes.lock().unwrap().push((text.to_string(), outcome));
+            self.outcomes
+                .lock()
+                .unwrap()
+                .push((text.to_string(), outcome));
             outcome
         }
     }

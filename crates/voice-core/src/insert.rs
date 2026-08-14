@@ -123,10 +123,7 @@ pub enum InsertOutcome {
 
 /// R7：是否恢复原剪贴板——仅当当前剪贴板内容仍是上次插入的文字时才恢复
 /// （用户中途复制了别的则不覆盖；设计 FR-7.6）。纯函数，可单测。
-pub fn should_restore_clipboard(
-    current_clipboard_text: Option<&str>,
-    last_inserted: &str,
-) -> bool {
+pub fn should_restore_clipboard(current_clipboard_text: Option<&str>, last_inserted: &str) -> bool {
     match current_clipboard_text {
         Some(t) => !last_inserted.is_empty() && t == last_inserted,
         None => false,
@@ -322,15 +319,15 @@ mod tests {
     #[test]
     fn decide_restore_non_text_clipboard_clears() {
         let p = remember_pending(None, 1, Some("SECRET"), "HELLO");
-        assert_eq!(
-            decide_restore(Some(&p), 1, None),
-            RestoreDecision::Clear
-        );
+        assert_eq!(decide_restore(Some(&p), 1, None), RestoreDecision::Clear);
     }
 
     #[test]
     fn decide_restore_no_pending_is_noop() {
-        assert_eq!(decide_restore(None, 1, Some("HELLO")), RestoreDecision::DoNothing);
+        assert_eq!(
+            decide_restore(None, 1, Some("HELLO")),
+            RestoreDecision::DoNothing
+        );
     }
 
     #[test]
@@ -342,11 +339,17 @@ mod tests {
             Some("com.microsoft.rdc.macos"),
             &["rdc".into()]
         ));
-        assert!(matches_paste_fallback(Some("notepad.exe"), &["notepad".into()]));
+        assert!(matches_paste_fallback(
+            Some("notepad.exe"),
+            &["notepad".into()]
+        ));
         // 不区分大小写。
         assert!(matches_paste_fallback(Some("MSTSC.EXE"), &["mstsc".into()]));
         // 不命中 / 空列表 / 无前台。
-        assert!(!matches_paste_fallback(Some("com.apple.notes"), &["mstsc".into()]));
+        assert!(!matches_paste_fallback(
+            Some("com.apple.notes"),
+            &["mstsc".into()]
+        ));
         assert!(!matches_paste_fallback(Some("mstsc.exe"), &[]));
         assert!(!matches_paste_fallback(None, &["mstsc".into()]));
         assert!(!matches_paste_fallback(Some("mstsc.exe"), &["".into()]));

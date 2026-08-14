@@ -33,7 +33,8 @@ impl PermissionChecker for MacPermissionChecker {
             ),
             PermissionKind::Microphone => (
                 microphone_state(),
-                "Windows 设置 → 隐私和安全性 → 麦克风：打开“允许桌面应用访问你的麦克风”".to_string(),
+                "Windows 设置 → 隐私和安全性 → 麦克风：打开“允许桌面应用访问你的麦克风”"
+                    .to_string(),
             ),
         };
         PermissionStatus { kind, state, hint }

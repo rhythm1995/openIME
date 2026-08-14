@@ -49,7 +49,10 @@ pub fn fetch_provider_key(index: usize) -> Option<String> {
 pub fn store_polish_key(key: &str) -> Result<(), String> {
     #[cfg(test)]
     {
-        MOCK.with(|m| m.borrow_mut().insert("polish_cloud".to_string(), key.to_string()));
+        MOCK.with(|m| {
+            m.borrow_mut()
+                .insert("polish_cloud".to_string(), key.to_string())
+        });
         Ok(())
     }
     #[cfg(not(test))]
