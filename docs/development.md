@@ -24,22 +24,26 @@ AudioSource ──► AsrProvider/AsrSession ──► TextInserter
 openIME/
 ├── crates/voice-core/        # 核心库（全部逻辑 + trait）
 │   ├── src/
-│   │   ├── traits.rs         # AudioSource / AsrProvider / AsrSession / TextInserter / HistoryStore
-│   │   ├── config.rs         # AppConfig / ProviderConfig
-│   │   ├── store.rs          # SqliteStore + 迁移
+│   │   ├── traits.rs         # AudioSource / AsrProvider / AsrSession / TextInserter / HistoryStore / PolishMode
+│   │   ├── config.rs         # AppConfig / ProviderConfig（含 P1/P2 字段与校验）
+│   │   ├── store.rs          # SqliteStore + 迁移（v4：前缀角色）
 │   │   ├── bailian_proto.rs  # 百炼协议帧（run-task/result-generated 编解码）
-│   │   ├── providers/        # bailian.rs / sherpa.rs
+│   │   ├── providers/        # bailian.rs / sherpa.rs / openai_asr.rs / multimodal_asr.rs
+│   │   ├── polish/           # L0 规则纠错 / ITN / 繁简 / 云端三协议 / 前缀角色 / prompts
+│   │   ├── pipeline.rs       # 端到端编排（听写 / 翻译 / 角色 / HUD 警告）
+│   │   ├── transcribe.rs     # 文件转录（长音频分段 + 重叠拼接 + SRT）
+│   │   ├── endpoint.rs       # endpoint SSRF 校验
 │   │   ├── audio.rs          # cpal 采集 + rubato 重采样
-│   │   ├── insert.rs         # enigo 文本插入
-│   │   ├── pipeline.rs       # 端到端编排
-│   │   ├── model_mgr.rs      # 模型下载/SHA256/解压
-│   │   └── permissions.rs    # 权限模型
-│   └── tests/                # traits 契约 + 百炼 WS mock 集成
-└── src-tauri/                # Tauri 薄壳
-    ├── src/                  # commands + state + platform/macos 权限
-    └── tauri.conf.json       # 主窗口 + overlay 悬浮窗 + 托盘
+│   │   ├── insert.rs         # 文本插入（InsertOutcome 四态 / TSF 纯函数）
+│   │   ├── model_mgr.rs / model_download.rs  # 模型下载/SHA256/解压/镜像切换
+│   │   └── system.rs / http.rs / permissions.rs / asr_catalog.rs
+│   └── tests/                # traits 契约 + 百炼 WS mock + REST ASR mock 集成
+├── src-tauri/                # Tauri 薄壳
+│   ├── src/                  # commands / state / qa / fn_policy / insert_fallback / windows_ime / credentials / logging / platform
+│   └── tauri.conf.json       # 主窗口 + overlay 悬浮窗 + qa 问答窗 + 托盘
 └── src/                      # React 18 + TS 前端
     ├── App.tsx               # 设置/历史/Onboarding
+    ├── QaPanel.tsx           # 划词问答浮窗
     ├── RecorderOverlay.tsx   # 悬浮窗（实时转写）
     └── components/           # Settings / History / Dictionary
 ```
@@ -77,22 +81,23 @@ cargo test -p voice-core --features sherpa
 | 层 | 测试 | 数量 |
 |---|---|---|
 | 百炼协议帧 | run-task 序列化 / result-generated(partial+final) / task-started/finished/failed 反序列化 | 8 |
-| 百炼 provider | 本地 WS mock server 全流程 + task-failed | 2 |
-| 存储 | SQLite CRUD / 级联 / 时间戳 / 迁移 / 文件持久化 / 热词批量 / 风格包 CRUD / 日记导出 | 10 |
-| 音频 | f32↔s16le / 重采样比例 / WAV fixture / 错误路径 | 7 |
-| 权限 | 状态枚举 / checker / 序列化 | 3 |
-| 文本插入 | diff_prefix 增量 / 空串 | 2 |
-| pipeline | partial/final + 插入 + 落库 + L0 总生效 / L2 ≤8字跳过 / L2 成功 / 失败回退 / 空串回退 | 8 |
-| L0 规则纠错 | 填充词 / 语气词保留 / 叠词豁免 / 标点归一 / 同音+模糊音热词 / 截断检测 / 数字 ITN / 去句末标点 | 33 |
+| ASR providers | 百炼 WS mock 全流程 + task-failed / REST ASR mock / sherpa 识别器缓存 | 11 |
+| pipeline | 端到端编排：partial/final 插入落库 / L0 总生效 / L2 跳过与回退 / 翻译分支 / 前缀角色 | 24 |
+| 润色 | L0 纠错 31 / 前缀角色 13 / prompts 12 / 云端三协议 7 / ITN 7 / LlmClient+SSE 7 / sanitize 6 / router 4 / 繁简 3 / 标点 2 | 92 |
+| 文本插入 | InsertOutcome 四态 / diff_prefix 增量 / 剪贴板恢复判定 / TSF 纯函数 | 17 |
+| 文件转录 | symphonia 解码 / 线性重采样 / 长音频分段 + 重叠 stitch / srt 切分 | 14 |
+| 存储 | SQLite CRUD / 级联 / 时间戳 / 迁移(v4 前缀角色) / 热词批量 / 风格包 CRUD / 日记导出 | 13 |
+| endpoint SSRF | validate_endpoint（IMDS / link-local / CGNAT / mapped IPv6 / RFC1918 放行等） | 13 |
+| 配置 | AppConfig / ProviderConfig 校验（含 P1/P2 字段范围） | 13 |
 | 系统采集 | 模型适配度标签：轻量/中量/重型 × 内存分档 / 磁盘不足 / Apple Silicon | 9 |
-| 繁简/标点 | OpenCC 简繁转换 / 全角→半角标点 | 5 |
-| 文件转录 | symphonia 解码 / 线性重采样 / srt 切分 | 4 |
-| 润色协议 | OpenAI Chat / Anthropic / Responses 响应解析 | 5 |
-| 热词拼音 | 同音/模糊音匹配 / WS 地址归一化 | 8 |
-| model_mgr | SHA256 向量 / 校验 / tar.gz 解压 / 校验失败拒绝 | 4 |
-| trait 契约 | 对象安全 / 端到端 fake / config 校验 | 6 |
-| 前端 | App(ping/保存/校验失败/Onboarding) + History(空/删除) | 7 |
-| **合计** | voice-core lib 141 + 百炼/traits 集成 8 + 前端 7 | **156** |
+| 音频 | f32↔s16le / 重采样比例 / WAV fixture / 错误路径 | 7 |
+| 模型下载 | SHA256 向量 / 校验 / tar.gz 解压 / 下载与镜像（model_mgr 4 + model_download 5） | 9 |
+| 权限 | 状态枚举 / checker / 序列化 | 3 |
+| http | no-redirect client | 1 |
+| 集成 | 百炼 WS mock 2 + REST ASR mock 5 + trait 契约 6 | 13 |
+| 应用壳（src-tauri） | windows_ime 协议 11 / 粘贴兜底 7 / commands 6 / qa 4 / fn_policy 3 / credentials 2 等 | 36 |
+| 前端 | App 4 + Settings 11 + History 3 | 18 |
+| **合计** | `cargo test --workspace`（Rust 285，含 sherpa 特性）+ `pnpm test`（18）；voice-core lib 默认特性 234、带 sherpa 236 | **303** |
 
 CI：GitHub Actions 三 job（core 三平台 × fmt+clippy+test / tauri-shell / frontend vitest+build）。
 

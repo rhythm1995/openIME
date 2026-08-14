@@ -28,10 +28,12 @@
 - 🔒 **Local-first, private** — On-device `sherpa-onnx` recognition; audio never leaves your machine. One-click model download (SHA256 + resumable + HF→mirror failover).
 - ☁️ **Switchable engines** — Local sherpa / Bailian WebSocket streaming / OpenAI-compatible REST / Multimodal REST; engine URLs are auto-normalized.
 - ✨ **3-tier AI polish** — L0 rule correction (hotword homophone/fuzzy, numeral ITN, simplified/traditional, trailing-punctuation removal) + L2 LLM (local Qwen2.5 first; cloud OpenAI Chat / Anthropic / Responses; original text passthrough on double failure).
-- 📝 **Hotword dictionary & style packs** — Custom terms for pronunciation correction; custom system prompts to switch output style.
-- 🎬 **File transcription** — Audio file → SRT subtitles.
+- 📝 **Hotword dictionary & style packs** — Custom terms for pronunciation correction; custom system prompts to switch output style; prefix roles (lines starting with "邮件:" / "翻译:" are routed automatically).
+- 🎬 **File transcription** — Audio file → SRT subtitles; long audio auto-segmented (adjustable duration / overlap, with progress and cancel).
+- 🌐 **Speech translation & selection QA** — Dedicated shortcut: speak the source language, target language is typed at the cursor; select text and ask questions by voice in a floating panel with streaming answers.
 - 🌐 **Bilingual UI (CN/EN)** — One-click toggle at the bottom-left. Interface language is fully independent from the ASR recognition language.
 - ⌨️ **Global shortcut** — Default Fn (🌐); toggle or push-to-talk (PTT) modes.
+- 🧲 **Insertion fallback** — If simulated typing is swallowed by the target app, falls back to paste (Cmd+V) and restores your clipboard; short Fn presses in PTT mode re-post the original 🌐 function.
 - 🍎 **macOS** (Windows in progress).
 
 ## Quick Start
@@ -79,16 +81,16 @@ cargo test -p voice-core        # Core library
 ./scripts/build.sh install      # Build and install to /Applications (fixed signing)
 ```
 
-156 tests cover the codebase (voice-core 141 + integration 8 + frontend 7). Full dev workflow, test matrix, CI, signing, and releases in [docs/development.md](docs/development.md); logs & troubleshooting in [docs/troubleshooting.md](docs/troubleshooting.md).
+303 tests cover the codebase (voice-core 236 + integration 13 + src-tauri 36 + frontend 18). Full dev workflow, test matrix, CI, signing, and releases in [docs/development.md](docs/development.md); logs & troubleshooting in [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Roadmap
 
-- ✅ Engines, overlay, tray, global shortcut, onboarding, history details
-- ✅ 3-tier AI polish, hotword dictionary, style packs, file transcription, simplified/traditional, selection injection, journal export, machine-profile → model-fit tagging
-- 🌐 UI i18n (Chinese / English)
-- 🔜 Windows
+- ✅ Engines, overlay, tray, global shortcut, onboarding, history details, UI i18n (Chinese / English)
+- ✅ 3-tier AI polish, hotword dictionary, style packs + prefix roles, translation mode, selection QA panel, file transcription (long-audio segmentation), simplified/traditional, selection injection, journal export, machine-profile → model-fit tagging
+- ✅ Single-instance lock, ESC interrupt, endpoint SSRF validation, paste fallback + clipboard restore, Fn short-press repost
+- 🔜 Windows (TSF protocol layer done; native integration pending)
 
-> Full backlog of unimplemented ideas (in Chinese): [docs/roadmap.md](docs/roadmap.md).
+> Full requirements backlog with implementation status (in Chinese): [docs/roadmap.md](docs/roadmap.md).
 
 ## Acknowledgements
 

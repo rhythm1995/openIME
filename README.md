@@ -14,10 +14,12 @@
 - 🔒 **本地优先，隐私至上** —— 本地 `sherpa-onnx` 离线识别，音频不出本机；模型一键下载（SHA256 校验 + 断点续传 + HF→国内镜像故障切换）。
 - ☁️ **多引擎可切换** —— 本地 sherpa / 百炼 WebSocket 流式 / OpenAI 兼容 REST / Multimodal REST；引擎地址智能归一（填域名 / OpenAI 兼容地址 / DashScope 地址均可）。
 - ✨ **AI 润色三档** —— L0 规则纠错（热词同音 + 模糊音、数字 ITN、繁简转换、去句末标点）+ L2 LLM（本地 Qwen2.5 优先，云端 OpenAI Chat / Anthropic / Responses，双失败原文直出）。
-- 📝 **热词词典 & 风格包** —— 自定义术语纠音；自定义 system prompt 一键切换输出风格。
-- 🎬 **文件转录** —— 音频文件 → SRT 字幕。
+- 📝 **热词词典 & 风格包** —— 自定义术语纠音；自定义 system prompt 一键切换输出风格；前缀角色（「邮件:」「翻译:」开头自动分流处理）。
+- 🎬 **文件转录** —— 音频文件 → SRT 字幕；长音频自动分段（时长 / 重叠可调，带进度与取消）。
+- 🌐 **语音翻译 & 划词问答** —— 独立快捷键说源语言、光标直出目标语言；选中文字浮窗语音提问，流式回答。
 - 🌐 **中英双语界面** —— 左下角一键切换；界面语言与 ASR 识别语言相互独立。
 - ⌨️ **全局快捷键** —— 默认 Fn（🌐），支持切换 / 按住说话（PTT）两种模式。
+- 🧲 **插入兜底** —— 逐字模拟被目标 App 吞掉时自动改粘贴（Cmd+V）并恢复原剪贴板；Hold 模式短按 Fn 自动补发 🌐 原功能。
 - 🍎 **macOS**（Windows 进行中）。
 
 
@@ -71,7 +73,7 @@ cargo test -p voice-core        # 核心库
 ./scripts/build.sh install      # 打包并安装到 /Applications（固定签名）
 ```
 
-156 个测试覆盖（voice-core 141 + 集成 8 + 前端 7）。完整开发流程、测试矩阵、CI、签名与发布见 [docs/development.md](docs/development.md)，日志与排障见 [docs/troubleshooting.md](docs/troubleshooting.md)。
+303 个测试覆盖（voice-core 236 + 集成 13 + 应用壳 36 + 前端 18）。完整开发流程、测试矩阵、CI、签名与发布见 [docs/development.md](docs/development.md)，日志与排障见 [docs/troubleshooting.md](docs/troubleshooting.md)。
 
 ## 致谢
 
