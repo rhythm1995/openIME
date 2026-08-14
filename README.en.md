@@ -32,7 +32,7 @@
 - 🎬 **File transcription** — Audio file → SRT subtitles; long audio auto-segmented (adjustable duration / overlap, with progress and cancel).
 - 🌐 **Speech translation & selection QA** — Dedicated shortcut: speak the source language, target language is typed at the cursor; select text and ask questions by voice in a floating panel with streaming answers.
 - 🌐 **Bilingual UI (CN/EN)** — One-click toggle at the bottom-left. Interface language is fully independent from the ASR recognition language.
-- ⌨️ **Global shortcut** — Default Fn (🌐); toggle or push-to-talk (PTT) modes.
+- ⌨️ **Global shortcut** — Default Fn (🌐) with push-to-talk (PTT, release to stop); toggle mode optional.
 - 🧲 **Insertion fallback** — If simulated typing is swallowed by the target app, falls back to paste (Cmd+V) and restores your clipboard; short Fn presses in PTT mode re-post the original 🌐 function.
 - 🍎 **macOS** fully supported; 🪟 **Windows** in beta (CapsLock single-key recording and insertion fallback verified on real hardware; native TSF commit pending).
 

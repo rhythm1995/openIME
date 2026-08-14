@@ -2,14 +2,17 @@ import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Settings as SettingsIcon, History as HistoryIcon, BookOpen, type LucideIcon } from "lucide-react";
+import { History as HistoryIcon, BookOpen, Mic, Sparkles, type LucideIcon } from "lucide-react";
 import Settings from "./components/Settings";
 import History from "./components/History";
 import Dictionary from "./components/Dictionary";
 import { ipc } from "./ipc";
 import { logger } from "./logger";
 
-type Page = "settings" | "history" | "dictionary";
+type Page = "settings-voice" | "settings-ai" | "history" | "dictionary";
+
+/** 两个设置入口共享同一个 Settings 挂载实例（各自实例会各持一份 config 状态，保存互相覆盖）。 */
+const isSettingsPage = (p: Page) => p === "settings-voice" || p === "settings-ai";
 
 /** Overlay 标题栏拖拽：data-tauri-drag-region + startDragging 双保险 */
 function onDragRegionMouseDown(e: ReactMouseEvent) {
@@ -26,13 +29,14 @@ function onDragRegionMouseDown(e: ReactMouseEvent) {
 export default function App() {
   const { t, i18n } = useTranslation();
   const [pong, setPong] = useState("");
-  const [page, setPage] = useState<Page>("settings");
+  const [page, setPage] = useState<Page>("settings-voice");
   // PR4：toast://info 事件（互斥提示 / 无 key 提示等）。
   const [toast, setToast] = useState<string | null>(null);
   // 页面保活：首次进入后保持挂载，仅用 CSS 隐藏。
   // 避免每次切回「设置」都重建整页（IPC + 设备枚举 + 事件监听），造成侧栏切换卡顿。
   const [mounted, setMounted] = useState<Record<Page, boolean>>({
-    settings: true,
+    "settings-voice": true,
+    "settings-ai": false,
     history: false,
     dictionary: false,
   });
@@ -55,7 +59,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     listen<string>("nav://goto", (e) => {
       if (e.payload === "history") goTo("history");
-      if (e.payload === "settings") goTo("settings");
+      if (e.payload === "settings") goTo("settings-voice");
       if (e.payload === "dictionary") goTo("dictionary");
     }).then((u) => {
       unlisten = u;
@@ -78,7 +82,8 @@ export default function App() {
   }, []);
 
   const nav: { id: Page; label: string; icon: LucideIcon }[] = [
-    { id: "settings", label: t("nav.settings"), icon: SettingsIcon },
+    { id: "settings-voice", label: t("nav.settingsVoice"), icon: Mic },
+    { id: "settings-ai", label: t("nav.settingsAi"), icon: Sparkles },
     { id: "history", label: t("nav.history"), icon: HistoryIcon },
     { id: "dictionary", label: t("nav.dictionary"), icon: BookOpen },
   ];
@@ -143,14 +148,14 @@ export default function App() {
       </aside>
 
       <main className="content">
-        {mounted.settings && (
+        {(mounted["settings-voice"] || mounted["settings-ai"]) && (
           <div
-            className={page === "settings" ? "page-panel" : "page-panel page-panel-hidden"}
-            aria-hidden={page !== "settings"}
+            className={isSettingsPage(page) ? "page-panel" : "page-panel page-panel-hidden"}
+            aria-hidden={!isSettingsPage(page)}
           >
-            <Settings />
+            <Settings view={page === "settings-ai" ? "ai" : "voice"} />
           </div>
-        )}        {mounted.history && (
+        )}{" "}        {mounted.history && (
           <div
             className={page === "history" ? "page-panel" : "page-panel page-panel-hidden"}
             aria-hidden={page !== "history"}

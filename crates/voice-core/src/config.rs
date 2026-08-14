@@ -168,8 +168,9 @@ pub struct AppConfig {
     /// "CapsLock"（Windows 单键，WH_KEYBOARD_LL 钩子监听，默认）
     /// 或 Tauri/Accelerator 风格组合键如 "Alt+Shift+D"。
     pub hotkey: String,
-    /// 快捷键模式（A1）：Toggle / Hold（按住说话）。默认与平台配对：
-    /// macOS=Fn+Toggle；Windows=CapsLock+Hold（短按补发保留原功能）；其它=Toggle。
+    /// 快捷键模式（A1）：Hold（按住说话，默认）/ Toggle（切换）。
+    /// 全平台默认 Hold：短按误触恢复（R9 补发）在 macOS（flagsChanged 补发）
+    /// 与 Windows（CapsLock 补发）均已支持，Hold 是更符合直觉的听写手势。
     #[serde(default = "default_hotkey_mode")]
     pub hotkey_mode: HotkeyMode,
     /// 风格包循环切换快捷键（F1，可选，如 Ctrl+Shift+P；None=不启用）。
@@ -344,14 +345,11 @@ fn default_hotkey() -> String {
     }
 }
 
-/// 默认触发模式与快捷键配对：CapsLock 单键配 Hold（Toggle 会吞掉全部短按、
-/// 大小写锁定完全失效；Hold 短按可补发恢复原功能）。
+/// 默认触发模式：全平台 Hold（按住说话）。短按（< short_press_ms）视为误触，
+/// 取消录音并补发原按键功能——macOS Fn 走 flagsChanged 补发、Windows CapsLock
+/// 走钩子补发，均不丢系统原功能。
 fn default_hotkey_mode() -> HotkeyMode {
-    if cfg!(target_os = "windows") {
-        HotkeyMode::Hold
-    } else {
-        HotkeyMode::Toggle
-    }
+    HotkeyMode::Hold
 }
 fn default_file_seg_duration_secs() -> u32 {
     60
@@ -650,7 +648,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert_eq!(
             (&c.hotkey, c.hotkey_mode),
-            (&"Fn".to_string(), HotkeyMode::Toggle)
+            (&"Fn".to_string(), HotkeyMode::Hold)
         );
         #[cfg(target_os = "windows")]
         assert_eq!(
@@ -660,7 +658,7 @@ mod tests {
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         assert_eq!(
             (&c.hotkey, c.hotkey_mode),
-            (&"Ctrl+Shift+D".to_string(), HotkeyMode::Toggle)
+            (&"Ctrl+Shift+D".to_string(), HotkeyMode::Hold)
         );
     }
 

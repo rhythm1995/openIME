@@ -2,7 +2,6 @@
   "common": {
     "loading": "Loading…",
     "save": "Save",
-    "saving": "Saving…",
     "cancel": "Cancel",
     "delete": "Delete",
     "add": "Add",
@@ -16,7 +15,9 @@
   "nav": {
     "settings": "Settings",
     "history": "History",
-    "dictionary": "Dictionary"
+    "dictionary": "Dictionary",
+    "settingsVoice": "Voice",
+    "settingsAi": "AI Enhancement"
   },
   "status": {
     "ready": "Ready",
@@ -43,8 +44,6 @@
   "settings": {
     "title": "Settings",
     "subtitle": "Configure speech recognition engines, AI polish, and shortcuts",
-    "saved": "Saved",
-    "saveBtn": "Save settings",
     "autoStartFailed": "Failed to set launch-at-login: {{error}}",
     "recordingError": "Recording error: {{error}}",
     "polish": {
@@ -158,17 +157,17 @@
       "recordLabel": "Recording hotkey",
       "recordHint": "Default Fn (🌐 key). Or a combo like Alt+Shift+D.",
       "recordHintWin": "Default is CapsLock (hold to talk, release to stop; short taps keep the original caps function). Fn is not recommended (most keyboards handle it in firmware, invisible to the OS). Works even inside openIME windows (raw input fallback); fallback combo Ctrl+Shift+D also registered.",
-      "modeLabel": "Trigger mode (A1)",
+      "modeLabel": "Trigger mode",
       "mode_toggle": "Toggle (press to start / stop)",
       "mode_hold": "Hold (release to stop)",
-      "styleSwitchLabel": "Style pack cycle hotkey (F1, optional)",
+      "styleSwitchLabel": "Style-pack cycle shortcut (optional)",
       "styleSwitchPh": "e.g. Ctrl+Shift+P (empty = off)",
       "fnWarning": "Fn needs System Settings → Keyboard → “Press 🌐 key to” = “Do Nothing”, otherwise the system swallows the event.",
       "fnWarningWin": "On Windows the Fn key is consumed by keyboard firmware on most machines and never reaches the OS (a few keyboards except). Fallback Ctrl+Shift+D is also registered; for a single-key experience use CapsLock instead.",
-      "translateLabel": "Translate hotkey (R4, optional)",
+      "translateLabel": "Translation shortcut (optional)",
       "translatePh": "e.g. Alt+Shift+T (empty = off)",
       "translateHint": "Speak in the source language; the target language appears at the caret.",
-      "qaLabel": "Selection QA hotkey (R6, optional)",
+      "qaLabel": "Selection QA shortcut (optional)",
       "qaPh": "e.g. Cmd+Shift+; (empty = off)",
       "qaHint": "Select text, press the key: a QA panel opens, ask by voice, streamed answer.",
       "shortPressLabel": "Short-press threshold (ms)",
@@ -236,7 +235,7 @@
       "clear": "Clear"
     },
     "translate": {
-      "title": "Translate (R4)",
+      "title": "Translation",
       "targetLangLabel": "Target language",
       "targetLangHint": "Fixed language set; takes effect on the next session.",
       "lang_zh": "中文",
@@ -250,7 +249,7 @@
       "polishFirstDesc": "One call: remove filler words and smooth the text, then translate (slower)."
     },
     "insert": {
-      "title": "Insertion & clipboard (R7)",
+      "title": "Insertion & Clipboard",
       "strategyLabel": "Insertion strategy",
       "strategy_auto": "Auto (type first, paste on failure)",
       "strategy_type": "Type only",
@@ -263,7 +262,7 @@
       "restoreDesc": "About 0.75s after pasting, restore your previous clipboard content unless you copied something else meanwhile."
     },
     "roles": {
-      "title": "Roles / style packs (R5 prefix commands)",
+      "title": "Roles / Style Packs",
       "enabledName": "Enable prefix roles",
       "enabledDesc": "Dictation starting with a prefix like “邮件:” or “翻译:” is handled by the matching role. Dictation then inserts as a whole (no streaming).",
       "hint": "A prefix overrides the default style for that utterance; translate roles share the target language with the translate hotkey. Clear a prefix to turn it back into a plain style pack.",
@@ -272,10 +271,26 @@
       "prefixPh": "Prefix aliases (| separated, e.g. mail|email)",
       "providerCloud": "Cloud (default)",
       "providerLocal": "Local GGUF",
-      "promptPh": "Role instruction (system prompt)"
+      "promptPh": "Role instruction (system prompt)",
+      "newBtn": "New role / style pack",
+      "draftTitle": "Create",
+      "draftHint": "After creating, keep editing prefix, provider and model here.",
+      "nameLabel": "Name",
+      "prefixLabel": "Prefix (optional)",
+      "prefixHint": "Input starting with the prefix is routed to this role; separate aliases with |.",
+      "providerLabel": "Provider",
+      "modelLabel": "Model (optional)",
+      "modelPh": "Leave empty for provider default",
+      "promptLabel": "Prompt (system prompt)",
+      "autoSaveHint": "Edits auto-save on blur",
+      "deleteBtn": "Delete",
+      "deleteConfirm": "Confirm delete",
+      "deleteCancel": "Cancel",
+      "createBtn": "Create",
+      "emptyEditor": "Select a role on the left to view and edit, or click New."
     },
     "qa": {
-      "title": "Selection voice QA (R6)",
+      "title": "Selection QA",
       "hint": "Select text → press the QA hotkey → ask by voice with the recording hotkey → streamed answer. Closing the panel clears context.",
       "saveHistoryName": "Save QA to history",
       "saveHistoryDesc": "Create one session per panel open, two utterances per round (Q: / A:)."
@@ -292,7 +307,8 @@
       "cancel": "Stop generating",
       "copy": "Copy answer",
       "insert": "Insert at caret"
-    }
+    },
+    "autoSaved": "Auto-saved"
   },
   "history": {
     "title": "History",

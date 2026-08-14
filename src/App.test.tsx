@@ -51,7 +51,8 @@ describe("App", () => {
       list_hotwords: [],
     });
     render(<App />);
-    await waitFor(() => expect(screen.getByText("设置")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("语音配置")).toBeInTheDocument());
+    expect(screen.getByText("AI 增强配置")).toBeInTheDocument();
     expect(screen.getByText("openIME")).toBeInTheDocument();
     expect(screen.getByText("已就绪")).toBeInTheDocument();
     // 方案 C：不再有顶部授权横幅

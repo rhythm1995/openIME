@@ -957,3 +957,69 @@ body:has(.overlay) { background: transparent; margin: 0; }
   from { opacity: 0; transform: translate(-50%, 6px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
+
+/* ──────────────── 角色 / 风格包：master-detail ──────────────── */
+.roles-layout {
+  display: grid;
+  grid-template-columns: 216px 1fr;
+  gap: 14px;
+  margin-top: 14px;
+  align-items: start;
+}
+.roles-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.roles-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.roles-item:hover { background: var(--card-hover); }
+.roles-item.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.roles-item-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.roles-item-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.roles-new {
+  border-style: dashed;
+  color: var(--text-secondary);
+  align-items: center;
+}
+.roles-new:hover { color: var(--accent); }
+.roles-editor {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.roles-editor textarea { min-height: 150px; font-size: 13px; line-height: 1.6; }
+.roles-editor-row { display: flex; gap: 10px; }
+.roles-editor-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}

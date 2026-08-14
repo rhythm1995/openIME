@@ -20,6 +20,7 @@ const defaultConfig = {
     { kind: "sherpa", base_url: "", api_key: "", model: "sensevoice" },
   ],
   hotkey: "Fn",
+  hotkey_mode: "hold",
   mute_other_audio: false,
   polish_enabled: false,
   polish_mode: "off",
@@ -116,7 +117,7 @@ describe("Settings", () => {
 
   it("渲染润色三档卡片", async () => {
     mockInvoke({ get_config: defaultConfig });
-    render(<Settings />);
+    render(<Settings view="ai" />);
     for (const label of ["保持原样", "中度润色", "高度润色"]) {
       expect(await screen.findByText(label)).toBeTruthy();
     }
@@ -126,7 +127,7 @@ describe("Settings", () => {
     mockInvoke({
       get_config: { ...defaultConfig, polish_mode: "light" },
     });
-    render(<Settings />);
+    render(<Settings view="ai" />);
     expect(await screen.findByText("云端 LLM 协议")).toBeTruthy();
     expect(screen.getByText("OpenAI Chat Completions（/chat/completions）")).toBeTruthy();
     expect(screen.getByText("Anthropic Messages（/v1/messages）")).toBeTruthy();
@@ -137,8 +138,8 @@ describe("Settings", () => {
 
   it("渲染翻译设置（目标语言下拉 + 先润色再翻译）", async () => {
     mockInvoke({ get_config: defaultConfig });
-    render(<Settings />);
-    expect(await screen.findByText("翻译（R4）")).toBeTruthy();
+    render(<Settings view="ai" />);
+    expect(await screen.findByText("翻译")).toBeTruthy();
     expect(screen.getByText("目标语言")).toBeTruthy();
     expect(screen.getByText("先润色再翻译")).toBeTruthy();
     // 目标语言下拉默认 en。
@@ -157,7 +158,7 @@ describe("Settings", () => {
   it("渲染插入策略与剪贴板恢复开关", async () => {
     mockInvoke({ get_config: defaultConfig });
     const { container } = render(<Settings />);
-    expect(await screen.findByText("插入与剪贴板（R7）")).toBeTruthy();
+    expect(await screen.findByText("插入与剪贴板")).toBeTruthy();
     const strategy = Array.from(container.querySelectorAll("select")).find((s) =>
       Array.from(s.options).some((o) => o.value === "paste"),
     ) as HTMLSelectElement;
@@ -166,44 +167,100 @@ describe("Settings", () => {
   });
 
   it("渲染前缀角色卡片与开关", async () => {
-    mockInvoke({ get_config: defaultConfig });
-    render(<Settings />);
-    expect(await screen.findByText("角色 / 风格包（R5 前缀指令）")).toBeTruthy();
+    mockInvoke({ get_config: defaultConfig, list_style_packs: [] });
+    render(<Settings view="ai" />);
+    expect(await screen.findByText("角色 / 风格包")).toBeTruthy();
     expect(screen.getByText("启用前缀角色")).toBeTruthy();
   });
 
   it("渲染划词问答设置", async () => {
     mockInvoke({ get_config: defaultConfig });
-    render(<Settings />);
-    expect(await screen.findByText("划词问答（R6）")).toBeTruthy();
+    render(<Settings view="ai" />);
+    expect(await screen.findByText("划词问答")).toBeTruthy();
     expect(screen.getByText("问答写入历史")).toBeTruthy();
   });
 
   it("快捷键卡片包含翻译 / QA 输入", async () => {
     mockInvoke({ get_config: defaultConfig });
     render(<Settings />);
-    expect(await screen.findByText("翻译快捷键（R4，可选）")).toBeTruthy();
-    expect(screen.getByText("划词问答快捷键（R6，可选）")).toBeTruthy();
+    expect(await screen.findByText("翻译快捷键（可选）")).toBeTruthy();
+    expect(screen.getByText("划词问答快捷键（可选）")).toBeTruthy();
   });
 
-  it("保存时带上 P1 新字段", async () => {
-    mockInvoke({ get_config: defaultConfig, list_style_packs: [] });
+  it("触发模式默认按住说话且为第一项；语音视图不含 AI 卡", async () => {
+    mockInvoke({ get_config: { ...defaultConfig, hotkey_mode: undefined } });
     render(<Settings />);
-    await screen.findByText("识别引擎");
-    fireEvent.click(screen.getByRole("button", { name: /保存设置/ }));
+    await screen.findByText("快捷键");
+    const modeSelect = screen
+      .getByText("触发模式")
+      .closest(".field")!
+      .querySelector("select") as HTMLSelectElement;
+    expect(modeSelect.value).toBe("hold");
+    expect(modeSelect.options[0].value).toBe("hold");
+    // 分组拆分后：语音视图不渲染 AI 增强卡片。
+    expect(screen.queryByText("AI 润色")).toBeNull();
+    expect(screen.queryByText("角色 / 风格包")).toBeNull();
+  });
+
+  it("角色 master-detail：列表选中 + 提示词失焦保存 + AI 视图含润色卡", async () => {
+    mockInvoke({
+      get_config: defaultConfig,
+      list_style_packs: [
+        { id: "b-mail", name: "邮件助手", system_prompt: "写一封正式邮件", is_builtin: true, ord: 0, match_prefix: "邮件|mail", provider: null, model: null, role_kind: "mail", output_mode: "insert" },
+        { id: "u-1", name: "我的风格", system_prompt: "简洁", is_builtin: false, ord: 100, match_prefix: null, provider: null, model: null, role_kind: "default", output_mode: "insert" },
+      ],
+    });
+    render(<Settings view="ai" />);
+    expect(await screen.findByText("AI 润色")).toBeTruthy();
+    // 内置包名字带「内置」后缀，用正则匹配列表项。
+    expect(await screen.findByText(/邮件助手/)).toBeTruthy();
+    // 默认选中第一项（邮件助手）→ 编辑面板回填其前缀。
+    expect(await screen.findByDisplayValue("邮件|mail")).toBeTruthy();
+    // 切到自定义包，改提示词后失焦 → upsert_style_pack。
+    fireEvent.click(screen.getByText("我的风格"));
+    const prompt = await screen.findByDisplayValue("简洁");
+    fireEvent.blur(prompt, { target: { value: "更简洁" } });
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith(
-        "save_app_config",
+        "upsert_style_pack",
         expect.objectContaining({
-          config: expect.objectContaining({
-            translate_target_lang: "en",
-            insert_strategy: "auto",
-            prefix_roles_enabled: true,
-            qa_save_history: false,
-            restore_clipboard: true,
-          }),
+          pack: expect.objectContaining({ id: "u-1", system_prompt: "更简洁" }),
         }),
       ),
     );
+  });
+
+  it("修改配置后防抖自动保存（无保存按钮），带上 P1 新字段", async () => {
+    mockInvoke({ get_config: defaultConfig, list_style_packs: [] });
+    render(<Settings />);
+    await screen.findByText("识别引擎");
+    // 保存按钮已移除：全部即改即存。
+    expect(screen.queryByRole("button", { name: /保存设置/ })).toBeNull();
+    // 改触发模式 → 500ms 防抖后自动 save_app_config。
+    const modeSelect = screen
+      .getByText("触发模式")
+      .closest(".field")!
+      .querySelector("select") as HTMLSelectElement;
+    fireEvent.change(modeSelect, { target: { value: "toggle" } });
+    await waitFor(
+      () =>
+        expect(invokeMock).toHaveBeenCalledWith(
+          "save_app_config",
+          expect.objectContaining({
+            config: expect.objectContaining({
+              hotkey_mode: "toggle",
+              translate_target_lang: "en",
+              insert_strategy: "auto",
+              prefix_roles_enabled: true,
+              qa_save_history: false,
+              restore_clipboard: true,
+            }),
+          }),
+        ),
+      { timeout: 2500 },
+    );
+    // 首次加载的配置本身不触发保存（基线）。
+    const saveCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "save_app_config");
+    expect(saveCalls.length).toBe(1);
   });
 });

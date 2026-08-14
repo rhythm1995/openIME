@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -51,10 +51,9 @@ function StatusIcon({ ok, warn, spin }: { ok?: boolean; warn?: boolean; spin?: b
   return <XCircle {...common} color="var(--danger)" />;
 }
 
-export default function Settings() {
+export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) {
   const { t } = useTranslation();
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [mic, setMic] = useState<PermissionStatus | null>(null);
   const [ax, setAx] = useState<PermissionStatus | null>(null);
@@ -99,6 +98,43 @@ export default function Settings() {
   const [transcribeProgress, setTranscribeProgress] = useState<{ done_segs: number; total_segs: number } | null>(null);
   const [newStyleName, setNewStyleName] = useState("");
   const [newStylePrompt, setNewStylePrompt] = useState("");
+  // 角色 / 风格包 master-detail：列表选中项、新建草稿态、删除二次确认。
+  const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
+  const [draftOpen, setDraftOpen] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  // 即改即存：config 变化后防抖自动保存（500ms 合并连续修改）。
+  // 校验链路与原手动保存一致：validateProvider（纯内存校验）→ saveConfig
+  // （后端 save_app_config 再做 endpoint/hotkey 校验，失败整单不落盘）。
+  // 首次加载只记基线不回写；保存成功短暂提示，失败保留到下次成功。
+  const savedSigRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!config) return;
+    const sig = JSON.stringify(config);
+    if (savedSigRef.current === null) {
+      savedSigRef.current = sig;
+      return;
+    }
+    if (sig === savedSigRef.current) return;
+    const timer = setTimeout(() => {
+      (async () => {
+        try {
+          await ipc.validateProvider(config.providers[config.active_provider]);
+          await ipc.saveConfig(config);
+          savedSigRef.current = sig;
+          setMsg({ ok: true, text: t("settings.autoSaved") });
+        } catch (e) {
+          setMsg({ ok: false, text: String(e) });
+        }
+      })();
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [config, t]);
+  useEffect(() => {
+    if (!msg?.ok) return;
+    const h = setTimeout(() => setMsg(null), 1800);
+    return () => clearTimeout(h);
+  }, [msg]);
 
   useEffect(() => {
     let cancelled = false;
@@ -304,18 +340,25 @@ export default function Settings() {
       ),
     });
 
-  const onSave = async () => {
-    setSaving(true);
-    setMsg(null);
-    try {
-      await ipc.validateProvider(active);
-      await ipc.saveConfig(config);
-      setMsg({ ok: true, text: t("settings.saved") });
-    } catch (e) {
-      setMsg({ ok: false, text: String(e) });
-    } finally {
-      setSaving(false);
-    }
+  // 角色 / 风格包 master-detail：当前选中项（未显式选择时取第一个）。
+  const selectedPack: StylePack | null =
+    stylePacks.find((p) => p.id === selectedPackId) ?? stylePacks[0] ?? null;
+
+  const savePack = async (p: StylePack, patch: Partial<StylePack>) => {
+    await ipc.upsertStylePack({
+      id: p.id,
+      name: p.name,
+      system_prompt: p.system_prompt,
+      is_builtin: p.is_builtin,
+      ord: p.ord,
+      match_prefix: p.match_prefix ?? null,
+      provider: p.provider ?? null,
+      model: p.model ?? null,
+      role_kind: p.role_kind ?? "default",
+      output_mode: p.output_mode ?? "insert",
+      ...patch,
+    });
+    ipc.listStylePacks().then(setStylePacks).catch(() => {});
   };
 
   const permBadge = (s: PermissionStatus | null) => {
@@ -341,6 +384,125 @@ export default function Settings() {
       <h1 className="page-title">{t("settings.title")}</h1>
       <p className="page-subtitle">{t("settings.subtitle")}</p>
 
+      {/* 快捷键与触发（语音配置·第一张卡；触发模式是第一项） */}
+      {view === "voice" && (
+      <div className="card">
+        <h2 className="card-title">{t("settings.hotkey.title")}</h2>
+        <div className="field" style={{ margin: 0 }}>
+          <label className="field-label">{t("settings.hotkey.modeLabel")}</label>
+          <select
+            value={config.hotkey_mode ?? "hold"}
+            onChange={(e) =>
+              setConfig({
+                ...config,
+                hotkey_mode: e.target.value as "toggle" | "hold",
+              })
+            }
+          >
+            <option value="hold">{t("settings.hotkey.mode_hold")}</option>
+            <option value="toggle">{t("settings.hotkey.mode_toggle")}</option>
+          </select>
+          <div style={{ marginTop: 10 }}>
+            <label className="field-label">{t("settings.hotkey.recordLabel")}</label>
+            <input
+              value={config.hotkey}
+              onChange={(e) => setConfig({ ...config, hotkey: e.target.value })}
+            />
+            <span className="field-hint">
+              {t(IS_WIN ? "settings.hotkey.recordHintWin" : "settings.hotkey.recordHint")}
+            </span>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <label className="field-label">{t("settings.hotkey.shortPressLabel")}</label>
+            <input
+              type="number"
+              min={100}
+              max={800}
+              value={config.short_press_ms ?? 300}
+              onChange={(e) =>
+                setConfig({ ...config, short_press_ms: Number(e.target.value) })
+              }
+            />
+            <span className="field-hint">{t("settings.hotkey.shortPressHint")}</span>
+          </div>
+          {(IS_MAC || isCapsHotkey) && (
+            <div className="set-row" style={{ marginTop: 12 }}>
+              <div>
+                <div className="set-name">
+                  {t(IS_WIN ? "settings.hotkey.fnRepostNameWin" : "settings.hotkey.fnRepostName")}
+                </div>
+                <div className="set-desc">
+                  {t(IS_WIN ? "settings.hotkey.fnRepostDescWin" : "settings.hotkey.fnRepostDesc")}
+                </div>
+              </div>
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  checked={config.fn_repost_enabled ?? true}
+                  onChange={(e) =>
+                    setConfig({ ...config, fn_repost_enabled: e.target.checked })
+                  }
+                />
+                <span className="slider" />
+              </label>
+            </div>
+          )}
+          <div style={{ marginTop: 10 }}>
+            <label className="field-label">{t("settings.hotkey.styleSwitchLabel")}</label>
+            <input
+              value={config.style_switch_hotkey ?? ""}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  style_switch_hotkey: e.target.value || null,
+                })
+              }
+              placeholder={t("settings.hotkey.styleSwitchPh")}
+            />
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <label className="field-label">{t("settings.hotkey.translateLabel")}</label>
+            <input
+              value={config.translate_hotkey ?? ""}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  translate_hotkey: e.target.value || null,
+                })
+              }
+              placeholder={t("settings.hotkey.translatePh")}
+            />
+            <span className="field-hint">{t("settings.hotkey.translateHint")}</span>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <label className="field-label">{t("settings.hotkey.qaLabel")}</label>
+            <input
+              value={config.qa_hotkey ?? ""}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  qa_hotkey: e.target.value || null,
+                })
+              }
+              placeholder={t("settings.hotkey.qaPh")}
+            />
+            <span className="field-hint">{t("settings.hotkey.qaHint")}</span>
+          </div>
+          {isFnHotkey && (
+            <span
+              className="field-hint"
+              style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4, color: "var(--warning)" }}
+            >
+              <StatusIcon warn />
+              {t(IS_WIN ? "settings.hotkey.fnWarningWin" : "settings.hotkey.fnWarning")}
+            </span>
+          )}
+        </div>
+      </div>
+      )}
+
+      {view === "ai" && (
+      <>
       {/* AI 润色 */}
       <div className="card">
         <h2 className="card-title">{t("settings.polish.title")}</h2>
@@ -682,31 +844,7 @@ export default function Settings() {
         )}
       </div>
 
-      {/* P1：R6 划词问答 */}
-      <div className="card">
-        <h2 className="card-title">{t("settings.qa.title")}</h2>
-        <span className="field-hint" style={{ display: "block", marginBottom: 8 }}>
-          {t("settings.qa.hint")}
-        </span>
-        <div className="set-row">
-          <div>
-            <div className="set-name">{t("settings.qa.saveHistoryName")}</div>
-            <div className="set-desc">{t("settings.qa.saveHistoryDesc")}</div>
-          </div>
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={config.qa_save_history ?? false}
-              onChange={(e) =>
-                setConfig({ ...config, qa_save_history: e.target.checked })
-              }
-            />
-            <span className="slider" />
-          </label>
-        </div>
-      </div>
-
-      {/* P1：R5 角色 / 风格包（不藏在 Heavy 里，任何润色模式可见） */}
+      {/* P1：R5 角色 / 风格包（master-detail：左列表 + 右编辑） */}
       <div className="card">
         <h2 className="card-title">{t("settings.roles.title")}</h2>
         <div className="set-row">
@@ -728,149 +866,227 @@ export default function Settings() {
         <span className="field-hint" style={{ display: "block", marginTop: 6 }}>
           {t("settings.roles.hint")}
         </span>
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
-          {stylePacks.map((p) => {
-            const prefix = p.match_prefix ?? "";
-            const isRole = !!prefix.trim();
-            const savePack = async (patch: Partial<StylePack>) => {
-              await ipc.upsertStylePack({
-                id: p.id,
-                name: p.name,
-                system_prompt: p.system_prompt,
-                is_builtin: p.is_builtin,
-                ord: p.ord,
-                match_prefix: p.match_prefix ?? null,
-                provider: p.provider ?? null,
-                model: p.model ?? null,
-                role_kind: p.role_kind ?? "default",
-                output_mode: p.output_mode ?? "insert",
-                ...patch,
-              });
-              ipc.listStylePacks().then(setStylePacks).catch(() => {});
-            };
-            return (
-              <div
-                key={p.id}
-                style={{
-                  border: "1px solid var(--border)",
-                  borderRadius: 10,
-                  padding: "10px 12px",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: 8,
-                    flexWrap: "wrap",
-                    gap: 6,
+        <div className="roles-layout">
+          {/* 左：角色 / 风格包列表 */}
+          <div className="roles-list">
+            {stylePacks.map((p) => {
+              const prefix = p.match_prefix ?? "";
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`roles-item${!draftOpen && selectedPack?.id === p.id ? " active" : ""}`}
+                  onClick={() => {
+                    setDraftOpen(false);
+                    setSelectedPackId(p.id);
+                    setConfirmDeleteId(null);
                   }}
                 >
-                  <strong style={{ fontSize: 13 }}>
+                  <span className="roles-item-name">
                     {p.name}
                     {p.is_builtin ? t("settings.polish.builtin") : ""}
-                  </strong>
-                  <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {isRole && (
-                      <span className="badge badge-success" style={{ fontSize: 11 }}>
-                        {t("settings.roles.prefixBadge", { prefix: prefix.split("|")[0] })}
-                      </span>
-                    )}
-                    {p.role_kind === "translate" && (
-                      <span className="badge" style={{ fontSize: 11 }}>
-                        {t("settings.roles.translateKind")}
-                      </span>
-                    )}
                   </span>
-                </div>
-                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  {(prefix.trim() || p.role_kind === "translate") && (
+                    <span className="roles-item-badges">
+                      {prefix.trim() && (
+                        <span className="badge badge-success" style={{ fontSize: 11 }}>
+                          {t("settings.roles.prefixBadge", { prefix: prefix.split("|")[0] })}
+                        </span>
+                      )}
+                      {p.role_kind === "translate" && (
+                        <span className="badge" style={{ fontSize: 11 }}>
+                          {t("settings.roles.translateKind")}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              className="roles-item roles-new"
+              onClick={() => {
+                setDraftOpen(true);
+                setSelectedPackId(null);
+                setConfirmDeleteId(null);
+              }}
+            >
+              + {t("settings.roles.newBtn")}
+            </button>
+          </div>
+
+          {/* 右：编辑面板 */}
+          <div className="roles-editor">
+            {draftOpen ? (
+              <>
+                <div className="set-name">{t("settings.roles.draftTitle")}</div>
+                <div className="field" style={{ margin: 0 }}>
+                  <label className="field-label">{t("settings.roles.nameLabel")}</label>
                   <input
-                    key={`${p.id}-prefix`}
-                    defaultValue={prefix}
-                    placeholder={t("settings.roles.prefixPh")}
-                    style={{ flex: 2 }}
+                    value={newStyleName}
+                    onChange={(e) => setNewStyleName(e.target.value)}
+                    placeholder={t("settings.polish.styleNamePh")}
+                  />
+                </div>
+                <div className="field" style={{ margin: 0 }}>
+                  <label className="field-label">{t("settings.roles.promptLabel")}</label>
+                  <textarea
+                    value={newStylePrompt}
+                    onChange={(e) => setNewStylePrompt(e.target.value)}
+                    rows={6}
+                    placeholder={t("settings.polish.stylePromptPh")}
+                  />
+                </div>
+                <div className="roles-editor-footer">
+                  <span className="field-hint">{t("settings.roles.draftHint")}</span>
+                  <button
+                    className="btn"
+                    disabled={!newStyleName.trim() || !newStylePrompt.trim()}
+                    onClick={async () => {
+                      const id = `user-${Date.now()}`;
+                      await ipc.upsertStylePack({
+                        id,
+                        name: newStyleName.trim(),
+                        system_prompt: newStylePrompt.trim(),
+                        is_builtin: false,
+                        ord: 100,
+                        match_prefix: null,
+                        provider: null,
+                        model: null,
+                        role_kind: "default",
+                        output_mode: "insert",
+                      });
+                      setNewStyleName("");
+                      setNewStylePrompt("");
+                      setSelectedPackId(id);
+                      setDraftOpen(false);
+                      ipc.listStylePacks().then(setStylePacks).catch(() => {});
+                    }}
+                  >
+                    {t("settings.roles.createBtn")}
+                  </button>
+                </div>
+              </>
+            ) : selectedPack ? (
+              <>
+                <div className="field" style={{ margin: 0 }}>
+                  <label className="field-label">{t("settings.roles.nameLabel")}</label>
+                  <input
+                    key={`${selectedPack.id}-name`}
+                    defaultValue={selectedPack.name}
                     onBlur={(e) => {
                       const v = e.target.value.trim();
-                      if (v !== prefix) {
-                        savePack({ match_prefix: v || null });
+                      if (v && v !== selectedPack.name) {
+                        savePack(selectedPack, { name: v });
                       }
                     }}
                   />
-                  <select
-                    key={`${p.id}-provider`}
-                    defaultValue={p.provider ?? "cloud"}
-                    style={{ flex: 1 }}
-                    onChange={(e) => savePack({ provider: e.target.value || null })}
-                  >
-                    <option value="cloud">{t("settings.roles.providerCloud")}</option>
-                    <option value="local">{t("settings.roles.providerLocal")}</option>
-                  </select>
                 </div>
-                <textarea
-                  key={`${p.id}-prompt`}
-                  defaultValue={p.system_prompt}
-                  rows={2}
-                  style={{ fontSize: 12, width: "100%" }}
-                  placeholder={t("settings.roles.promptPh")}
-                  onBlur={(e) => {
-                    const v = e.target.value.trim();
-                    if (v && v !== p.system_prompt) {
-                      savePack({ system_prompt: v });
-                    }
-                  }}
-                />
-              </div>
-            );
-          })}
-        </div>
-        {!stylePacks.some((p) => !p.is_builtin) && (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 6,
-              marginTop: 12,
-            }}
-          >
-            <input
-              placeholder={t("settings.polish.styleNamePh")}
-              value={newStyleName}
-              onChange={(e) => setNewStyleName(e.target.value)}
-            />
-            <textarea
-              placeholder={t("settings.polish.stylePromptPh")}
-              value={newStylePrompt}
-              onChange={(e) => setNewStylePrompt(e.target.value)}
-              rows={2}
-            />
-            <button
-              className="btn"
-              disabled={!newStyleName.trim() || !newStylePrompt.trim()}
-              onClick={async () => {
-                await ipc.upsertStylePack({
-                  id: `user-${Date.now()}`,
-                  name: newStyleName.trim(),
-                  system_prompt: newStylePrompt.trim(),
-                  is_builtin: false,
-                  ord: 100,
-                  match_prefix: null,
-                  provider: null,
-                  model: null,
-                  role_kind: "default",
-                  output_mode: "insert",
-                });
-                setNewStyleName("");
-                setNewStylePrompt("");
-                ipc.listStylePacks().then(setStylePacks).catch(() => {});
-              }}
-            >
-              {t("settings.polish.addStylePack")}
-            </button>
+                <div className="field" style={{ margin: 0 }}>
+                  <label className="field-label">{t("settings.roles.prefixLabel")}</label>
+                  <input
+                    key={`${selectedPack.id}-prefix`}
+                    defaultValue={selectedPack.match_prefix ?? ""}
+                    placeholder={t("settings.roles.prefixPh")}
+                    onBlur={(e) => {
+                      const v = e.target.value.trim();
+                      if (v !== (selectedPack.match_prefix ?? "")) {
+                        savePack(selectedPack, { match_prefix: v || null });
+                      }
+                    }}
+                  />
+                  <span className="field-hint">{t("settings.roles.prefixHint")}</span>
+                </div>
+                <div className="roles-editor-row">
+                  <div className="field" style={{ margin: 0, flex: 1 }}>
+                    <label className="field-label">{t("settings.roles.providerLabel")}</label>
+                    <select
+                      key={`${selectedPack.id}-provider`}
+                      defaultValue={selectedPack.provider ?? "cloud"}
+                      onChange={(e) => savePack(selectedPack, { provider: e.target.value || null })}
+                    >
+                      <option value="cloud">{t("settings.roles.providerCloud")}</option>
+                      <option value="local">{t("settings.roles.providerLocal")}</option>
+                    </select>
+                  </div>
+                  <div className="field" style={{ margin: 0, flex: 1 }}>
+                    <label className="field-label">{t("settings.roles.modelLabel")}</label>
+                    <input
+                      key={`${selectedPack.id}-model`}
+                      defaultValue={selectedPack.model ?? ""}
+                      placeholder={t("settings.roles.modelPh")}
+                      onBlur={(e) => {
+                        const v = e.target.value.trim();
+                        if (v !== (selectedPack.model ?? "")) {
+                          savePack(selectedPack, { model: v || null });
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="field" style={{ margin: 0 }}>
+                  <label className="field-label">{t("settings.roles.promptLabel")}</label>
+                  <textarea
+                    key={`${selectedPack.id}-prompt`}
+                    defaultValue={selectedPack.system_prompt}
+                    rows={8}
+                    placeholder={t("settings.roles.promptPh")}
+                    onBlur={(e) => {
+                      const v = e.target.value.trim();
+                      if (v && v !== selectedPack.system_prompt) {
+                        savePack(selectedPack, { system_prompt: v });
+                      }
+                    }}
+                  />
+                </div>
+                <div className="roles-editor-footer">
+                  <span className="field-hint">
+                    {t("settings.roles.autoSaveHint")}
+                  </span>
+                  {!selectedPack.is_builtin &&
+                    (confirmDeleteId === selectedPack.id ? (
+                      <span style={{ display: "flex", gap: 6 }}>
+                        <button
+                          className="btn btn-sm btn-danger"
+                          onClick={async () => {
+                            await ipc.deleteStylePack(selectedPack.id);
+                            setSelectedPackId(null);
+                            setConfirmDeleteId(null);
+                            ipc.listStylePacks().then(setStylePacks).catch(() => {});
+                          }}
+                        >
+                          {t("settings.roles.deleteConfirm")}
+                        </button>
+                        <button
+                          className="btn btn-sm btn-ghost"
+                          onClick={() => setConfirmDeleteId(null)}
+                        >
+                          {t("settings.roles.deleteCancel")}
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        className="btn btn-sm btn-ghost"
+                        style={{ color: "var(--danger)" }}
+                        onClick={() => setConfirmDeleteId(selectedPack.id)}
+                      >
+                        {t("settings.roles.deleteBtn")}
+                      </button>
+                    ))}
+                </div>
+              </>
+            ) : (
+              <span className="field-hint">{t("settings.roles.emptyEditor")}</span>
+            )}
           </div>
-        )}
+        </div>
       </div>
+      </>
+      )}
 
+      {view === "voice" && (
+      <>
       {/* 引擎 */}
       <div className="card">
         <h2 className="card-title">{t("settings.engine.title")}</h2>
@@ -1409,121 +1625,11 @@ export default function Settings() {
         )}
       </div>
 
-      {/* 快捷键 */}
-      <div className="card">
-        <h2 className="card-title">{t("settings.hotkey.title")}</h2>
-        <div className="field" style={{ margin: 0 }}>
-          <label className="field-label">{t("settings.hotkey.recordLabel")}</label>
-          <input
-            value={config.hotkey}
-            onChange={(e) => setConfig({ ...config, hotkey: e.target.value })}
-          />
-          <span className="field-hint">
-            {t(IS_WIN ? "settings.hotkey.recordHintWin" : "settings.hotkey.recordHint")}
-          </span>
-          <div style={{ marginTop: 10 }}>
-            <label className="field-label">{t("settings.hotkey.modeLabel")}</label>
-            <select
-              value={config.hotkey_mode ?? "toggle"}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  hotkey_mode: e.target.value as "toggle" | "hold",
-                })
-              }
-            >
-              <option value="toggle">{t("settings.hotkey.mode_toggle")}</option>
-              <option value="hold">{t("settings.hotkey.mode_hold")}</option>
-            </select>
-          </div>
-          <div style={{ marginTop: 10 }}>
-            <label className="field-label">{t("settings.hotkey.shortPressLabel")}</label>
-            <input
-              type="number"
-              min={100}
-              max={800}
-              value={config.short_press_ms ?? 300}
-              onChange={(e) =>
-                setConfig({ ...config, short_press_ms: Number(e.target.value) })
-              }
-            />
-            <span className="field-hint">{t("settings.hotkey.shortPressHint")}</span>
-          </div>
-          {(IS_MAC || isCapsHotkey) && (
-            <div className="set-row" style={{ marginTop: 12 }}>
-              <div>
-                <div className="set-name">
-                  {t(IS_WIN ? "settings.hotkey.fnRepostNameWin" : "settings.hotkey.fnRepostName")}
-                </div>
-                <div className="set-desc">
-                  {t(IS_WIN ? "settings.hotkey.fnRepostDescWin" : "settings.hotkey.fnRepostDesc")}
-                </div>
-              </div>
-              <label className="switch">
-                <input
-                  type="checkbox"
-                  checked={config.fn_repost_enabled ?? true}
-                  onChange={(e) =>
-                    setConfig({ ...config, fn_repost_enabled: e.target.checked })
-                  }
-                />
-                <span className="slider" />
-              </label>
-            </div>
-          )}
-          <div style={{ marginTop: 10 }}>
-            <label className="field-label">{t("settings.hotkey.styleSwitchLabel")}</label>
-            <input
-              value={config.style_switch_hotkey ?? ""}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  style_switch_hotkey: e.target.value || null,
-                })
-              }
-              placeholder={t("settings.hotkey.styleSwitchPh")}
-            />
-          </div>
-          <div style={{ marginTop: 10 }}>
-            <label className="field-label">{t("settings.hotkey.translateLabel")}</label>
-            <input
-              value={config.translate_hotkey ?? ""}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  translate_hotkey: e.target.value || null,
-                })
-              }
-              placeholder={t("settings.hotkey.translatePh")}
-            />
-            <span className="field-hint">{t("settings.hotkey.translateHint")}</span>
-          </div>
-          <div style={{ marginTop: 10 }}>
-            <label className="field-label">{t("settings.hotkey.qaLabel")}</label>
-            <input
-              value={config.qa_hotkey ?? ""}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  qa_hotkey: e.target.value || null,
-                })
-              }
-              placeholder={t("settings.hotkey.qaPh")}
-            />
-            <span className="field-hint">{t("settings.hotkey.qaHint")}</span>
-          </div>
-          {isFnHotkey && (
-            <span
-              className="field-hint"
-              style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4, color: "var(--warning)" }}
-            >
-              <StatusIcon warn />
-              {t(IS_WIN ? "settings.hotkey.fnWarningWin" : "settings.hotkey.fnWarning")}
-            </span>
-          )}
-        </div>
-      </div>
+      </>
+      )}
 
+      {view === "ai" && (
+      <>
       {/* P1：R4 翻译 */}
       <div className="card">
         <h2 className="card-title">{t("settings.translate.title")}</h2>
@@ -1563,6 +1669,35 @@ export default function Settings() {
         </div>
       </div>
 
+      {/* P1：R6 划词问答 */}
+      <div className="card">
+        <h2 className="card-title">{t("settings.qa.title")}</h2>
+        <span className="field-hint" style={{ display: "block", marginBottom: 8 }}>
+          {t("settings.qa.hint")}
+        </span>
+        <div className="set-row">
+          <div>
+            <div className="set-name">{t("settings.qa.saveHistoryName")}</div>
+            <div className="set-desc">{t("settings.qa.saveHistoryDesc")}</div>
+          </div>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={config.qa_save_history ?? false}
+              onChange={(e) =>
+                setConfig({ ...config, qa_save_history: e.target.checked })
+              }
+            />
+            <span className="slider" />
+          </label>
+        </div>
+      </div>
+
+      </>
+      )}
+
+      {view === "voice" && (
+      <>
       {/* P1：R7 插入策略 + 剪贴板恢复 */}
       <div className="card">
         <h2 className="card-title">{t("settings.insert.title")}</h2>
@@ -1945,18 +2080,18 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* 保存 */}
-      <div className="save-bar">
-        <button className="btn" onClick={onSave} disabled={saving}>
-          {saving ? t("common.saving") : t("settings.saveBtn")}
-        </button>
-        {msg && (
+      </>
+      )}
+
+      {/* 自动保存状态：成功短暂显示；失败保留到下次修改成功 */}
+      {msg && (
+        <div className="save-bar">
           <span className="save-msg" style={{ color: msg.ok ? "var(--success)" : "var(--danger)" }}>
             <StatusIcon ok={msg.ok} />
             <span>{msg.text}</span>
           </span>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

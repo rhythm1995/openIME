@@ -2,7 +2,6 @@
   "common": {
     "loading": "加载中…",
     "save": "保存",
-    "saving": "保存中…",
     "cancel": "取消",
     "delete": "删除",
     "add": "添加",
@@ -16,7 +15,9 @@
   "nav": {
     "settings": "设置",
     "history": "历史记录",
-    "dictionary": "词典"
+    "dictionary": "词典",
+    "settingsVoice": "语音配置",
+    "settingsAi": "AI 增强配置"
   },
   "status": {
     "ready": "已就绪",
@@ -43,8 +44,6 @@
   "settings": {
     "title": "设置",
     "subtitle": "配置语音识别引擎、AI 润色与快捷键",
-    "saved": "已保存",
-    "saveBtn": "保存设置",
     "autoStartFailed": "设置开机自启失败：{{error}}",
     "recordingError": "录音错误：{{error}}",
     "polish": {
@@ -158,17 +157,17 @@
       "recordLabel": "录音快捷键",
       "recordHint": "默认 Fn（🌐 键）。也可填组合键如 Alt+Shift+D。",
       "recordHintWin": "默认 CapsLock（按住说话，松开停止；短按保留大小写切换原功能）。不建议 Fn（多数键盘由固件处理，系统感知不到）。在 openIME 窗口内同样可用（raw input 兜底），另有兜底组合键 Ctrl+Shift+D。",
-      "modeLabel": "触发模式（A1）",
+      "modeLabel": "触发模式",
       "mode_toggle": "切换（按一次开 / 再按一次停）",
       "mode_hold": "按住说话（松开停止）",
-      "styleSwitchLabel": "风格包切换快捷键（F1，可选）",
+      "styleSwitchLabel": "风格包切换快捷键（可选）",
       "styleSwitchPh": "如 Ctrl+Shift+P（留空不启用）",
       "fnWarning": "使用 Fn 键需在 系统设置 → 键盘 → 「按下 🌐 键时」选「不执行任何操作」，否则系统会拦截 Fn 事件。",
       "fnWarningWin": "Windows 的 Fn 键多由键盘固件处理，系统感知不到（个别键盘例外）。已同时注册兜底快捷键 Ctrl+Shift+D；想要单键体验请改填 CapsLock。",
-      "translateLabel": "翻译快捷键（R4，可选）",
+      "translateLabel": "翻译快捷键（可选）",
       "translatePh": "如 Alt+Shift+T（留空不启用）",
       "translateHint": "按一下开始说源语言，光标处插入目标语言；再按一下停止。",
-      "qaLabel": "划词问答快捷键（R6，可选）",
+      "qaLabel": "划词问答快捷键（可选）",
       "qaPh": "如 Cmd+Shift+;（留空不启用）",
       "qaHint": "选中文字后按下：弹出问答浮窗，语音提问，流式回答。",
       "shortPressLabel": "短按阈值（毫秒）",
@@ -236,7 +235,7 @@
       "clear": "清空"
     },
     "translate": {
-      "title": "翻译（R4）",
+      "title": "翻译",
       "targetLangLabel": "目标语言",
       "targetLangHint": "固定语言集；下次翻译会话生效。",
       "lang_zh": "中文",
@@ -250,7 +249,7 @@
       "polishFirstDesc": "一次调用：先去掉口头禅、通顺化，再翻译（比纯翻译慢）。"
     },
     "insert": {
-      "title": "插入与剪贴板（R7）",
+      "title": "插入与剪贴板",
       "strategyLabel": "插入策略",
       "strategy_auto": "自动（先打字，失败自动粘贴）",
       "strategy_type": "只模拟按键",
@@ -263,7 +262,7 @@
       "restoreDesc": "粘贴约 0.75 秒后，若剪贴板仍是插入内容则恢复你原来复制的内容；期间你自己复制了别的则不覆盖。"
     },
     "roles": {
-      "title": "角色 / 风格包（R5 前缀指令）",
+      "title": "角色 / 风格包",
       "enabledName": "启用前缀角色",
       "enabledDesc": "听写结果以「邮件:」「翻译:」等前缀开头时，按对应角色处理。开启后听写改为整段上屏（不再逐字流式）。",
       "hint": "前缀在单次输入中覆盖默认风格；翻译角色与翻译快捷键共用目标语言。清空前缀 = 退回纯风格包（重新进入风格循环）。",
@@ -272,10 +271,26 @@
       "prefixPh": "前缀别名（| 分隔，如 邮件|mail）",
       "providerCloud": "云端（默认）",
       "providerLocal": "本地 GGUF",
-      "promptPh": "角色指令（system prompt）"
+      "promptPh": "角色指令（system prompt）",
+      "newBtn": "新建角色 / 风格包",
+      "draftTitle": "新建",
+      "draftHint": "创建后可在右侧继续编辑前缀、提供商与模型。",
+      "nameLabel": "名称",
+      "prefixLabel": "前缀（可选）",
+      "prefixHint": "以「邮件:」「翻译:」等前缀开头时自动按本角色处理；| 分隔多个别名。",
+      "providerLabel": "提供商",
+      "modelLabel": "模型（可选）",
+      "modelPh": "留空用提供商默认",
+      "promptLabel": "提示词（system prompt）",
+      "autoSaveHint": "修改自动保存（失焦即存）",
+      "deleteBtn": "删除",
+      "deleteConfirm": "确认删除",
+      "deleteCancel": "取消",
+      "createBtn": "创建",
+      "emptyEditor": "选择左侧角色查看和编辑，或点「新建」添加。"
     },
     "qa": {
-      "title": "划词问答（R6）",
+      "title": "划词问答",
       "hint": "选中一段文字 → 按问答快捷键打开浮窗 → 按录音键提问 → 流式回答。关窗即清空上下文。",
       "saveHistoryName": "问答写入历史",
       "saveHistoryDesc": "每次打开面板建一条会话，每轮问答写两条记录（Q: / A:）。"
@@ -292,7 +307,8 @@
       "cancel": "停止生成",
       "copy": "复制回答",
       "insert": "插入光标"
-    }
+    },
+    "autoSaved": "已自动保存"
   },
   "history": {
     "title": "历史记录",
