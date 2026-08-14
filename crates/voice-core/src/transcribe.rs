@@ -88,7 +88,9 @@ pub fn decode_audio_file(path: &Path) -> crate::Result<(Vec<f32>, u32)> {
 /// - 一次 `build_offline_recognizer`（新实例，**不碰** OFFLINE_RECOGNIZER_CACHE），
 ///   顺序喂切片后 drop。
 /// - `cancel`：段间检查，置位返回「转录已取消」。
+// 参数即一段转录的全部输入（路径/模型/分段/取消/进度回调），再打包结构体收益为负。
 #[cfg(feature = "sherpa")]
+#[allow(clippy::too_many_arguments)]
 pub fn transcribe_file_full(
     path: &Path,
     model_root: &Path,
@@ -131,9 +133,9 @@ pub fn text_to_srt(text: &str, total_seconds: f64) -> String {
     }
     let total_chars: usize = sentences.iter().map(|s| s.chars().count()).sum();
     let mut srt = String::new();
-    let mut idx = 1;
     let mut t = 0.0;
-    for s in &sentences {
+    for (i, s) in sentences.iter().enumerate() {
+        let idx = i + 1;
         let chars = s.chars().count();
         let dur = if total_chars > 0 {
             total_seconds * chars as f64 / total_chars as f64
@@ -149,7 +151,6 @@ pub fn text_to_srt(text: &str, total_seconds: f64) -> String {
             fmt_srt_time(end)
         ));
         srt.push_str(&format!("{s}\n\n"));
-        idx += 1;
         t = end;
     }
     srt

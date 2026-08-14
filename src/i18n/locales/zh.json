@@ -157,12 +157,14 @@
       "title": "快捷键",
       "recordLabel": "录音快捷键",
       "recordHint": "默认 Fn（🌐 键）。也可填组合键如 Alt+Shift+D。",
+      "recordHintWin": "默认 CapsLock（按住说话，松开停止；短按保留大小写切换原功能）。不建议 Fn（多数键盘由固件处理，系统感知不到）。在 openIME 窗口内同样可用（raw input 兜底），另有兜底组合键 Ctrl+Shift+D。",
       "modeLabel": "触发模式（A1）",
       "mode_toggle": "切换（按一次开 / 再按一次停）",
       "mode_hold": "按住说话（松开停止）",
       "styleSwitchLabel": "风格包切换快捷键（F1，可选）",
       "styleSwitchPh": "如 Ctrl+Shift+P（留空不启用）",
       "fnWarning": "使用 Fn 键需在 系统设置 → 键盘 → 「按下 🌐 键时」选「不执行任何操作」，否则系统会拦截 Fn 事件。",
+      "fnWarningWin": "Windows 的 Fn 键多由键盘固件处理，系统感知不到（个别键盘例外）。已同时注册兜底快捷键 Ctrl+Shift+D；想要单键体验请改填 CapsLock。",
       "translateLabel": "翻译快捷键（R4，可选）",
       "translatePh": "如 Alt+Shift+T（留空不启用）",
       "translateHint": "按一下开始说源语言，光标处插入目标语言；再按一下停止。",
@@ -172,7 +174,9 @@
       "shortPressLabel": "短按阈值（毫秒）",
       "shortPressHint": "Hold 模式下按住 Fn 超过该时长才开录；提前松开只补发 🌐（100–800，默认 300）",
       "fnRepostName": "短按 Fn 补发 🌐",
-      "fnRepostDesc": "Hold + Fn 轻点（未达到阈值）时补发 🌐 键，让系统执行切输入法等原功能。仅 macOS 显示。"
+      "fnRepostDesc": "Hold + Fn 轻点（未达到阈值）时补发 🌐 键，让系统执行切输入法等原功能。仅 macOS 显示。",
+      "fnRepostNameWin": "短按 CapsLock 保留原功能",
+      "fnRepostDescWin": "Hold + CapsLock 轻点（未达到阈值）时补发按键，正常执行大小写锁定；按住超过阈值才开录（此时 CapsLock 被占用）。"
     },
     "transcribe": {
       "title": "文件转录",
@@ -191,6 +195,7 @@
       "title": "App 行为",
       "launchName": "开机时启动应用",
       "launchDesc": "登录 macOS 时自动启动，静默常驻菜单栏。",
+      "launchDescWin": "登录 Windows 时自动启动，静默常驻系统托盘。",
       "muteName": "录音时静音其他应用",
       "muteDesc": "开启后，语音输入时暂停系统音频播放，完成后自动恢复。"
     },
@@ -211,15 +216,17 @@
       "axDesc": "用于将识别文字输入到当前光标",
       "authorize": "授权",
       "openSysSettings": "系统设置",
+      "hintWin": "Windows 请到「设置 → 隐私和安全性 → 麦克风」打开「允许桌面应用访问你的麦克风」；文字输入在 Windows 无需辅助功能授权。若设置里没有这些项，说明系统默认放行，可先试用。",
       "hint": "请用 ./scripts/build.sh install（固定签名 openIME Local Dev）安装后再授权；同一证书重装一般不必再授。若系统里有旧 openIME 条目仍无效：删掉旧条目后点上方「授权」。tauri dev 不走稳定签名，调试时授权可能反复失效。"
     },
     "fnTest": {
       "title": "功能测试",
       "hint": "按 Fn（🌐）键开始录音，对麦克风说话，识别结果实时显示在下方文本框中。再按 Fn 停止。",
+      "hintWin": "按住 CapsLock 说话（松开停止），识别结果实时显示在下方文本框中；短按保留大小写切换原功能。也可用组合键（如 Ctrl+Shift+D）切换模式触发。",
       "recording": "录音中…",
       "triggered": "已触发 {{count}} 次",
       "ready": "就绪",
-      "fnDown": "● Fn 按下",
+      "fnDown": "● {{key}} 按下",
       "waitingKey": "等待按键",
       "stop": "■ 停止",
       "manualRecord": "手动录音",

@@ -197,6 +197,8 @@ fn clear_pending(id: u64) {
 // ──────────────── 剪贴板（平台分发）────────────────
 
 /// 读剪贴板文本。macOS 走主线程（NSPasteboard 历史要求）；Windows arboard 直接调用。
+// `app` 仅 macOS 主线程调度用到；Windows 分支不用 → 允许未用形参告警。
+#[allow(unused_variables)]
 pub fn clipboard_get_text(app: &AppHandle) -> Result<Option<String>, String> {
     #[cfg(target_os = "macos")]
     {
@@ -216,6 +218,8 @@ pub fn clipboard_get_text(app: &AppHandle) -> Result<Option<String>, String> {
 }
 
 /// 写剪贴板文本。macOS 走主线程；Windows arboard 直接调用（OpenClipboard 短重试）。
+// `app`/`owned` 仅 macOS 主线程闭包用到；Windows 分支不用 → 允许未用变量告警。
+#[allow(unused_variables)]
 pub fn clipboard_set_text(app: &AppHandle, text: &str) -> Result<(), String> {
     let owned = text.to_string();
     #[cfg(target_os = "macos")]
@@ -268,6 +272,7 @@ fn run_on_main_blocking<T: Send + 'static>(
 /// 和弦规格（纯函数，单测断言平台差异：macOS=Cmd+V，Windows=Ctrl+V）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChordModifier {
+    #[allow(dead_code)] // 非 macOS 平台仅在 cfg(macos) 分支构造
     Cmd,
     #[allow(dead_code)] // 非 Windows 平台仅在 cfg(windows) 分支构造
     Ctrl,

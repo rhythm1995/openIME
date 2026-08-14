@@ -164,11 +164,13 @@ pub struct AppConfig {
     pub active_provider: usize,
     /// 用户已配置的 provider 列表（至少 1 个）。
     pub providers: Vec<ProviderConfig>,
-    /// 全局录音快捷键。支持 "Fn"（macOS Globe 键，原生监听）
+    /// 全局录音快捷键。支持 "Fn"（macOS Globe 键，原生监听）、
+    /// "CapsLock"（Windows 单键，WH_KEYBOARD_LL 钩子监听，默认）
     /// 或 Tauri/Accelerator 风格组合键如 "Alt+Shift+D"。
     pub hotkey: String,
-    /// 快捷键模式（A1）：Toggle（默认）/ Hold（按住说话）。
-    #[serde(default)]
+    /// 快捷键模式（A1）：Toggle / Hold（按住说话）。默认与平台配对：
+    /// macOS=Fn+Toggle；Windows=CapsLock+Hold（短按补发保留原功能）；其它=Toggle。
+    #[serde(default = "default_hotkey_mode")]
     pub hotkey_mode: HotkeyMode,
     /// 风格包循环切换快捷键（F1，可选，如 Ctrl+Shift+P；None=不启用）。
     #[serde(default)]
@@ -280,7 +282,9 @@ pub struct AppConfig {
 
     // ── P2：R11 Windows TSF ──
     /// Windows 优先用 TSF CommitText 上屏（未安装则静默回退）。
-    #[serde(default = "default_true")]
+    /// 默认关闭：TSF 上屏 FFI（命名管道 client）尚未落地，`tsf_enabled` 目前无消费方，
+    /// 默认 true 会承诺不存在的功能；FFI 落地后改回默认开启。
+    #[serde(default = "default_false")]
     pub windows_tsf_enabled: bool,
     /// TSF 提交失败时回退 P1 R7 粘贴。
     #[serde(default = "default_true")]
@@ -319,8 +323,35 @@ fn default_translate_target_lang() -> String {
 fn default_true() -> bool {
     true
 }
+fn default_false() -> bool {
+    false
+}
 fn default_short_press_ms() -> u32 {
     300
+}
+/// 默认录音快捷键（平台配对）：
+/// - macOS：`Fn`（Globe 键，原生 NSEvent 监听）。
+/// - Windows：`CapsLock`（单键按住说话，WH_KEYBOARD_LL 钩子；短按补发保留原功能）。
+///   Fn 在绝大多数 Windows 键盘由固件消费、系统不可见，不再作为默认。
+/// - 其它平台：可注册组合键 `Ctrl+Shift+D`（无单键监听实现）。
+fn default_hotkey() -> String {
+    if cfg!(target_os = "macos") {
+        "Fn".to_string()
+    } else if cfg!(target_os = "windows") {
+        "CapsLock".to_string()
+    } else {
+        "Ctrl+Shift+D".to_string()
+    }
+}
+
+/// 默认触发模式与快捷键配对：CapsLock 单键配 Hold（Toggle 会吞掉全部短按、
+/// 大小写锁定完全失效；Hold 短按可补发恢复原功能）。
+fn default_hotkey_mode() -> HotkeyMode {
+    if cfg!(target_os = "windows") {
+        HotkeyMode::Hold
+    } else {
+        HotkeyMode::Toggle
+    }
 }
 fn default_file_seg_duration_secs() -> u32 {
     60
@@ -344,8 +375,8 @@ impl Default for AppConfig {
                 vocabulary_id: None,
                 language: None,
             }],
-            hotkey: "Fn".to_string(),
-            hotkey_mode: HotkeyMode::Toggle,
+            hotkey: default_hotkey(),
+            hotkey_mode: default_hotkey_mode(),
             style_switch_hotkey: None,
             mute_other_audio: false,
             launch_at_login: false,
@@ -378,7 +409,7 @@ impl Default for AppConfig {
             short_press_ms: 300,
             fn_repost_enabled: true,
             fn_repost_tis_fallback: false,
-            windows_tsf_enabled: true,
+            windows_tsf_enabled: false,
             windows_tsf_fallback: true,
             file_seg_duration_secs: 60,
             file_seg_overlap_secs: 4,
@@ -595,10 +626,24 @@ mod tests {
         assert_eq!(c.short_press_ms, 300);
         assert!(c.fn_repost_enabled);
         assert!(!c.fn_repost_tis_fallback);
-        assert!(c.windows_tsf_enabled);
+        // R11：TSF FFI 落地前默认关闭，避免配置层承诺未实现的上屏通道。
+        assert!(!c.windows_tsf_enabled);
         assert!(c.windows_tsf_fallback);
         assert_eq!(c.file_seg_duration_secs, 60);
         assert_eq!(c.file_seg_overlap_secs, 4);
+    }
+
+    /// 默认快捷键与触发模式按平台配对：Windows 用 CapsLock+Hold（单键按住说话，
+    /// 短按补发保留原功能）；macOS 保持 Fn+Toggle；其它平台组合键+Toggle。
+    #[test]
+    fn hotkey_default_pairs_with_mode_per_platform() {
+        let c = AppConfig::default();
+        #[cfg(target_os = "macos")]
+        assert_eq!((&c.hotkey, c.hotkey_mode), (&"Fn".to_string(), HotkeyMode::Toggle));
+        #[cfg(target_os = "windows")]
+        assert_eq!((&c.hotkey, c.hotkey_mode), (&"CapsLock".to_string(), HotkeyMode::Hold));
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        assert_eq!((&c.hotkey, c.hotkey_mode), (&"Ctrl+Shift+D".to_string(), HotkeyMode::Toggle));
     }
 
     #[test]
@@ -624,32 +669,53 @@ mod tests {
 
     #[test]
     fn validate_p2_fields_rejects_out_of_range() {
-        let mut c = AppConfig::default();
-        c.short_press_ms = 50;
+        let c = AppConfig {
+            short_press_ms: 50,
+            ..AppConfig::default()
+        };
         assert!(c.validate_p2_fields().is_err());
-        c.short_press_ms = 900;
+        let c = AppConfig {
+            short_press_ms: 900,
+            ..AppConfig::default()
+        };
         assert!(c.validate_p2_fields().is_err());
 
-        let mut c = AppConfig::default();
-        c.file_seg_duration_secs = 5;
+        let c = AppConfig {
+            file_seg_duration_secs: 5,
+            ..AppConfig::default()
+        };
         assert!(c.validate_p2_fields().is_err());
-        c.file_seg_duration_secs = 200;
+        let c = AppConfig {
+            file_seg_duration_secs: 200,
+            ..AppConfig::default()
+        };
         assert!(c.validate_p2_fields().is_err());
 
-        let mut c = AppConfig::default();
-        c.file_seg_overlap_secs = 0;
+        let c = AppConfig {
+            file_seg_overlap_secs: 0,
+            ..AppConfig::default()
+        };
         assert!(c.validate_p2_fields().is_err());
-        c.file_seg_overlap_secs = 40;
+        let c = AppConfig {
+            file_seg_overlap_secs: 40,
+            ..AppConfig::default()
+        };
         assert!(c.validate_p2_fields().is_err());
     }
 
     #[test]
     fn validate_p2_fields_rejects_overlap_not_less_than_duration() {
-        let mut c = AppConfig::default();
-        c.file_seg_duration_secs = 10;
-        c.file_seg_overlap_secs = 10;
+        let c = AppConfig {
+            file_seg_duration_secs: 10,
+            file_seg_overlap_secs: 10,
+            ..AppConfig::default()
+        };
         assert!(c.validate_p2_fields().is_err());
-        c.file_seg_overlap_secs = 9;
+        let c = AppConfig {
+            file_seg_duration_secs: 10,
+            file_seg_overlap_secs: 9,
+            ..AppConfig::default()
+        };
         assert!(c.validate_p2_fields().is_ok());
     }
 }

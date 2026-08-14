@@ -14,7 +14,7 @@ describe("History", () => {
       clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
     });
     // jsdom 无 ResizeObserver
-    global.ResizeObserver = class {
+    globalThis.ResizeObserver = class {
       observe() {}
       unobserve() {}
       disconnect() {}

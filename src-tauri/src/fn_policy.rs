@@ -32,10 +32,36 @@ pub struct FnEdgeContext {
     pub this_press_started_recording: bool,
     /// 本次按住的时长（毫秒，松开时提供；仅观测用）。
     pub duration_ms: Option<u64>,
-    /// 录音键是否为 "Fn"（忽略大小写）。
-    pub is_fn_hotkey: bool,
+    /// 录音键是否为「单键」（macOS Fn / Windows CapsLock、best-effort Fn）。
+    /// 单键才有 Hold delay-start / 短按补发语义（组合键无可靠 key-up）。
+    pub is_single_key: bool,
     /// `fn_repost_enabled`。
     pub fn_repost_enabled: bool,
+}
+
+/// 单键监听目标（Windows 低阶键盘钩子 / macOS Fn 原生监听共用判定）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchKey {
+    /// macOS 🌐 Fn（原生 NSEvent / CGEventTap）；Windows 上为 best-effort 厂商扫描码。
+    Fn,
+    /// Windows 的「Fn 等价单键」：所有键盘都可靠上报，可吞键 / 补发。
+    CapsLock,
+    /// 非单键（组合键 / 未知）→ 走 global-shortcut 注册。
+    None,
+}
+
+/// 规范化 hotkey 字符串 → 单键监听目标。
+/// 接受 "Fn"/"CapsLock"（大小写 / 首尾空格 / 内部空格与 `-`、`_` 变体）。
+pub fn parse_watch_key(hotkey: &str) -> WatchKey {
+    let normalized = hotkey
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '-', '_'], "");
+    match normalized.as_str() {
+        "fn" | "globe" => WatchKey::Fn,
+        "capslock" | "caps" => WatchKey::CapsLock,
+        _ => WatchKey::None,
+    }
 }
 
 /// 按 p2-design「R9 状态机表」分类一次 Fn 边沿。
@@ -53,7 +79,7 @@ pub fn classify_fn_edge(c: &FnEdgeContext) -> FnEdgeAction {
         if !c.hold && c.already_recording {
             return FnEdgeAction::ToggleStop;
         }
-        if c.hold && c.is_fn_hotkey {
+        if c.hold && c.is_single_key {
             return FnEdgeAction::ArmHoldTimer;
         }
         return FnEdgeAction::StartRecord;
@@ -61,7 +87,7 @@ pub fn classify_fn_edge(c: &FnEdgeContext) -> FnEdgeAction {
     if !c.hold {
         return FnEdgeAction::IgnoreRelease;
     }
-    if !c.is_fn_hotkey {
+    if !c.is_single_key {
         return FnEdgeAction::IgnoreRelease;
     }
     if c.this_press_started_recording || c.already_recording {
@@ -83,10 +109,18 @@ pub fn should_ignore_fn_edge(now_ms: u64, ignore_until_ms: u64, is_magic_userdat
     is_magic_userdata || now_ms < ignore_until_ms
 }
 
-/// R9：`hotkey == "Fn"（忽略大小写）&& hotkey_mode == Hold` 才吞 Fn 键（delay-start 生效）。
-/// 只改 hotkey_mode（不改 hotkey 字符串）时本判定会随之翻转，供 `store_fn_tap_consume` 下发。
+/// R9：单键且 Hold 才吞键（delay-start 生效）。
+/// - Fn：仅 Hold 吞（Toggle 不吞，macOS 与 Windows 厂商 Fn 同策略）。
+/// - Windows CapsLock：**两种模式都吞**——否则 Toggle 每次触发都会翻转大小写锁定
+///   （Hold 也会在按下/抬起各翻一次），对文本输入是实打实的破坏。
+///
+/// 只改 hotkey_mode（不改 hotkey 字符串）时 Fn 的判定会随之翻转，供 `store_fn_tap_consume` 下发。
 pub fn fn_tap_can_consume(hotkey: &str, hold: bool) -> bool {
-    hotkey.trim().eq_ignore_ascii_case("fn") && hold
+    match parse_watch_key(hotkey) {
+        WatchKey::Fn => hold,
+        WatchKey::CapsLock => true,
+        WatchKey::None => false,
+    }
 }
 
 #[cfg(test)]
@@ -100,7 +134,7 @@ mod tests {
             already_recording: rec,
             this_press_started_recording: own,
             duration_ms: None,
-            is_fn_hotkey: is_fn,
+            is_single_key: is_fn,
             fn_repost_enabled: repost,
         }
     }
@@ -147,12 +181,31 @@ mod tests {
 
     #[test]
     fn fn_tap_can_consume_flips_with_hotkey_mode() {
-        // 只改 hotkey_mode（不改 hotkey 字符串）→ 吞键判定翻转（R9 清单）。
+        // 只改 hotkey_mode（不改 hotkey 字符串）→ Fn 的吞键判定翻转（R9 清单）。
         assert!(fn_tap_can_consume("Fn", true));
         assert!(fn_tap_can_consume("fn", true));
         assert!(fn_tap_can_consume(" Fn ", true));
         assert!(!fn_tap_can_consume("Fn", false)); // Toggle 不吞
+        // Windows CapsLock：两种模式都吞（Toggle 也要防止翻转大小写锁定）。
+        assert!(fn_tap_can_consume("CapsLock", true));
+        assert!(fn_tap_can_consume("caps lock", false));
+        assert!(fn_tap_can_consume("CapsLock", false));
         assert!(!fn_tap_can_consume("Alt+Shift+D", true)); // 组合键不吞
         assert!(!fn_tap_can_consume("", true));
+    }
+
+    #[test]
+    fn parse_watch_key_variants() {
+        assert_eq!(parse_watch_key("Fn"), WatchKey::Fn);
+        assert_eq!(parse_watch_key(" fn "), WatchKey::Fn);
+        assert_eq!(parse_watch_key("Globe"), WatchKey::Fn);
+        assert_eq!(parse_watch_key("CapsLock"), WatchKey::CapsLock);
+        assert_eq!(parse_watch_key("caps lock"), WatchKey::CapsLock);
+        assert_eq!(parse_watch_key("CAPS_LOCK"), WatchKey::CapsLock);
+        assert_eq!(parse_watch_key("caps"), WatchKey::CapsLock);
+        assert_eq!(parse_watch_key("Ctrl+Shift+D"), WatchKey::None);
+        assert_eq!(parse_watch_key(""), WatchKey::None);
+        // "Fn" 出现在组合键里不算单键。
+        assert_eq!(parse_watch_key("Fn+D"), WatchKey::None);
     }
 }

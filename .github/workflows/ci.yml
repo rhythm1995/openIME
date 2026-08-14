@@ -68,6 +68,43 @@ jobs:
       - name: cargo check src-tauri
         run: cargo check -p openime
 
+  # Tauri 壳：Windows 编译检查。
+  # 必要性：macOS 专属 API（ActivationPolicy / RunEvent::Reopen 等）与
+  # windows-rs 0.58 类型漂移（HWND/PWSTR）只在 Windows 编译时暴露——
+  # 此 job 兜住这类回归（此前 src-tauri 只在 macOS 编译，Windows 编译错误长期无人发现）。
+  tauri-shell-windows:
+    name: src-tauri build check (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+      - name: Build frontend
+        run: pnpm build
+      # 门禁与 macOS job 对齐：clippy -D warnings（2026-08-14 全 workspace clippy 清零后启用）。
+      - name: Clippy src-tauri
+        run: cargo clippy -p openime -- -D warnings
+      - name: cargo check src-tauri (default features incl. sherpa)
+        run: cargo check -p openime
+      # Windows 专属单元测试（platform/windows 的 focus/permissions/uia、
+      # windows_ime 纯协议层）。注册表测试在本机/CI 默认放行场景下可过；
+      # 依赖桌面交互的场景（UIA）只做 no-panic 冒烟断言。
+      - name: cargo test src-tauri
+        run: cargo test -p openime
+
   # 前端：Vitest。
   frontend:
     name: frontend vitest

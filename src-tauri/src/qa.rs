@@ -184,7 +184,11 @@ pub fn close_qa_panel(app: &AppHandle) {
         .and_then(|w| w.is_visible().ok())
         .unwrap_or(false);
     if !main_visible {
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        // macOS：回到菜单栏常驻形态（Accessory）；Windows 无此概念，跳过。
+        #[cfg(target_os = "macos")]
+        {
+            let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        }
     }
     emit_state(app, "close");
 }
@@ -256,7 +260,8 @@ pub async fn insert_last_answer(app: &AppHandle) -> Result<Option<voice_core::In
     };
     let app_state = app.state::<AppState>();
     let inserter = app_state.composite_inserter().map_err(|e| e.to_string())?;
-    let cfg = app_state.config.blocking_read().clone();
+    // async 上下文必须用 read().await：blocking_read 在 tokio worker 上会 panic。
+    let cfg = app_state.config.read().await.clone();
     // R11：QA 插入光标也走唯一业务构造（非流式）。
     let opts = voice_core::InsertOpts::from_config(&cfg, frontmost.clone(), false);
     // 先还焦到开窗时的前台（QA 窗此刻在前台，直接插会进 webview）。
@@ -330,7 +335,8 @@ pub async fn ask_and_stream(app: &AppHandle, question: &str) {
     let save_history = app
         .state::<AppState>()
         .config
-        .blocking_read()
+        .read()
+        .await
         .qa_save_history;
 
     let cloud = match app.state::<AppState>().cloud_llm().await {

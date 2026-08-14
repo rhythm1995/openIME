@@ -105,7 +105,7 @@ pub async fn save_app_config(
     Ok(())
 }
 
-/// PR4：保存校验——每个非空热键可解析（Fn 例外），且两两不等（A4.5 等）。
+/// PR4：保存校验——每个非空热键可解析（单键 Fn / CapsLock 仅录音支持），且两两不等（A4.5 等）。
 fn validate_hotkeys(cfg: &AppConfig) -> Result<(), String> {
     let mut entries: Vec<(String, String)> = Vec::new();
     for (name, hk) in [
@@ -119,11 +119,18 @@ fn validate_hotkeys(cfg: &AppConfig) -> Result<(), String> {
         if s.is_empty() {
             continue;
         }
-        if s.eq_ignore_ascii_case("fn") {
+        // 单键（macOS Fn / Windows CapsLock）仅录音快捷键支持；
+        // CapsLock 接受变体写法（"caps lock" / "CAPS_LOCK" / "caps"），归一化后查重。
+        if s.eq_ignore_ascii_case("fn") || crate::fn_policy::parse_watch_key(s) == crate::fn_policy::WatchKey::CapsLock {
             if name != "录音" {
-                return Err(format!("仅录音快捷键支持 Fn（{name}快捷键请用组合键）"));
+                return Err(format!("仅录音快捷键支持单键 Fn/CapsLock（{name}快捷键请用组合键）"));
             }
-            entries.push((name.into(), "fn".into()));
+            let canonical = if s.eq_ignore_ascii_case("fn") {
+                "fn".to_string()
+            } else {
+                "capslock".to_string()
+            };
+            entries.push((name.into(), canonical));
             continue;
         }
         if crate::parse_shortcut(s).is_none() {
@@ -357,10 +364,18 @@ fn system_info_ensure(state: &State<'_, AppState>) -> Option<voice_core::SystemI
     if let Some(cached) = system_info_cached(&state.store) {
         return Some(cached);
     }
-    let fresh = voice_core::collect_system_info();
+    let fresh = collect_system_info_for(state);
     let json = serde_json::to_string(&fresh).unwrap_or_default();
     let _ = state.store.set_setting(SYSTEM_INFO_KEY, &json);
     Some(fresh)
+}
+
+/// 采集本机信息：磁盘剩余按模型目录所在卷计算（无模型目录回退当前目录）。
+fn collect_system_info_for(state: &State<'_, AppState>) -> voice_core::SystemInfo {
+    let disk_path = state
+        .model_root()
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    voice_core::collect_system_info(&disk_path)
 }
 
 #[tauri::command]
@@ -373,7 +388,7 @@ pub fn get_system_info(
             return Ok(cached);
         }
     }
-    let fresh = voice_core::collect_system_info();
+    let fresh = collect_system_info_for(&state);
     let json = serde_json::to_string(&fresh).map_err(|e| e.to_string())?;
     state
         .store
@@ -573,6 +588,9 @@ pub async fn install_polish_model(
         state
             .model_downloading
             .store(false, std::sync::atomic::Ordering::SeqCst);
+        log_info!("本地润色模型已安装，无需下载");
+        // 已安装也发完成事件：前端借此刷新状态（否则用户点击下载无任何可见反馈）。
+        let _ = app.emit("model://download-complete", "polish");
         return Ok(());
     }
 
@@ -631,6 +649,8 @@ pub async fn install_local_model(
             .model_downloading
             .store(false, std::sync::atomic::Ordering::SeqCst);
         log_info!("本地模型（{}）已安装，无需下载", mode);
+        // 已安装也发完成事件：前端借此刷新状态（否则用户点击下载无任何可见反馈）。
+        let _ = app.emit("model://download-complete", &mode);
         return Ok(());
     }
 
@@ -697,6 +717,12 @@ pub async fn request_microphone(app: AppHandle) -> bool {
     // 1) 结果已知（已授权/已拒绝）直接返回。
     if let Some(known) = perm::microphone_preflight() {
         log_info!("request_microphone: 状态已知 granted={known}");
+        // 已拒绝：Windows 无法程序触发授权弹窗，"授权"按钮行为 = 打开系统设置引导。
+        if !known {
+            if let Err(e) = perm::open_settings_pane("Privacy_Microphone") {
+                log_warn!("打开麦克风设置面板失败：{e}");
+            }
+        }
         return known;
     }
 
@@ -766,13 +792,31 @@ fn run_on_main_sync(app: &AppHandle, f: impl FnOnce() + Send + 'static) {
     }
 }
 
+/// 判断 `frontmost` 标识是否为 openIME 自身。
+/// macOS 捕获的是 bundle id（"com.openime.desktop"）；Windows 捕获的是 exe basename
+/// （如 "openime.exe"，与 `current_exe` 同名）。两平台各自的字面量互不相等，
+/// 用 `cfg!` 常量折叠让另一个分支在编译期消除，无 dead_code 告警。
+fn is_self_bundle_id(bid: &str) -> bool {
+    if bid == "com.openime.desktop" {
+        return true;
+    }
+    if cfg!(target_os = "windows") {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
+                return bid.eq_ignore_ascii_case(name);
+            }
+        }
+    }
+    false
+}
+
 /// 仅恢复前台 app（不隐藏 overlay）。插入文字前用，HUD 保持可见。
 fn restore_frontmost_focus(app: &AppHandle, frontmost: Option<&str>) {
     let Some(bid) = frontmost else { return };
     let bid = bid.to_string();
     let app2 = app.clone();
     run_on_main_sync(app, move || {
-        if bid == "com.openime.desktop" {
+        if is_self_bundle_id(&bid) {
             if let Some(main) = app2.get_webview_window("main") {
                 let _ = main.set_focus();
             }
@@ -799,7 +843,20 @@ fn hide_overlay_only(app: &AppHandle) {
                     }
                 }
             }
-            #[cfg(not(target_os = "macos"))]
+            // Windows：直调 HWND SW_HIDE（ShowWindow 线程安全）。经 Tauri 调度在主线程
+            // 繁忙时可能被 run_on_main_sync 的 1s 超时丢弃 → overlay 残留。
+            #[cfg(target_os = "windows")]
+            {
+                match win.hwnd() {
+                    Ok(hwnd) => {
+                        crate::platform::windows::fn_key::hide_window_raw(hwnd.0);
+                    }
+                    Err(_) => {
+                        let _ = win.hide();
+                    }
+                }
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             {
                 let _ = win.hide();
             }
@@ -1059,10 +1116,10 @@ pub async fn toggle_recording(
                     let esc = (intent == voice_core::SessionIntent::Dictate)
                         .then(|| Shortcut::new(None, Code::Escape));
                     if esc.is_some() {
-                        app_handle
-                            .state::<AppState>()
-                            .clear_cancel_polish();
-                        let _ = app_handle.global_shortcut().register(esc.unwrap());
+                        app_handle.state::<AppState>().clear_cancel_polish();
+                        let _ = app_handle
+                            .global_shortcut()
+                            .register(Shortcut::new(None, Code::Escape));
                     }
                     let insert_res = pipeline
                         .insert_finals_with_polish(
@@ -1252,17 +1309,10 @@ pub fn delete_style_pack(state: State<'_, AppState>, id: String) -> Result<(), S
         .map_err(|e| e.to_string())
 }
 
-/// F4：读前台 app 当前选中的文字（macOS AX 直读，不碰剪贴板）。
+/// F4：读前台 app 当前选中的文字（macOS AX 直读；Windows UIA TextPattern；不碰剪贴板）。
 #[tauri::command]
 pub fn get_selection() -> Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        Ok(crate::platform::current::fn_key::get_selection())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(None)
-    }
+    Ok(crate::platform::current::fn_key::get_selection())
 }
 
 /// D3：文件转录结果（文本 + srt 字幕）。
@@ -1424,12 +1474,13 @@ mod tests {
     use super::*;
 
     fn base_cfg() -> AppConfig {
-        let mut c = AppConfig::default();
-        c.hotkey = "Fn".into();
-        c.style_switch_hotkey = Some("Ctrl+Shift+P".into());
-        c.translate_hotkey = Some("Alt+Shift+T".into());
-        c.qa_hotkey = Some("Cmd+Shift+;".into());
-        c
+        AppConfig {
+            hotkey: "Fn".into(),
+            style_switch_hotkey: Some("Ctrl+Shift+P".into()),
+            translate_hotkey: Some("Alt+Shift+T".into()),
+            qa_hotkey: Some("Cmd+Shift+;".into()),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1470,6 +1521,23 @@ mod tests {
         assert!(validate_hotkeys(&c).is_err());
     }
 
+    /// Windows 默认单键 CapsLock：录音键放行（含变体写法），其它快捷键拒绝。
+    #[test]
+    fn capslock_single_key_only_allowed_for_recording() {
+        let mut c = base_cfg();
+        c.hotkey = "CapsLock".into();
+        assert!(validate_hotkeys(&c).is_ok(), "录音键 CapsLock 应放行");
+        // 变体写法（空格/下划线/简写）同样放行。
+        for v in ["caps lock", "CAPS_LOCK", "caps"] {
+            let mut c = base_cfg();
+            c.hotkey = v.into();
+            assert!(validate_hotkeys(&c).is_ok(), "录音键 {v:?} 应放行");
+        }
+        let mut c = base_cfg();
+        c.translate_hotkey = Some("CapsLock".into());
+        assert!(validate_hotkeys(&c).is_err(), "非录音键 CapsLock 应拒绝");
+    }
+
     #[test]
     fn p2_fields_validated_on_save() {
         let mut c = base_cfg();
@@ -1480,5 +1548,23 @@ mod tests {
         c.file_seg_overlap_secs = 60;
         assert!(c.validate_p2_fields().is_err());
         assert!(base_cfg().validate_p2_fields().is_ok());
+    }
+
+    /// 3.5：还焦自身识别——macOS 用 bundle id；Windows 用 exe basename（大小写不敏感）。
+    #[test]
+    fn self_bundle_id_detection() {
+        assert!(is_self_bundle_id("com.openime.desktop"));
+        assert!(!is_self_bundle_id("com.apple.notes"));
+        #[cfg(target_os = "windows")]
+        {
+            let own = std::env::current_exe().unwrap();
+            let name = own.file_name().unwrap().to_string_lossy().to_string();
+            assert!(is_self_bundle_id(&name), "自身 exe basename 应识别为自身");
+            assert!(
+                is_self_bundle_id(&name.to_ascii_uppercase()),
+                "exe basename 比对应大小写不敏感"
+            );
+            assert!(!is_self_bundle_id("notepad.exe"));
+        }
     }
 }

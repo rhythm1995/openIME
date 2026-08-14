@@ -37,7 +37,7 @@ pub fn detect_prefix_role<'a>(text: &str, packs: &'a [StylePack]) -> Option<(&'a
     let (pack, n) = best?;
     let rest: String = t.chars().skip(n).collect();
     let rest = rest
-        .trim_start_matches(|c: char| matches!(c, '：' | ':' | '，' | ',' | '。' | '.' | ' '))
+        .trim_start_matches(['：', ':', '，', ',', '。', '.', ' '])
         .trim();
     if rest.is_empty() {
         return None;

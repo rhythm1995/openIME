@@ -198,6 +198,7 @@ pub fn decide_restore(
 /// 前台 app 标识是否命中粘贴兜底列表（FR-7.4）。
 /// - macOS：bundle id 包含关键字（与 punct_half_width_apps 一致）。
 /// - Windows：exe basename（小写）== kw、== kw+".exe" 或包含 kw。
+///
 /// 实现取并集（== / +".exe" / contains），跨平台可单测（A7.7）。
 pub fn matches_paste_fallback(frontmost: Option<&str>, apps: &[String]) -> bool {
     let Some(f) = frontmost else {
@@ -355,24 +356,28 @@ mod tests {
 
     #[test]
     fn from_config_mirrors_cfg_and_frontmost() {
-        let mut cfg = AppConfig::default();
-        cfg.insert_strategy = InsertStrategy::Paste;
-        cfg.paste_fallback_apps = vec!["mstsc".into()];
-        cfg.restore_clipboard = false;
-        cfg.windows_tsf_enabled = true;
-        cfg.windows_tsf_fallback = true;
+        let cfg = AppConfig {
+            insert_strategy: InsertStrategy::Paste,
+            paste_fallback_apps: vec!["mstsc".into()],
+            restore_clipboard: false,
+            windows_tsf_enabled: true,
+            windows_tsf_fallback: true,
+            ..AppConfig::default()
+        };
         let opts = InsertOpts::from_config(&cfg, Some("com.apple.notes".into()), false);
         assert_eq!(opts.strategy, InsertStrategy::Paste);
         assert_eq!(opts.paste_fallback_apps, vec!["mstsc".to_string()]);
         assert!(!opts.restore_clipboard);
         assert_eq!(opts.frontmost.as_deref(), Some("com.apple.notes"));
-        assert_eq!(opts.tsf_fallback, true);
+        assert!(opts.tsf_fallback);
     }
 
     #[test]
     fn from_config_tsf_disabled_on_non_windows_and_streaming() {
         // A11.8b：非 Windows 平台 tsf_enabled 恒 false；streaming=true 也 false。
         let cfg = AppConfig::default();
+        // R11：TSF FFI 落地前 windows_tsf_enabled 默认 false，因此 Windows 默认也不启用；
+        // FFI 落地、默认值改回 true 后，此断言需恢复为 #[cfg(not(windows))] 门控。
         assert!(!InsertOpts::from_config(&cfg, None, false).tsf_enabled);
         assert!(!InsertOpts::from_config(&cfg, None, true).tsf_enabled);
         // Default 漏填 = 静默降级。

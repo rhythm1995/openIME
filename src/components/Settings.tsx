@@ -32,6 +32,8 @@ const DEFAULT_LOCAL_ASR = "sensevoice";
 
 // R9：「Hold 下短按 Fn 补发 🌐」仅 macOS 渲染（非 macOS 隐藏，不灰字占位）。
 const IS_MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+// 系统权限提示文案随平台切换（Windows 无辅助功能授权概念，且深链走 ms-settings 设置页）。
+const IS_WIN = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
 
 function fmtSize(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
@@ -113,18 +115,35 @@ export default function Settings() {
       );
     // 非首屏必需：延后到下一帧，先让配置渲染出来，避免打开窗口时一堆 IPC 抢主线程。
     let deferredHandle: number | ReturnType<typeof setTimeout> | null = null;
+    // 启动竞态兜底：前端挂载早于后端 setup（app.manage(state)），首帧 IPC 会报
+    // "state not managed"。对这些「状态拉取」做有界重试，失败静默会误显示兜底目录
+    // （全部未安装 + 下载按钮）。5 次 × 800ms 覆盖 setup 完成窗口。
+    const fetchWithRetry = <T,>(
+      fn: () => Promise<T>,
+      attempts = 5,
+      delay = 800,
+    ): Promise<T> =>
+      fn().catch((e) => {
+        if (attempts <= 1) throw e;
+        return new Promise<T>((resolve, reject) => {
+          setTimeout(
+            () => fetchWithRetry(fn, attempts - 1, delay).then(resolve, reject),
+            delay,
+          );
+        });
+      });
     const loadSecondary = () => {
       if (cancelled) return;
       ipc.getLaunchAtLogin().then((v) => {
         if (!cancelled) setAutoStart(v);
       }).catch(() => {});
-      ipc.listLocalAsrModels().then((list) => {
+      fetchWithRetry(() => ipc.listLocalAsrModels()).then((list) => {
         if (!cancelled) setAsrModels(Array.isArray(list) ? list : []);
       }).catch(() => {});
-      ipc.getLocalModelStatus().then((s) => {
+      fetchWithRetry(() => ipc.getLocalModelStatus()).then((s) => {
         if (!cancelled) setModelStatus(s);
       }).catch(() => {});
-      ipc.getPolishModelStatus().then((s) => {
+      fetchWithRetry(() => ipc.getPolishModelStatus()).then((s) => {
         if (!cancelled) setPolishStatus(s);
       }).catch(() => {});
       ipc.listStylePacks().then((p) => {
@@ -268,6 +287,13 @@ export default function Settings() {
   };
 
   if (!config) return <p>{t("common.loading")}</p>;
+
+  // 单键录音键（macOS Fn / Windows CapsLock）：补发开关、功能测试徽标按此切换文案。
+  // 与后端 fn_policy::parse_watch_key 的规范化规则保持一致（空格/下划线/连字符）。
+  const hotkeyNorm = (config.hotkey ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  const isFnHotkey = hotkeyNorm === "fn" || hotkeyNorm === "globe";
+  const isCapsHotkey = hotkeyNorm === "capslock" || hotkeyNorm === "caps";
+  const singleKeyLabel = isCapsHotkey ? "Caps" : "Fn";
 
   const active = config.providers[config.active_provider] ?? config.providers[0];
   const setActive = (patch: Partial<ProviderConfig>) =>
@@ -1393,7 +1419,7 @@ export default function Settings() {
             onChange={(e) => setConfig({ ...config, hotkey: e.target.value })}
           />
           <span className="field-hint">
-            {t("settings.hotkey.recordHint")}
+            {t(IS_WIN ? "settings.hotkey.recordHintWin" : "settings.hotkey.recordHint")}
           </span>
           <div style={{ marginTop: 10 }}>
             <label className="field-label">{t("settings.hotkey.modeLabel")}</label>
@@ -1423,11 +1449,15 @@ export default function Settings() {
             />
             <span className="field-hint">{t("settings.hotkey.shortPressHint")}</span>
           </div>
-          {IS_MAC && (
+          {(IS_MAC || isCapsHotkey) && (
             <div className="set-row" style={{ marginTop: 12 }}>
               <div>
-                <div className="set-name">{t("settings.hotkey.fnRepostName")}</div>
-                <div className="set-desc">{t("settings.hotkey.fnRepostDesc")}</div>
+                <div className="set-name">
+                  {t(IS_WIN ? "settings.hotkey.fnRepostNameWin" : "settings.hotkey.fnRepostName")}
+                </div>
+                <div className="set-desc">
+                  {t(IS_WIN ? "settings.hotkey.fnRepostDescWin" : "settings.hotkey.fnRepostDesc")}
+                </div>
               </div>
               <label className="switch">
                 <input
@@ -1482,13 +1512,13 @@ export default function Settings() {
             />
             <span className="field-hint">{t("settings.hotkey.qaHint")}</span>
           </div>
-          {config.hotkey.trim().toLowerCase() === "fn" && (
+          {isFnHotkey && (
             <span
               className="field-hint"
               style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4, color: "var(--warning)" }}
             >
               <StatusIcon warn />
-              {t("settings.hotkey.fnWarning")}
+              {t(IS_WIN ? "settings.hotkey.fnWarningWin" : "settings.hotkey.fnWarning")}
             </span>
           )}
         </div>
@@ -1696,7 +1726,9 @@ export default function Settings() {
         <div className="set-row">
           <div>
             <div className="set-name">{t("settings.appBehavior.launchName")}</div>
-            <div className="set-desc">{t("settings.appBehavior.launchDesc")}</div>
+            <div className="set-desc">
+              {t(IS_WIN ? "settings.appBehavior.launchDescWin" : "settings.appBehavior.launchDesc")}
+            </div>
           </div>
           <label className="switch">
             <input
@@ -1808,7 +1840,7 @@ export default function Settings() {
         </div>
         {(mic?.state !== "granted" || ax?.state !== "granted") && (
           <span className="field-hint" style={{ display: "block", marginTop: 8 }}>
-            {t("settings.permission.hint")}
+            {t(IS_WIN ? "settings.permission.hintWin" : "settings.permission.hint")}
           </span>
         )}
       </div>
@@ -1817,7 +1849,7 @@ export default function Settings() {
       <div className="card">
         <h2 className="card-title">{t("settings.fnTest.title")}</h2>
         <span className="field-hint" style={{ display: "block", marginBottom: 12 }}>
-          {t("settings.fnTest.hint")}
+          {t(IS_WIN ? "settings.fnTest.hintWin" : "settings.fnTest.hint")}
         </span>
 
         {/* 状态指示 */}
@@ -1838,7 +1870,7 @@ export default function Settings() {
                 transition: "all 0.1s",
               }}
             >
-              Fn
+              {singleKeyLabel}
             </div>
             <div>
               <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
@@ -1853,7 +1885,9 @@ export default function Settings() {
                 )}
               </div>
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                {fnState === "down" ? t("settings.fnTest.fnDown") : t("settings.fnTest.waitingKey")}
+                {fnState === "down"
+                  ? t("settings.fnTest.fnDown", { key: singleKeyLabel })
+                  : t("settings.fnTest.waitingKey")}
               </div>
             </div>
           </div>

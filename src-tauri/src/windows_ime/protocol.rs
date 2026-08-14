@@ -207,6 +207,6 @@ mod tests {
                 error_code: Some(ImeErrorCode::TooLarge),
             }
         );
-        assert_eq!(serde_json::to_string(&parsed).unwrap().contains("too_large"), true);
+        assert!(serde_json::to_string(&parsed).unwrap().contains("too_large"));
     }
 }

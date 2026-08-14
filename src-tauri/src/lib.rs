@@ -29,8 +29,17 @@ use state::AppState;
 /// Fn 键回调在原生块上下文执行（无捕获），需要全局拿到 AppHandle。
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
-/// 默认快捷键（配置缺失/解析失败时兜底）。
+/// 兜底组合键（非 macOS）：
+/// - 单键（Fn / CapsLock）在 Windows 上注册钩子的同时**总是注册**它——单键在
+///   openIME 自有窗口前台时被 WebView 屏蔽（Tauri #14770），且 Fn 多数键盘固件消费，
+///   兜底保证开箱即有可用触发（设置页文案已说明）。
+/// - 配置值无法解析时也回退注册它。
+/// 注意：不再是配置默认值——Windows 配置默认已改为 CapsLock（voice-core
+/// `default_hotkey()`），两者语义独立。
+#[cfg(target_os = "macos")]
 const DEFAULT_HOTKEY: &str = "Alt+Shift+D";
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_HOTKEY: &str = "Ctrl+Shift+D";
 /// R9：按下防抖窗口（滤 CGEventTap + NSEvent 双监听漏网的重复 down）。
 const FN_PRESS_DEBOUNCE_MS: u64 = 50;
 
@@ -40,7 +49,7 @@ pub fn run() {
     let log_dir = logging::init();
     log_info!("openIME 启动，日志目录：{}", log_dir.display());
 
-    let mut app = tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         // 开机自启（macOS 用 LaunchAgent）：自启时附带 --autostart 参数，
@@ -73,8 +82,8 @@ pub fn run() {
                 anyhow::anyhow!("创建 data_dir 失败: {e}")
             })?;
 
-            // 单实例：通过 unix domain socket 协调。
-            // 已有实例在跑 → 新进程发 "show" 指令唤起已运行实例的主窗口，然后自己退出。
+            // 单实例：macOS/Linux 用 unix domain socket，Windows 用命名互斥体。
+            // 已有实例在跑 → 新进程唤起已运行实例的主窗口，然后自己退出。
             // 这是用户「再次打开 app」时期望的行为（弹出现有实例，而非开第二个）。
             let sock_path = data_dir.join("openime.sock");
             if let Err(e) = single_instance_check(app.handle().clone(), &sock_path) {
@@ -190,9 +199,13 @@ pub fn run() {
                         if let Some(win) = app_handle.get_webview_window("main") {
                             let _ = win.hide();
                         }
-                        // 回到菜单栏常驻形态，Dock 图标消失。
-                        let _ =
-                            app_handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                        // 回到菜单栏常驻形态，Dock 图标消失（ActivationPolicy 为 macOS 专属，
+                        // Windows 无此概念，关闭即隐藏窗口，由托盘 / 快捷键再唤起）。
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ =
+                                app_handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                        }
                         log_info!("main 窗口关闭请求 → 隐藏并恢复 Accessory");
                     }
                 });
@@ -325,23 +338,36 @@ pub fn run() {
 
     log_info!("进入事件循环");
 
-    // 默认 Accessory：不抢焦点、录音 HUD 不抢前台。
+    // 默认 Accessory：不抢焦点、录音 HUD 不抢前台（macOS 专属激活策略；
+    // Windows 无 Dock / Accessory 概念，主窗口显隐直接由 show/hide 控制）。
     // 若 setup 已显示主窗口（非开机自启），再切回 Regular，否则会出现
     // 「启动后主窗口在但点不进 / Dock 与菜单栏像装了两份」的错觉。
-    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-    if let Some(main) = app.get_webview_window("main") {
-        if main.is_visible().unwrap_or(false) {
-            app.set_activation_policy(tauri::ActivationPolicy::Regular);
-            log_info!("主窗口可见 → Regular 激活策略");
-        } else {
-            log_info!("主窗口隐藏 → Accessory（菜单栏常驻）");
+    #[cfg(target_os = "macos")]
+    {
+        app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        if let Some(main) = app.get_webview_window("main") {
+            if main.is_visible().unwrap_or(false) {
+                app.set_activation_policy(tauri::ActivationPolicy::Regular);
+                log_info!("主窗口可见 → Regular 激活策略");
+            } else {
+                log_info!("主窗口隐藏 → Accessory（菜单栏常驻）");
+            }
         }
     }
     app.run(|app_handle, event| {
         // Dock 图标点击：始终拉起主面板（即使 has_visible_windows 因 overlay 为 true）。
-        if let tauri::RunEvent::Reopen { .. } = event {
-            log_info!("Reopen（Dock 点击）→ 打开主窗口");
-            show_main_window(app_handle);
+        // `RunEvent::Reopen` 为 macOS 专属（Dock 点击 reopen）；Windows 无此事件，
+        // 闭包在非 macOS 上为空操作（仅消解未用形参告警）。
+        #[cfg(target_os = "macos")]
+        {
+            if let tauri::RunEvent::Reopen { .. } = event {
+                log_info!("Reopen（Dock 点击）→ 打开主窗口");
+                show_main_window(app_handle);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (app_handle, event);
         }
     });
     log_info!("Tauri 事件循环结束，进程退出");
@@ -380,13 +406,43 @@ fn on_hotkey(app: &tauri::AppHandle, shortcut: &Shortcut) {
         on_qa_hotkey(app);
         return;
     }
-    let record_sc = parse_shortcut(cfg.hotkey.trim());
+    let record_sc = effective_record_shortcut(&cfg);
     if record_sc == Some(*shortcut) {
         on_record_hotkey(app);
         return;
     }
     // 未注册组合键（如动态注册的 ESC 之外）忽略。
     log_info!("未匹配的快捷键：{shortcut:?}");
+}
+
+/// 录音快捷键的「实际生效值」：与 `apply_hotkey` 的注册行为保持一致，供 on_hotkey 路由。
+/// - macOS 配 Fn：走原生 NSEvent 监听，无 OS 级快捷键 → None。
+/// - Windows 配单键（CapsLock / Fn）：走低阶键盘钩子；同时注册了 DEFAULT_HOTKEY
+///   兜底（单键在自有窗口前台时被 WebView 屏蔽）→ 路由兜底组合键。
+/// - 配置值无法解析：与 apply_hotkey 一样回退 DEFAULT_HOTKEY（注册了就必须能路由）。
+fn effective_record_shortcut(cfg: &voice_core::AppConfig) -> Option<Shortcut> {
+    let trimmed = cfg.hotkey.trim();
+    let watch = fn_policy::parse_watch_key(trimmed);
+    if watch != fn_policy::WatchKey::None {
+        #[cfg(target_os = "macos")]
+        {
+            if watch == fn_policy::WatchKey::Fn {
+                return None; // Fn 由原生监听触发，不经 global shortcut 路由
+            }
+            // macOS 无 CapsLock 原生监听 → 回退组合键（与 apply_hotkey 注册行为一致）。
+            return parse_shortcut(DEFAULT_HOTKEY);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // 单键由钩子触发；apply_hotkey 同时注册了兜底组合键，这里路由兜底值。
+            return parse_shortcut(DEFAULT_HOTKEY);
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            return parse_shortcut(DEFAULT_HOTKEY);
+        }
+    }
+    parse_shortcut(trimmed).or_else(|| parse_shortcut(DEFAULT_HOTKEY))
 }
 
 /// R4：翻译快捷键（P1 仅 Toggle）。无云端 key → 不写 intent、不录音（FR-4.5）。
@@ -497,37 +553,46 @@ fn cycle_style_pack(app: &tauri::AppHandle) {
     let _ = app.emit("style://switched", label);
 }
 
+/// overlay 目标位置：当前显示器左下角偏上（逻辑坐标）。
+/// macOS 经 ObjC HUD 定位；Windows 显示前用 set_position（tao 实现带 SWP_NOACTIVATE，
+/// 不会激活窗口）+ SW_SHOWNOACTIVATE。conf 初始位置 y=99999（屏幕外），必须显示前定位。
+fn overlay_target_position(win: &tauri::WebviewWindow) -> (f64, f64) {
+    match win.current_monitor() {
+        Ok(Some(monitor)) => {
+            let size = monitor.size();
+            let scale = monitor.scale_factor();
+            let logical_h = size.height as f64 / scale;
+            let win_h = win
+                .outer_size()
+                .map(|s| s.height as f64 / scale)
+                .unwrap_or(40.0);
+            // 物理→逻辑后，y 从底部往上 60pt。
+            let y = (logical_h - win_h - 60.0).max(0.0);
+            (16.0, y)
+        }
+        _ => (16.0, 60.0),
+    }
+}
+
 /// 显示录音 overlay，尽量不抢走用户当前输入框的焦点/光标。
 /// `frontmost`：显示**前**捕获的前台 app。
 ///
-/// 注意：不要在这里调用 Tauri 的 set_focus / set_position / show——它们常会
+/// 注意：不要在这里调用 Tauri 的 set_focus / show——它们常会
 /// makeKey 或激活 openIME，导致 input caret 消失。定位与显示全部走 ObjC HUD 路径。
+// `frontmost` 仅 macOS ObjC HUD 还焦路径用到；Windows overlay 显示不消费它 → 允许未用形参。
+#[allow(unused_variables)]
 fn show_overlay(app: &tauri::AppHandle, frontmost: Option<&str>) {
     match app.get_webview_window("overlay") {
         Some(win) => {
             // 仅设置忽略鼠标（Tauri）；失败忽略，ObjC 侧也会设 ignoresMouseEvents。
             let _ = win.set_ignore_cursor_events(true);
             let _ = win.set_focusable(false);
+            // 目标位置（macOS HUD 与 Windows 无激活显示共用）。
+            let (x, y) = overlay_target_position(&win);
 
             #[cfg(target_os = "macos")]
             {
-                // AppKit 坐标：原点在屏幕左下。算左下角偏上一点的位置。
-                let (x, y) = match win.current_monitor() {
-                    Ok(Some(monitor)) => {
-                        let size = monitor.size();
-                        let scale = monitor.scale_factor();
-                        let logical_h = size.height as f64 / scale;
-                        let win_h = win
-                            .outer_size()
-                            .map(|s| s.height as f64 / scale)
-                            .unwrap_or(40.0);
-                        // 物理→逻辑后，y 从底部往上 60pt。
-                        let y = (logical_h - win_h - 60.0).max(0.0);
-                        (16.0, y)
-                    }
-                    _ => (16.0, 60.0),
-                };
-
+                // AppKit 坐标：原点在屏幕左下。
                 match win.ns_window() {
                     Ok(ns) => {
                         crate::platform::current::fn_key::show_overlay_preserving_focus(
@@ -556,7 +621,31 @@ fn show_overlay(app: &tauri::AppHandle, frontmost: Option<&str>) {
                     }
                 }
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "windows")]
+            {
+                // 无激活显示（SW_SHOWNOACTIVATE）：Tauri 的 win.show() 走 SW_SHOW，
+                // 即便窗口已设 focusable=false 仍可能打断用户输入。此处取原生 HWND 直调。
+                // set_position 用 tao 实现（SWP_NOACTIVATE），不会激活窗口。
+                // 注意：Tauri 用 windows 0.61 的 HWND（透明类型），经 `.0` 取裸指针桥接给
+                // 平台层（本项目 windows 0.58），避免跨版本类型不匹配。
+                let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
+                    x, y,
+                )));
+                match win.hwnd() {
+                    Ok(hwnd) => {
+                        // tauri 0.61 的 HWND.0 已是 *mut c_void，与平台层（0.58）签名一致，直接传。
+                        crate::platform::current::fn_key::show_window_without_activating(hwnd.0);
+                    }
+                    Err(e) => {
+                        // 最后手段：普通 show（可能激活窗口）。
+                        log_warn!("获取 overlay HWND 失败，降级 show：{e}");
+                        if let Err(e) = win.show() {
+                            log_error!("overlay show 失败：{e}");
+                        }
+                    }
+                }
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             {
                 if let Err(e) = win.show() {
                     log_error!("overlay show 失败：{e}");
@@ -572,9 +661,13 @@ fn show_overlay(app: &tauri::AppHandle, frontmost: Option<&str>) {
 fn show_main_window(app: &tauri::AppHandle) {
     match app.get_webview_window("main") {
         Some(win) => {
-            // 1) 允许出现在 Dock 并参与激活（仅展示主面板期间）。
-            if let Err(e) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
-                log_warn!("切换 Regular 激活策略失败：{e}");
+            // 1) 允许出现在 Dock 并参与激活（仅展示主面板期间；macOS 专属激活策略，
+            //    Windows 直接靠 show + set_focus 激活主窗口）。
+            #[cfg(target_os = "macos")]
+            {
+                if let Err(e) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
+                    log_warn!("切换 Regular 激活策略失败：{e}");
+                }
             }
             // 2) 取消最小化 / 显示 / 聚焦。
             let _ = win.unminimize();
@@ -609,8 +702,13 @@ pub(crate) fn show_qa_window(app: &tauri::AppHandle) {
         log_warn!("qa 窗口不存在");
         return;
     };
-    if let Err(e) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
-        log_warn!("QA：切换 Regular 激活策略失败：{e}");
+    // QA 浮窗需可聚焦；macOS 下还需切 Regular 激活策略才稳定获焦
+    // （Windows 无此概念，直接靠 show + set_focus）。
+    #[cfg(target_os = "macos")]
+    {
+        if let Err(e) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
+            log_warn!("QA：切换 Regular 激活策略失败：{e}");
+        }
     }
     // 首次显示：定位到指针所在屏右下角（距边 24px）。
     if let Ok(false) = win.is_visible() {
@@ -626,10 +724,10 @@ pub(crate) fn show_qa_window(app: &tauri::AppHandle) {
             (Some(m), Some(cursor)) => {
                 let mp = m.position();
                 let ms = m.size();
-                let cursor_in_monitor = cursor.x as f64 >= mp.x as f64
-                    && cursor.x as f64 <= mp.x as f64 + ms.width as f64
-                    && cursor.y as f64 >= mp.y as f64
-                    && cursor.y as f64 <= mp.y as f64 + ms.height as f64;
+                let cursor_in_monitor = cursor.x >= mp.x as f64
+                    && cursor.x <= mp.x as f64 + ms.width as f64
+                    && cursor.y >= mp.y as f64
+                    && cursor.y <= mp.y as f64 + ms.height as f64;
                 if cursor_in_monitor {
                     // 物理坐标 → 逻辑坐标（Tauri set_position 用逻辑坐标，原点左上）。
                     let x = mp.x as f64 / scale + (ms.width as f64 / scale) - win_size.0 - 24.0;
@@ -707,9 +805,19 @@ fn single_instance_check(app: tauri::AppHandle, sock_path: &std::path::Path) -> 
     Ok(())
 }
 
-/// Windows：暂用简单策略（无单实例协调），返回 Ok 继续。
-/// TODO：用 Windows 命名 Mutex（CreateMutexW）实现真正的单实例。
-#[cfg(not(unix))]
+/// Windows：命名互斥体（CreateMutexW）单实例协调。
+/// 已有实例在跑 → 唤起其窗口并返回 Err，让调用方退出本进程。
+/// 实现见 `platform::windows::single_instance`（互斥体句柄持有到进程结束）。
+#[cfg(target_os = "windows")]
+fn single_instance_check(
+    _app: tauri::AppHandle,
+    _sock_path: &std::path::Path,
+) -> Result<(), String> {
+    crate::platform::windows::single_instance::try_acquire()
+}
+
+/// 其它非 unix 平台（理论上不存在，仅保证 cfg 完整性）：暂用简单策略返回 Ok。
+#[cfg(not(any(unix, windows)))]
 fn single_instance_check(
     _app: tauri::AppHandle,
     _sock_path: &std::path::Path,
@@ -734,11 +842,55 @@ pub(crate) fn store_fn_tap_consume(cfg: &voice_core::AppConfig) {
 fn apply_hotkey(app: &tauri::AppHandle, cfg: &voice_core::AppConfig) {
     let _ = app.global_shortcut().unregister_all();
     let trimmed = cfg.hotkey.trim();
-    if trimmed.eq_ignore_ascii_case("fn") {
-        // Fn 是修饰键，global-shortcut 无法注册，用原生 NSEvent 监听。
-        crate::platform::current::fn_key::install_fn_monitor(on_fn_edge);
-        log_info!("录音快捷键：Fn（原生监听）");
+    if fn_policy::parse_watch_key(trimmed) != fn_policy::WatchKey::None {
+        // 单键（macOS Fn / Windows CapsLock 或 best-effort Fn）：无修饰键，global-shortcut
+        // 无法注册，走平台原生监听（macOS NSEvent / Windows WH_KEYBOARD_LL）。
+        #[cfg(target_os = "macos")]
+        {
+            if trimmed.eq_ignore_ascii_case("fn") || trimmed.eq_ignore_ascii_case("globe") {
+                crate::platform::current::fn_key::install_fn_monitor(on_fn_edge);
+                log_info!("录音快捷键：Fn（原生监听）");
+            } else {
+                // macOS 单键原生监听仅实现 Fn；CapsLock 等回退组合键。
+                log_warn!("macOS 单键监听仅支持 Fn，{trimmed:?} 回退 {DEFAULT_HOTKEY}");
+                if let Some(sc) = parse_shortcut(DEFAULT_HOTKEY) {
+                    if let Err(e) = app.global_shortcut().register(sc) {
+                        log_warn!("回退快捷键 {DEFAULT_HOTKEY} 注册失败：{e}");
+                    }
+                }
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // 幂等：装钩子（或热切换单键目标）。返回是否有监听目标。
+            if crate::platform::windows::fn_key::install_fn_monitor_for(trimmed) {
+                log_info!("录音快捷键：{trimmed}（WH_KEYBOARD_LL 钩子）");
+                // 单键监听在 openIME 自有窗口前台时被 WebView 屏蔽（Tauri #14770：
+                // 失焦时完全正常，即真实听写场景），且 Fn 在多数键盘上固件消费、
+                // 系统不可见（钩子仅 best-effort 盯厂商扫描码 E0 63）。
+                // 两种单键都同时注册兜底组合键，保证设置页 / QA 面板内也有可用触发。
+                if let Some(sc) = parse_shortcut(DEFAULT_HOTKEY) {
+                    if let Err(e) = app.global_shortcut().register(sc) {
+                        log_warn!("兜底快捷键 {DEFAULT_HOTKEY} 注册失败：{e}");
+                    } else {
+                        log_info!("单键兜底组合键已注册：{DEFAULT_HOTKEY}");
+                    }
+                }
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            log_warn!("当前平台不支持单键监听，回退 {DEFAULT_HOTKEY}");
+            if let Some(sc) = parse_shortcut(DEFAULT_HOTKEY) {
+                if let Err(e) = app.global_shortcut().register(sc) {
+                    log_warn!("回退快捷键 {DEFAULT_HOTKEY} 注册失败：{e}");
+                }
+            }
+        }
     } else {
+        // 组合键：Windows 上顺带把钩子目标清空（此前配过单键的场景，避免钩子还在吞键）。
+        #[cfg(target_os = "windows")]
+        crate::platform::windows::fn_monitor::set_watch_key(fn_policy::WatchKey::None);
         match parse_shortcut(trimmed) {
             Some(sc) => match app.global_shortcut().register(sc) {
                 Ok(_) => log_info!("全局快捷键已注册（录音）：{trimmed}"),
@@ -891,13 +1043,11 @@ fn parse_code(p: &str) -> Option<Code> {
     None
 }
 
-/// Fn 键边沿回调（NSEvent monitor 线程上下文）。
+/// Fn 键边沿回调（macOS NSEvent / Windows 低阶键盘钩子线程上下文）。
 ///
 /// R9：Hold+Fn delay-start——按下只 `ArmHoldTimer`，`short_press_ms` 到期仍按住才开录；
 /// 提前松开只 `RepostOnly`（PR3 补发 🌐），**不进** pipeline。Toggle 松开不再停（KD-2）。
-fn on_fn_edge(pressed: bool) {
-    log_info!("Fn 键{}", if pressed { "按下" } else { "抬起" });
-
+pub(crate) fn on_fn_edge(pressed: bool) {
     // 推送事件给前端（测试模块用）。
     if let Some(app) = APP_HANDLE.get() {
         let _ = app.emit("fn://edge", pressed);
@@ -923,8 +1073,15 @@ fn on_fn_edge(pressed: bool) {
     let Some(cfg) = state.config.try_read().ok().map(|c| c.clone()) else {
         return;
     };
+    log_info!(
+        "录音单键（{}）{}",
+        cfg.hotkey,
+        if pressed { "按下" } else { "抬起" }
+    );
     let hold = cfg.hotkey_mode == voice_core::HotkeyMode::Hold;
-    let is_fn_hotkey = cfg.hotkey.trim().eq_ignore_ascii_case("fn");
+    // 「单键」= macOS Fn / Windows CapsLock（厂商 Fn best-effort）：有可靠的 key-up，
+    // 才有 Hold delay-start / 短按补发语义；组合键无可靠 key-up。
+    let is_single_key = fn_policy::parse_watch_key(&cfg.hotkey) != fn_policy::WatchKey::None;
     let already_recording = state.recording_guard.load(Ordering::SeqCst);
 
     if pressed {
@@ -946,7 +1103,7 @@ fn on_fn_edge(pressed: bool) {
             already_recording,
             this_press_started_recording: false,
             duration_ms: None,
-            is_fn_hotkey,
+            is_single_key,
             fn_repost_enabled: cfg.fn_repost_enabled,
         };
         match fn_policy::classify_fn_edge(&ctx) {
@@ -967,7 +1124,10 @@ fn on_fn_edge(pressed: bool) {
                         return;
                     }
                     THIS_PRESS_STARTED.store(true, Ordering::SeqCst);
-                    on_record_hotkey(&app);
+                    // on_record_hotkey 子树是同步代码（含 tokio RwLock 的 blocking_read），
+                    // 直接在 async worker 上跑会 panic → 丢到 blocking 池执行。
+                    let app2 = app.clone();
+                    tauri::async_runtime::spawn_blocking(move || on_record_hotkey(&app2));
                 });
             }
             fn_policy::FnEdgeAction::StartRecord | fn_policy::FnEdgeAction::ToggleStop => {
@@ -988,7 +1148,7 @@ fn on_fn_edge(pressed: bool) {
             already_recording,
             this_press_started_recording: own,
             duration_ms: Some(dur),
-            is_fn_hotkey,
+            is_single_key,
             fn_repost_enabled: cfg.fn_repost_enabled,
         };
         match fn_policy::classify_fn_edge(&ctx) {
@@ -1035,9 +1195,12 @@ fn trigger_toggle(app: &tauri::AppHandle) {
     let app_clone = app.clone();
     let frontmost_for_cmd = frontmost.clone();
     // 仅在「即将开始录音」时显示 HUD；已在录音中则由松开/停止路径处理，避免闪一下。
+    // try_read 而非 blocking_read：Hold 模式的 delay-start 计时器在 tokio 线程里调到这里，
+    // blocking_read 会 panic（"Cannot block the current thread from within a runtime"）；
+    // 读锁偶发竞争时按 false 处理（最坏情况多显示一次 HUD，权威状态由 toggle_recording 决定）。
     let already = app
         .try_state::<AppState>()
-        .map(|s| *s.recording.blocking_read())
+        .and_then(|s| s.recording.try_read().ok().map(|g| *g))
         .unwrap_or(false);
     if !already {
         show_overlay(app, frontmost.as_deref());
@@ -1066,7 +1229,8 @@ fn trigger_toggle(app: &tauri::AppHandle) {
             }
             Err(e) => {
                 log_error!("toggle_recording 失败：{e}");
-                // 启动失败：收起 HUD，避免残留。
+                // 启动失败：收起 HUD，避免残留。Windows 直调 HWND SW_HIDE
+                //（经 Tauri 调度在主线程繁忙时可能延迟/丢失 → overlay 残留）。
                 if let Some(win) = app_clone.get_webview_window("overlay") {
                     #[cfg(target_os = "macos")]
                     {
@@ -1076,7 +1240,18 @@ fn trigger_toggle(app: &tauri::AppHandle) {
                             let _ = win.hide();
                         }
                     }
-                    #[cfg(not(target_os = "macos"))]
+                    #[cfg(target_os = "windows")]
+                    {
+                        match win.hwnd() {
+                            Ok(hwnd) => {
+                                crate::platform::windows::fn_key::hide_window_raw(hwnd.0);
+                            }
+                            Err(_) => {
+                                let _ = win.hide();
+                            }
+                        }
+                    }
+                    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                     {
                         let _ = win.hide();
                     }
@@ -1113,5 +1288,51 @@ mod tests {
     #[test]
     fn parse_shortcut_rejects_unknown() {
         assert!(parse_shortcut("Cmd+Shift+不存在").is_none());
+    }
+
+    /// 录音快捷键路由必须与 apply_hotkey 的注册行为一致（2.3 的配套修复）：
+    /// Windows 配单键（Fn / CapsLock）→ 钩子触发 + 兜底组合键路由 DEFAULT_HOTKEY
+    /// （单键在自有窗口前台被 WebView 屏蔽，Tauri #14770）；解析失败同样回退。
+    #[test]
+    fn effective_record_shortcut_matches_registration() {
+        let cfg = voice_core::AppConfig {
+            hotkey: "Fn".into(),
+            ..Default::default()
+        };
+        #[cfg(target_os = "macos")]
+        assert_eq!(effective_record_shortcut(&cfg), None);
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(effective_record_shortcut(&cfg), parse_shortcut(DEFAULT_HOTKEY));
+
+        // Windows：单键走钩子 + 兜底组合键（apply_hotkey 注册了兜底就必须能路由）。
+        #[cfg(target_os = "windows")]
+        {
+            let cfg = voice_core::AppConfig {
+                hotkey: "CapsLock".into(),
+                ..Default::default()
+            };
+            assert_eq!(effective_record_shortcut(&cfg), parse_shortcut(DEFAULT_HOTKEY));
+        }
+        // 其它平台配 CapsLock：无监听实现 → 回退（与 apply_hotkey 注册行为一致）。
+        #[cfg(not(target_os = "windows"))]
+        {
+            let cfg = voice_core::AppConfig {
+                hotkey: "CapsLock".into(),
+                ..Default::default()
+            };
+            assert_eq!(effective_record_shortcut(&cfg), parse_shortcut(DEFAULT_HOTKEY));
+        }
+
+        let cfg = voice_core::AppConfig {
+            hotkey: "!!not-a-key!!".into(),
+            ..Default::default()
+        };
+        assert_eq!(effective_record_shortcut(&cfg), parse_shortcut(DEFAULT_HOTKEY));
+
+        let cfg = voice_core::AppConfig {
+            hotkey: "Alt+Shift+T".into(),
+            ..Default::default()
+        };
+        assert_eq!(effective_record_shortcut(&cfg), parse_shortcut("Alt+Shift+T"));
     }
 }

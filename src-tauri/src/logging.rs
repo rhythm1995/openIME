@@ -8,7 +8,10 @@
 //! - 全局 panic hook：把 panic 位置、消息与 backtrace 写入日志（崩溃日志）。
 //! - 前端通过 `frontend_log` 命令把 JS 日志/错误转发到这里。
 //!
-//! 日志目录（macOS）：`~/Library/Application Support/com.openime.desktop/logs/`
+//! 日志目录：
+//! - macOS：`~/Library/Application Support/com.openime.desktop/logs/`
+//! - Windows/Linux：有 `HOME`（终端/开发环境）→ `~/.openime/logs/`；
+//!   无 `HOME`（Explorer / 开机自启 / 快捷方式启动）→ `%APPDATA%\com.openime.desktop\logs\`。
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -64,9 +67,17 @@ pub fn init() -> PathBuf {
     dir.clone()
 }
 
-/// 日志目录：优先 app_data_dir/logs，兜底系统临时目录。
+/// 日志目录：优先 HOME 推导，HOME 缺失回退 APPDATA，最后兜底系统临时目录。
 fn log_dir() -> PathBuf {
-    if let Some(home) = dirs_home() {
+    log_dir_from(
+        std::env::var_os("HOME").map(PathBuf::from),
+        std::env::var_os("APPDATA").map(PathBuf::from),
+    )
+}
+
+/// 纯函数：给定 HOME / APPDATA 推导日志目录（供单测；平台分支见各 cfg 块）。
+fn log_dir_from(home: Option<PathBuf>, appdata: Option<PathBuf>) -> PathBuf {
+    if let Some(home) = home {
         // macOS: ~/Library/Application Support/<identifier>/logs
         #[cfg(target_os = "macos")]
         {
@@ -80,11 +91,13 @@ fn log_dir() -> PathBuf {
             return home.join(".openime").join("logs");
         }
     }
+    // HOME 缺失：Windows 从 Explorer / 快捷方式 / 开机自启启动的常见情形
+    //（cmd/PowerShell/资源管理器默认不设 HOME，此前会静默落到 %TEMP%）。
+    // 回退 %APPDATA%\<identifier>\logs，与 macOS 的 Application Support 路径对应。
+    if let Some(appdata) = appdata {
+        return appdata.join(IDENTIFIER).join("logs");
+    }
     std::env::temp_dir().join("openime-logs")
-}
-
-fn dirs_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 fn open_log_file(dir: &Path, date: &str) -> std::io::Result<File> {
@@ -193,4 +206,49 @@ macro_rules! log_warn {
 #[macro_export]
 macro_rules! log_error {
     ($($arg:tt)*) => { $crate::logging::write("ERROR", &format!($($arg)*)) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 有 HOME：维持原有路径（开发环境 / 终端启动不变）。
+    #[test]
+    fn log_dir_prefers_home() {
+        let home = PathBuf::from(if cfg!(target_os = "macos") {
+            "/Users/tester"
+        } else {
+            "C:/Users/tester"
+        });
+        let dir = log_dir_from(Some(home.clone()), Some(PathBuf::from("C:/AppData")));
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            dir,
+            home.join("Library/Application Support")
+                .join(IDENTIFIER)
+                .join("logs")
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(dir, home.join(".openime").join("logs"));
+    }
+
+    /// 无 HOME（Explorer / 快捷方式 / 开机自启启动）：回退 %APPDATA%\<identifier>\logs，
+    /// 修复此前静默落到 %TEMP% 丢日志的问题。
+    #[test]
+    fn log_dir_falls_back_to_appdata_without_home() {
+        let dir = log_dir_from(None, Some(PathBuf::from("C:/Users/tester/AppData/Roaming")));
+        assert_eq!(
+            dir,
+            PathBuf::from("C:/Users/tester/AppData/Roaming")
+                .join(IDENTIFIER)
+                .join("logs")
+        );
+    }
+
+    /// HOME 与 APPDATA 都缺失：兜底临时目录（不 panic）。
+    #[test]
+    fn log_dir_falls_back_to_temp() {
+        let dir = log_dir_from(None, None);
+        assert_eq!(dir, std::env::temp_dir().join("openime-logs"));
+    }
 }

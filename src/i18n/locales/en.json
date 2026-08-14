@@ -157,12 +157,14 @@
       "title": "Hotkeys",
       "recordLabel": "Recording hotkey",
       "recordHint": "Default Fn (🌐 key). Or a combo like Alt+Shift+D.",
+      "recordHintWin": "Default is CapsLock (hold to talk, release to stop; short taps keep the original caps function). Fn is not recommended (most keyboards handle it in firmware, invisible to the OS). Works even inside openIME windows (raw input fallback); fallback combo Ctrl+Shift+D also registered.",
       "modeLabel": "Trigger mode (A1)",
       "mode_toggle": "Toggle (press to start / stop)",
       "mode_hold": "Hold (release to stop)",
       "styleSwitchLabel": "Style pack cycle hotkey (F1, optional)",
       "styleSwitchPh": "e.g. Ctrl+Shift+P (empty = off)",
       "fnWarning": "Fn needs System Settings → Keyboard → “Press 🌐 key to” = “Do Nothing”, otherwise the system swallows the event.",
+      "fnWarningWin": "On Windows the Fn key is consumed by keyboard firmware on most machines and never reaches the OS (a few keyboards except). Fallback Ctrl+Shift+D is also registered; for a single-key experience use CapsLock instead.",
       "translateLabel": "Translate hotkey (R4, optional)",
       "translatePh": "e.g. Alt+Shift+T (empty = off)",
       "translateHint": "Speak in the source language; the target language appears at the caret.",
@@ -172,7 +174,9 @@
       "shortPressLabel": "Short-press threshold (ms)",
       "shortPressHint": "In Hold mode, recording starts only after Fn is held longer than this; releasing earlier re-posts 🌐 (100–800, default 300)",
       "fnRepostName": "Re-post 🌐 on short Fn press",
-      "fnRepostDesc": "On Hold + Fn tap (below threshold), re-post the 🌐 key so the system performs its original action (e.g. switch input source). macOS only."
+      "fnRepostDesc": "On Hold + Fn tap (below threshold), re-post the 🌐 key so the system performs its original action (e.g. switch input source). macOS only.",
+      "fnRepostNameWin": "Keep CapsLock working on short taps",
+      "fnRepostDescWin": "On Hold + CapsLock tap (below threshold), the key is re-posted so CapsLock toggles normally; recording starts only when held past the threshold (CapsLock is reserved while configured)."
     },
     "transcribe": {
       "title": "File transcription",
@@ -191,6 +195,7 @@
       "title": "App behavior",
       "launchName": "Launch at login",
       "launchDesc": "Auto-start on macOS login, silently resident in the menu bar.",
+      "launchDescWin": "Auto-start on Windows login, silently resident in the system tray.",
       "muteName": "Mute other apps while recording",
       "muteDesc": "When on, system audio playback pauses during voice input and resumes after."
     },
@@ -211,15 +216,17 @@
       "axDesc": "For typing recognized text at the cursor",
       "authorize": "Authorize",
       "openSysSettings": "System Settings",
+      "hintWin": "On Windows, go to Settings → Privacy & security → Microphone and enable “Let desktop apps access your microphone”; text input needs no Accessibility permission on Windows. If these items are missing, the system allows by default — just try it.",
       "hint": "Install via ./scripts/build.sh install (fixed signing identity \"openIME Local Dev\") before authorizing; reinstalling with the same certificate usually needs no re-grant. If an old openIME entry still doesn't work: remove the old entry and click \"Authorize\" above. tauri dev does not use stable signing, so authorization may repeatedly lapse while debugging."
     },
     "fnTest": {
       "title": "Function test",
       "hint": "Press Fn (🌐) to start recording, speak into the microphone, and recognized text appears in the box below in real time. Press Fn again to stop.",
+      "hintWin": "Hold CapsLock and speak (release to stop); recognized text appears below in real time. Short taps keep the original caps function. Combo keys (e.g. Ctrl+Shift+D) also work in toggle mode.",
       "recording": "Recording…",
       "triggered": "Triggered {{count}} time(s)",
       "ready": "Ready",
-      "fnDown": "● Fn pressed",
+      "fnDown": "● {{key}} pressed",
       "waitingKey": "Waiting for key",
       "stop": "■ Stop",
       "manualRecord": "Manual record",

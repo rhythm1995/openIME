@@ -43,13 +43,25 @@ uuid = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # R7：Win32 前台 exe 捕获 / 还焦（GetForegroundWindow / SetForegroundWindow）。
+# R7/Win：UI Automation 读焦点选区（UIA_TextPattern）+ COM 初始化。
+# Gdi/LibraryLoader：真机行为测试创建真实窗口（RegisterClassW / CreateWindowExW）用。
 windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Accessibility",
   "Win32_System_Threading",
   "Win32_System_ProcessStatus",
+  "Win32_System_Com",
+  "Win32_Security",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
 ] }
+# R7：Ctrl+V 粘贴兜底（insert_fallback::windows_ctrl_v 直接 `use enigo::`，
+# 需作为本 crate 直属依赖；enigo 0.5 在 Windows 自动启用 Win32 后端）。
+enigo = { workspace = true }
+# 系统权限兼容：读 CapabilityAccessManager ConsentStore 判定麦克风授权状态。
+winreg = "0.55"
 
 [features]
 # 默认走自定义协议（生产）+ 本地 sherpa-onnx；开发时 tauri 会注入 devUrl

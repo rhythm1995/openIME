@@ -14,7 +14,9 @@
     "app:build": "./scripts/build.sh",
     "app:install": "./scripts/build.sh install",
     "app:run": "./scripts/build.sh run",
-    "app:resign": "./scripts/build.sh resign"
+    "app:resign": "./scripts/build.sh resign",
+    "app:build:win": "powershell -ExecutionPolicy Bypass -File ./scripts/build-windows.ps1",
+    "app:run:win": "powershell -ExecutionPolicy Bypass -File ./scripts/build-windows.ps1 -Run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
