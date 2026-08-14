@@ -14,7 +14,7 @@ openIME 采用 Tauri v2 + React + Rust 架构，以 macOS 为优先平台。经�
 |------|------|------|
 | 🔴 高 | 3 | 影响核心功能或存在逻辑矛盾（均已修复 ✅） |
 | 🟡 中 | 5 | 功能降级或体验问题（均已修复 ✅） |
-| 🟢 低 | 6 | CI/工程/细节问题（3 项已修复、1 项需证书、1 项仅记录、1 项 P3） |
+| 🟢 低 | 6 | CI/工程/细节问题（4 项已修复、1 项需证书、1 项仅记录） |
 
 > 处理状态详见文末「处理结果汇总」。
 
@@ -141,10 +141,10 @@ openIME 采用 Tauri v2 + React + Rust 架构，以 macOS 为优先平台。经�
 - **现象**：未装 CMake 时构建不带 `llm` feature，本地润色模型无法加载，UI 显示"加载中"。虽有前端提示，但用户可能不理解。
 - **处理**：跳过 llm 时的提示加黄色高亮，并追加 `Write-Warning` 明示「本地 GGUF 润色将无法加载，安装 CMake 后重新打包」。（原有提示文案已存在，仅增强醒目度。）
 
-### 4.6 Clippy lint 债务 ⏸ 未处理（P3，另行清理）
+### 4.6 Clippy lint 债务 ✅ 已修复（2026-08-14 晚）
 
 - **现象**：存在 `unnecessary_cast`、`dead_code`、`needless_mut`、`too_many_arguments` 等告警，Windows CI 无法启用 `-D warnings`。
-- **处理**：本次未纳入（范围决策：P0-P2 + 顺手项）。清理后即可让 Windows CI 对齐 macOS job 的 clippy 严格度。
+- **处理**：全 workspace（含 `--all-targets`）clippy 清零——自动修复 6 处 + 手工清理（doc 缩进 / field-assignment 重构 / allow 标注等）；`tauri-shell-windows` job 已升级为 `clippy -p openime -- -D warnings`，与 macOS job 对齐。见 [openIME-windows-porting-notes.md](../openIME-windows-porting-notes.md) §11.1。
 
 ---
 
@@ -185,8 +185,8 @@ P2（中期）：
 
 P3（远期）：
   ├── TSF FFI 落地（命名管道 client）⏸
-  ├── 4.2 代码签名 ⏸（需证书）
-  └── 4.6 Clippy 债务清理 ⏸
+  └── 4.2 代码签名 ⏸（需证书）
+  （4.6 Clippy 债务清理 ✅ 已完成，Windows CI 已对齐 -D warnings）
 ```
 
 | 编号 | 问题 | 状态 | 落点 |
@@ -204,7 +204,7 @@ P3（远期）：
 | 4.3 | 磁盘空间计算不精确 | ✅ 已修复 | `system.rs` 按卷前缀匹配 + 薄壳传模型目录 |
 | 4.4 | windows crate 升级风险 | 📌 仅记录 | 新代码跨版本桥接处已加注释 |
 | 4.5 | llm 降级提示不醒目 | ✅ 已修复 | `build-windows.ps1` 黄色警告 + Write-Warning |
-| 4.6 | Clippy lint 债务 | ⏸ P3 | 另行统一清理后对齐 macOS clippy 严格度 |
+| 4.6 | Clippy lint 债务 | ✅ 已修复 | 全 workspace clippy 0 告警，Windows CI 升级 `-D warnings`（porting notes §11.1） |
 
 ---
 
@@ -217,7 +217,7 @@ P3（远期）：
 - **CI 覆盖**：`voice-core` 三平台矩阵测试 + Windows 薄壳编译检查已建立
 - **构建脚本对称**：`build.sh`（macOS）/ `build-windows.ps1`（Windows）策略对齐
 
-主要差距在于：Windows 侧多个关键路径仍是桩实现（Fn 监听、选中文本、TSF、单实例），需要逐步补齐才能达到与 macOS 同等的功能完整度。
+主要差距在于：TSF 原生集成（C++ DLL + FFI）尚未落地。（2026-08-14 `4c0845e` 更新：本文写作时的其余桩实现——Fn/CapsLock 单键监听（LL 钩子 + Raw Input 双通道）、UIA 选中文本、CreateMutexW 单实例——均已实现并在真机验证，见 [openIME-windows-porting-notes.md](../openIME-windows-porting-notes.md)。）
 
 ## 8. 处理结果汇总（2026-08-14）
 
@@ -236,7 +236,7 @@ P3（远期）：
 | 4.3 | 磁盘空间计算不精确 | ✅ 已修复 | `system.rs` 按卷前缀匹配（含 `\\?\` 前缀剥离）+ 薄壳传模型目录 |
 | 4.4 | windows crate 升级风险 | 📌 仅记录 | 新代码跨版本桥接处已加注释 |
 | 4.5 | llm 降级提示不醒目 | ✅ 已修复 | `build-windows.ps1` 黄色警告 + Write-Warning |
-| 4.6 | Clippy lint 债务 | ⏸ P3 | 另行统一清理后对齐 macOS clippy 严格度 |
+| 4.6 | Clippy lint 债务 | ✅ 已修复 | 全 workspace clippy 0 告警，Windows CI 升级 `-D warnings`（porting notes §11.1） |
 
 ## 9. 真机测试记录（2026-08-14，本机 Windows 11，rustc 1.97.1）
 

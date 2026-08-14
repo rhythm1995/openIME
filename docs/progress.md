@@ -78,6 +78,8 @@
 
 ## P2 跳过 / 待 Windows / 待真机
 
+> 2026-08-14 更新（`4c0845e` Windows 移植后）：src-tauri 已在 Windows 真机编译 / 打包（NSIS）/ 运行期 e2e 通过，CI 新增 `tauri-shell-windows` job（clippy -D warnings + cargo test）常态兜底；Windows 侧 Fn/CapsLock 单键录音、单实例、UIA 选区已实现。TSF（PR4–PR6 的 Windows FFI 与 C++ DLL）仍待落地，细节见 [openIME-windows-porting-notes.md](../openIME-windows-porting-notes.md)。
+
 - **PR4 全部跳过**（需 Windows 编译）：C++ `OpenImeTsf.dll`（ITfTextInputProcessorEx + ITfEditSession，`/MT`）、`CMakeLists.txt`、NSIS `hooks.nsh`（HKCU `regsvr32 /s`）、`tauri.conf.json` `resources + installerHooks`、`windows_ime_status` 探测。本机 macOS 无法编译/验证，按「不确定先跳过」。
 - **PR5/PR6 的 Windows FFI 部分跳过**（同上）：命名管道 client/session、`frontmost_process_info`、`insert_ex` TSF 分支、设置页 TSF 开关与恢复按钮。纯协议/纯函数已落地并单测。
 - **PR3 真机验收待跑**：HID flagsChanged 补发是否触发 🌐（A9.1）；`fn_repost_tis_fallback` 未接（默认 false）。
@@ -169,6 +171,6 @@
 
 ## 备注（跳过 / 待人工 / 待 CI）
 
-- **Windows 编译未验证**（macOS 上 `cfg(target_os="windows")` 不参与编译）：`insert_fallback::windows_ctrl_v`、`platform/windows/focus.rs` 按 windows 0.58 API 编写，待 GitHub Actions windows-latest 验证。
+- **Windows 编译已验证**（2026-08-14，`4c0845e`）：Windows 真机 `cargo check`/`tauri build`（NSIS）+ 运行期 e2e 通过；CI `tauri-shell-windows` job 常态兜底。`insert_fallback::windows_ctrl_v`、`platform/windows/focus.rs` 等 windows 0.58 API 均已实编验证。
 - 手工验收项（需真机/真模型）未跑：A4.1/A4.2/A4.4、A5.1/A5.2、A6.1、A6.6、A7.1–A7.5。对应自动化：A4.3/A4.4b/A4.5、A5.1b–A5.8、A6.1b/A6.2–A6.7（纯函数部分）、A7.7 均通过。
 - 与设计稿的小偏差：`insert_finals_with_polish` 返回 `Vec<FinalInsertResult>`（= 文本+四态+警告 超集，覆盖设计中 `PolishOutcome.warning` 与 `InsertOutcome` 两路 HUD 映射）。

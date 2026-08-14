@@ -20,7 +20,7 @@
 - 🌐 **中英双语界面** —— 左下角一键切换；界面语言与 ASR 识别语言相互独立。
 - ⌨️ **全局快捷键** —— 默认 Fn（🌐），支持切换 / 按住说话（PTT）两种模式。
 - 🧲 **插入兜底** —— 逐字模拟被目标 App 吞掉时自动改粘贴（Cmd+V）并恢复原剪贴板；Hold 模式短按 Fn 自动补发 🌐 原功能。
-- 🍎 **macOS**（Windows 进行中）。
+- 🍎 **macOS** 完整支持；🪟 **Windows** 公测（CapsLock 单键录音、插入兜底真机可用，TSF 原生上屏待落地）。
 
 
 
@@ -73,7 +73,7 @@ cargo test -p voice-core        # 核心库
 ./scripts/build.sh install      # 打包并安装到 /Applications（固定签名）
 ```
 
-303 个测试覆盖（voice-core 236 + 集成 13 + 应用壳 36 + 前端 18）。完整开发流程、测试矩阵、CI、签名与发布见 [docs/development.md](docs/development.md)，日志与排障见 [docs/troubleshooting.md](docs/troubleshooting.md)。
+311 个测试覆盖（voice-core 237 + 集成 13 + 应用壳 43 + 前端 18）。完整开发流程、测试矩阵、CI、签名与发布见 [docs/development.md](docs/development.md)，日志与排障见 [docs/troubleshooting.md](docs/troubleshooting.md)。
 
 ## 致谢
 

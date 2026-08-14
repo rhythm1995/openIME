@@ -76,6 +76,8 @@ cargo test -p voice-core --features sherpa
 # 仅云端：WITH_SHERPA=0 ./scripts/build.sh
 ```
 
+Windows 打包（对应 macOS 的 build.sh）：`pnpm app:build:win`（= `scripts/build-windows.ps1`，自动检测 CMake 决定是否带 `llm` feature，产出 NSIS 安装包）。Windows 移植细节见 [openIME-windows-porting-notes.md](../openIME-windows-porting-notes.md)。
+
 ## 测试覆盖（TDD）
 
 | 层 | 测试 | 数量 |
@@ -95,11 +97,11 @@ cargo test -p voice-core --features sherpa
 | 权限 | 状态枚举 / checker / 序列化 | 3 |
 | http | no-redirect client | 1 |
 | 集成 | 百炼 WS mock 2 + REST ASR mock 5 + trait 契约 6 | 13 |
-| 应用壳（src-tauri） | windows_ime 协议 11 / 粘贴兜底 7 / commands 6 / qa 4 / fn_policy 3 / credentials 2 等 | 36 |
+| 应用壳（src-tauri） | windows_ime 协议 / 粘贴兜底 / commands / qa / fn_policy / credentials / logging 等；macOS 编译路径 43 项，Windows CI 另编译 `platform/windows/*` 专属测试（focus/permissions/fn_monitor/single_instance/uia 等，数量更多） | 43+ |
 | 前端 | App 4 + Settings 11 + History 3 | 18 |
-| **合计** | `cargo test --workspace`（Rust 285，含 sherpa 特性）+ `pnpm test`（18）；voice-core lib 默认特性 234、带 sherpa 236 | **303** |
+| **合计** | `cargo test --workspace`（macOS Rust 293：voice-core 237 + 集成 13 + 应用壳 43）+ `pnpm test`（18）；voice-core lib 带/不带 sherpa 特性均 237 | **311** |
 
-CI：GitHub Actions 三 job（core 三平台 × fmt+clippy+test / tauri-shell / frontend vitest+build）。
+CI：GitHub Actions 四 job——`core`（三平台矩阵 × fmt+clippy+test）、`tauri-shell`（macOS，clippy -D warnings + check）、`tauri-shell-windows`（windows-latest，clippy -D warnings + check + cargo test，兜住 macOS 专属 API 漏门控 / windows-rs 类型漂移）、`frontend`（vitest + build）。
 
 ## 多平台发布（GitHub Actions）
 

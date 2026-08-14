@@ -34,7 +34,7 @@
 - 🌐 **Bilingual UI (CN/EN)** — One-click toggle at the bottom-left. Interface language is fully independent from the ASR recognition language.
 - ⌨️ **Global shortcut** — Default Fn (🌐); toggle or push-to-talk (PTT) modes.
 - 🧲 **Insertion fallback** — If simulated typing is swallowed by the target app, falls back to paste (Cmd+V) and restores your clipboard; short Fn presses in PTT mode re-post the original 🌐 function.
-- 🍎 **macOS** (Windows in progress).
+- 🍎 **macOS** fully supported; 🪟 **Windows** in beta (CapsLock single-key recording and insertion fallback verified on real hardware; native TSF commit pending).
 
 ## Quick Start
 
@@ -81,14 +81,14 @@ cargo test -p voice-core        # Core library
 ./scripts/build.sh install      # Build and install to /Applications (fixed signing)
 ```
 
-303 tests cover the codebase (voice-core 236 + integration 13 + src-tauri 36 + frontend 18). Full dev workflow, test matrix, CI, signing, and releases in [docs/development.md](docs/development.md); logs & troubleshooting in [docs/troubleshooting.md](docs/troubleshooting.md).
+311 tests cover the codebase (voice-core 237 + integration 13 + src-tauri 43 + frontend 18). Full dev workflow, test matrix, CI, signing, and releases in [docs/development.md](docs/development.md); logs & troubleshooting in [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Roadmap
 
 - ✅ Engines, overlay, tray, global shortcut, onboarding, history details, UI i18n (Chinese / English)
 - ✅ 3-tier AI polish, hotword dictionary, style packs + prefix roles, translation mode, selection QA panel, file transcription (long-audio segmentation), simplified/traditional, selection injection, journal export, machine-profile → model-fit tagging
 - ✅ Single-instance lock, ESC interrupt, endpoint SSRF validation, paste fallback + clipboard restore, Fn short-press repost
-- 🔜 Windows (TSF protocol layer done; native integration pending)
+- 🔜 Windows (NSIS packaging + real-machine e2e done; TSF native integration pending)
 
 > Full requirements backlog with implementation status (in Chinese): [docs/roadmap.md](docs/roadmap.md).
 

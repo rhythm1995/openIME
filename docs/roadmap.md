@@ -92,7 +92,7 @@
 - **依赖**：Fn 监听（✅）。
 
 ### R11. Windows IME TSF 集成 🔶 部分实现
-- **状态**：🔶 部分实现（85d6f50；命名管道协议 / profile 快照 / insert_ex 判定等纯函数已落地并单测，C++ TSF DLL 与 Windows FFI 待 Windows 环境）。
+- **状态**：🔶 部分实现（85d6f50；命名管道协议 / profile 快照 / insert_ex 判定等纯函数已落地并单测。4c0845e 起 Windows 侧已可编译 / 打包 NSIS / 真机运行，插入暂走模拟按键 + 粘贴兜底；C++ TSF DLL 与 Windows FFI 仍待落地，见 [openIME-windows-porting-notes.md](../openIME-windows-porting-notes.md)）。
 - **价值** 中 · **难度** ★★★★★ · 来源 C3 / OpenLess
 - **描述**：Windows 上注册自己的 TSF 输入法 profile，IME 直接 `CommitText`，比模拟按键稳（不抢焦点、不受目标 app 输入法状态干扰）。
 - **caveat**：仅 Windows 版需要；工程量大（C++ TSF DLL + 安装器挂钩）。过渡方案：模拟 `Ctrl+V` + 剪贴板恢复（见 R7）。
