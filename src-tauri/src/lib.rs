@@ -34,6 +34,7 @@ static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 ///   openIME 自有窗口前台时被 WebView 屏蔽（Tauri #14770），且 Fn 多数键盘固件消费，
 ///   兜底保证开箱即有可用触发（设置页文案已说明）。
 /// - 配置值无法解析时也回退注册它。
+///
 /// 注意：不再是配置默认值——Windows 配置默认已改为 CapsLock（voice-core
 /// `default_hotkey()`），两者语义独立。
 #[cfg(target_os = "macos")]
@@ -49,7 +50,10 @@ pub fn run() {
     let log_dir = logging::init();
     log_info!("openIME 启动，日志目录：{}", log_dir.display());
 
-    let app = tauri::Builder::default()
+    // mut 供 macOS 的 set_activation_policy（&mut self）使用；Windows 上该方法不编译，
+    // unused_mut 由 allow 压掉（两侧 CI 都是 clippy -D warnings）。
+    #[allow(unused_mut)]
+    let mut app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         // 开机自启（macOS 用 LaunchAgent）：自启时附带 --autostart 参数，
@@ -203,8 +207,8 @@ pub fn run() {
                         // Windows 无此概念，关闭即隐藏窗口，由托盘 / 快捷键再唤起）。
                         #[cfg(target_os = "macos")]
                         {
-                            let _ =
-                                app_handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                            let _ = app_handle
+                                .set_activation_policy(tauri::ActivationPolicy::Accessory);
                         }
                         log_info!("main 窗口关闭请求 → 隐藏并恢复 Accessory");
                     }
@@ -449,7 +453,10 @@ fn effective_record_shortcut(cfg: &voice_core::AppConfig) -> Option<Shortcut> {
 fn on_translate_hotkey(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     // 互斥表：听写 / 翻译录音中 → 忽略 + toast；QA 窗可见 → 忽略。
-    if state.recording_guard.load(std::sync::atomic::Ordering::SeqCst) {
+    if state
+        .recording_guard
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
         let _ = app.emit("toast://info", "录音进行中，翻译键已忽略");
         return;
     }
@@ -458,7 +465,10 @@ fn on_translate_hotkey(app: &tauri::AppHandle) {
         return;
     }
     if !state.has_cloud_key() {
-        let _ = app.emit("toast://info", "请先配置云端 LLM（润色 endpoint + API Key）");
+        let _ = app.emit(
+            "toast://info",
+            "请先配置云端 LLM（润色 endpoint + API Key）",
+        );
         log_info!("翻译键：无云端 key，拒绝开始");
         return;
     }
@@ -477,7 +487,10 @@ fn on_qa_hotkey(app: &tauri::AppHandle) {
     }
     // A6.4：听写进行中 QA 键不开窗。
     let state = app.state::<AppState>();
-    if state.recording_guard.load(std::sync::atomic::Ordering::SeqCst) {
+    if state
+        .recording_guard
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
         let _ = app.emit("toast://info", "录音进行中，问答面板暂不可开");
         return;
     }
@@ -502,7 +515,10 @@ fn on_record_hotkey(app: &tauri::AppHandle) {
                 // Idle：开始 QA 录音（FR-6.9：无 key 不录）。
                 let state = app.state::<AppState>();
                 if !state.has_cloud_key() {
-                    let _ = app.emit("toast://info", "请先配置云端 LLM（润色 endpoint + API Key）");
+                    let _ = app.emit(
+                        "toast://info",
+                        "请先配置云端 LLM（润色 endpoint + API Key）",
+                    );
                     return;
                 }
                 if let Ok(mut intent) = state.pending_intent.lock() {
@@ -628,9 +644,8 @@ fn show_overlay(app: &tauri::AppHandle, frontmost: Option<&str>) {
                 // set_position 用 tao 实现（SWP_NOACTIVATE），不会激活窗口。
                 // 注意：Tauri 用 windows 0.61 的 HWND（透明类型），经 `.0` 取裸指针桥接给
                 // 平台层（本项目 windows 0.58），避免跨版本类型不匹配。
-                let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
-                    x, y,
-                )));
+                let _ =
+                    win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
                 match win.hwnd() {
                     Ok(hwnd) => {
                         // tauri 0.61 的 HWND.0 已是 *mut c_void，与平台层（0.58）签名一致，直接传。
@@ -740,9 +755,7 @@ pub(crate) fn show_qa_window(app: &tauri::AppHandle) {
             _ => None,
         };
         if let Some((x, y)) = pos {
-            let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
-                x, y,
-            )));
+            let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
         }
     }
     if let Err(e) = win.show() {
@@ -830,10 +843,8 @@ fn single_instance_check(
 /// R9：把「是否吞 Fn 键」下发到 macOS tap（hotkey==Fn && Hold 才吞）。
 /// 每次 `save_app_config` 写完 config 后以及 `apply_hotkey` 里调用。
 pub(crate) fn store_fn_tap_consume(cfg: &voice_core::AppConfig) {
-    let consume = fn_policy::fn_tap_can_consume(
-        &cfg.hotkey,
-        cfg.hotkey_mode == voice_core::HotkeyMode::Hold,
-    );
+    let consume =
+        fn_policy::fn_tap_can_consume(&cfg.hotkey, cfg.hotkey_mode == voice_core::HotkeyMode::Hold);
     crate::platform::current::fn_key::set_fn_tap_consume(consume);
 }
 
@@ -1281,7 +1292,10 @@ mod tests {
     #[test]
     fn parse_shortcut_supports_punctuation_codes() {
         for code in ["'", "[", "]", ",", ".", "/", "=", "-"] {
-            assert!(parse_shortcut(&format!("Cmd+Shift+{code}")).is_some(), "{code} 应可解析");
+            assert!(
+                parse_shortcut(&format!("Cmd+Shift+{code}")).is_some(),
+                "{code} 应可解析"
+            );
         }
     }
 
@@ -1302,7 +1316,10 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert_eq!(effective_record_shortcut(&cfg), None);
         #[cfg(not(target_os = "macos"))]
-        assert_eq!(effective_record_shortcut(&cfg), parse_shortcut(DEFAULT_HOTKEY));
+        assert_eq!(
+            effective_record_shortcut(&cfg),
+            parse_shortcut(DEFAULT_HOTKEY)
+        );
 
         // Windows：单键走钩子 + 兜底组合键（apply_hotkey 注册了兜底就必须能路由）。
         #[cfg(target_os = "windows")]
@@ -1311,7 +1328,10 @@ mod tests {
                 hotkey: "CapsLock".into(),
                 ..Default::default()
             };
-            assert_eq!(effective_record_shortcut(&cfg), parse_shortcut(DEFAULT_HOTKEY));
+            assert_eq!(
+                effective_record_shortcut(&cfg),
+                parse_shortcut(DEFAULT_HOTKEY)
+            );
         }
         // 其它平台配 CapsLock：无监听实现 → 回退（与 apply_hotkey 注册行为一致）。
         #[cfg(not(target_os = "windows"))]
@@ -1320,19 +1340,28 @@ mod tests {
                 hotkey: "CapsLock".into(),
                 ..Default::default()
             };
-            assert_eq!(effective_record_shortcut(&cfg), parse_shortcut(DEFAULT_HOTKEY));
+            assert_eq!(
+                effective_record_shortcut(&cfg),
+                parse_shortcut(DEFAULT_HOTKEY)
+            );
         }
 
         let cfg = voice_core::AppConfig {
             hotkey: "!!not-a-key!!".into(),
             ..Default::default()
         };
-        assert_eq!(effective_record_shortcut(&cfg), parse_shortcut(DEFAULT_HOTKEY));
+        assert_eq!(
+            effective_record_shortcut(&cfg),
+            parse_shortcut(DEFAULT_HOTKEY)
+        );
 
         let cfg = voice_core::AppConfig {
             hotkey: "Alt+Shift+T".into(),
             ..Default::default()
         };
-        assert_eq!(effective_record_shortcut(&cfg), parse_shortcut("Alt+Shift+T"));
+        assert_eq!(
+            effective_record_shortcut(&cfg),
+            parse_shortcut("Alt+Shift+T")
+        );
     }
 }
