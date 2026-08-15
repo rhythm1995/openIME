@@ -24,6 +24,7 @@ import type {
   StylePack,
   SystemInfo,
   TranscribeResult,
+  WindowsImeStatus,
 } from "../types";
 import { ipc, permissionLabelKey, type PermissionKind, type PermissionStatus } from "../ipc";
 
@@ -69,6 +70,8 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
   const [deletingId, setDeletingId] = useState<string | null>(null);
   // 本机性能（给语音模型打标签）— 不显眼的"重新采集"。
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
+  // R11：Windows TSF 输入法状态（仅 Windows 拉取）。
+  const [tsfStatus, setTsfStatus] = useState<WindowsImeStatus | null>(null);
   const [systemRefreshing, setSystemRefreshing] = useState(false);
   const refreshSystemInfo = (force: boolean) => {
     const p = ipc.getSystemInfo(force);
@@ -186,6 +189,10 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
         if (!cancelled) setStylePacks(Array.isArray(p) ? p : []);
       }).catch(() => {});
       refreshSystemInfo(false);
+      // R11：TSF 输入法状态（仅 Windows；失败静默）。
+      if (IS_WIN) {
+        ipc.windowsImeStatus().then(setTsfStatus).catch(() => {});
+      }
       // 麦克风枚举最重，再往后一点。
       setTimeout(() => {
         if (cancelled) return;
@@ -1888,6 +1895,44 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
             <span className="slider" />
           </label>
         </div>
+        {IS_WIN && (
+          <div className="set-row">
+            <div>
+              <div className="set-name">{t("settings.tsf.name")}</div>
+              <div className="set-desc">
+                {tsfStatus?.status === "installed"
+                  ? t("settings.tsf.installed", { path: tsfStatus?.dllPath ?? "" })
+                  : tsfStatus?.status === "registrationBroken"
+                    ? t("settings.tsf.broken")
+                    : t("settings.tsf.notInstalled")}
+              </div>
+              <button
+                className="btn btn-sm"
+                style={{ marginTop: 6 }}
+                onClick={async () => {
+                  try {
+                    await ipc.windowsImeRestoreProfile();
+                    setMsg({ ok: true, text: t("settings.tsf.restoreDone") });
+                  } catch (e) {
+                    setMsg({ ok: false, text: String(e) });
+                  }
+                }}
+              >
+                {t("settings.tsf.restoreBtn")}
+              </button>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={config.windows_tsf_enabled ?? false}
+                onChange={(e) =>
+                  setConfig({ ...config, windows_tsf_enabled: e.target.checked })
+                }
+              />
+              <span className="slider" />
+            </label>
+          </div>
+        )}
       </div>
 
       {/* 音频 */}

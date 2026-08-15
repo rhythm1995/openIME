@@ -13,6 +13,7 @@ import type {
   SystemInfo,
   TranscribeResult,
   UtteranceRecord,
+  WindowsImeStatus,
 } from "./types";
 
 export type PermissionKind = "microphone" | "accessibility";
@@ -101,4 +102,8 @@ export const ipc = {
   qaInsertLast: () => invoke<string | null>("qa_insert_last"),
   qaClear: () => invoke<void>("qa_clear"),
   qaCopyLast: () => invoke<string | null>("qa_copy_last"),
+  // R11 Windows TSF 输入法
+  windowsImeStatus: () => invoke<WindowsImeStatus>("windows_ime_status"),
+  windowsImeRestoreProfile: () =>
+    invoke<void>("windows_ime_restore_profile"),
 };

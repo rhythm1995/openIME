@@ -246,3 +246,10 @@ export interface ModelDownloadProgress {
   /** ASR 模型 id 或 `polish`，进度条挂在对应卡片 */
   target_id?: string | null;
 }
+
+/** R11 Windows TSF 输入法状态（windows_ime_status 命令）。 */
+export interface WindowsImeStatus {
+  status: "installed" | "notInstalled" | "registrationBroken";
+  dllPath?: string | null;
+  usingTsf: boolean;
+}

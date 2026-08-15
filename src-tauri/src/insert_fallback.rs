@@ -60,10 +60,18 @@ impl TextInserter for CompositeInserter {
         self.enigo.insert(text).await
     }
 
-    /// 四态插入（R7）。
+    /// 四态插入（R7）+ TSF 优先通道（R11，设计 L801）。
     async fn insert_ex(&self, text: &str, opts: &InsertOpts) -> InsertOutcome {
         if text.is_empty() {
             return InsertOutcome::Typed;
+        }
+        // R11：TSF CommitText 优先（目标进程内上屏，不抢焦点不碰剪贴板）。
+        // 门控不过（未装/非 AMD64/超限/流式）→ 静默走原路径；失败按 tsf_fallback 回退。
+        #[cfg(target_os = "windows")]
+        if opts.tsf_enabled {
+            if let Some(outcome) = self.try_tsf_insert(text, opts) {
+                return outcome;
+            }
         }
         // Auto + 前台 app 命中兜底列表 → 视同 Paste（FR-7.4）。
         let strategy = if opts.strategy == InsertStrategy::Auto
@@ -94,6 +102,48 @@ impl TextInserter for CompositeInserter {
                 }
             },
             InsertStrategy::Paste => self.paste(text, opts).await,
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl CompositeInserter {
+    /// TSF 通道（R11）：Some(Committed/Failed) = 终态；None = 不适用或失败可回退，
+    /// 调用方继续走 enigo/粘贴（设计：Type 策略回退后仍只打字，由原 match 语义保证）。
+    fn try_tsf_insert(&self, text: &str, opts: &InsertOpts) -> Option<InsertOutcome> {
+        use crate::windows_ime::install::{detect_status, ImeInstallStatus};
+        use crate::windows_ime::session::{prepare_session, tsf_gate};
+        use voice_core::InsertOutcome;
+
+        let info = crate::platform::windows::focus::frontmost_process_info()?;
+        let installed = matches!(detect_status(Some(&self.app)), ImeInstallStatus::Installed { .. });
+        if tsf_gate(opts.tsf_enabled, text.len(), info.machine, installed).is_err() {
+            return None; // 门控不过 → 原路径
+        }
+        let fallback = |err: &str| -> Option<InsertOutcome> {
+            if opts.tsf_fallback {
+                log_info!("TSF 失败（{err}），回退 R7 插入");
+                None
+            } else {
+                log_info!("TSF 失败（{err}），tsf_fallback=false → Failed");
+                Some(InsertOutcome::Failed)
+            }
+        };
+        match prepare_session(Some(&self.app)) {
+            Ok(mut s) => match s.submit(text) {
+                Ok(status) => {
+                    s.restore_session();
+                    if matches!(status, crate::windows_ime::protocol::ImeSubmitStatus::Committed) {
+                        log_info!("插入成功（TSF Committed）：{} 字", text.chars().count());
+                        Some(InsertOutcome::Committed)
+                    } else {
+                        fallback(&format!("{status:?}"))
+                    }
+                }
+                Err(e) => fallback(&format!("{e:?}")),
+            },
+            // prepare 失败路径内部已做 restore（含激活失败）。
+            Err(e) => fallback(&format!("{e:?}")),
         }
     }
 }

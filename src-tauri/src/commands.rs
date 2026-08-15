@@ -1461,6 +1461,37 @@ pub async fn qa_insert_last(app: AppHandle) -> Result<Option<String>, String> {
     Ok(outcome.map(|o| format!("{o:?}")))
 }
 
+/// R11（FR-11.11）：TSF 输入法安装状态（Installed / NotInstalled / RegistrationBroken），
+/// 附 DLL 路径与配置开关。只读 HKCU，不触发注册（注册由启动时 ensure_registered 完成）。
+#[tauri::command]
+pub fn windows_ime_status(app: AppHandle) -> serde_json::Value {
+    use crate::windows_ime::install::{detect_status, ImeInstallStatus};
+    let (status, dll) = match detect_status(Some(&app)) {
+        ImeInstallStatus::Installed { dll } => ("installed", Some(dll)),
+        ImeInstallStatus::NotInstalled => ("notInstalled", None),
+        ImeInstallStatus::RegistrationBroken { .. } => ("registrationBroken", None),
+    };
+    let using_tsf = cfg!(target_os = "windows");
+    serde_json::json!({
+        "status": status,
+        "dllPath": dll.map(|p| p.to_string_lossy().into_owned()),
+        "usingTsf": using_tsf,
+    })
+}
+
+/// R11（FR-11.13）：「恢复系统输入法」——把当前激活的 profile 还原为快照外的主流
+/// 输入法（openIME 仍是当前时切换回系统默认微软拼音，卡住时兜底）。
+#[tauri::command]
+pub fn windows_ime_restore_profile() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        crate::windows_ime::restore_to_system_default()
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    Ok(())
+}
+
 /// 清空当前 QA 对话（保持窗口打开）。
 #[tauri::command]
 pub fn qa_clear(app: AppHandle) -> Result<(), String> {

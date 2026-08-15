@@ -282,9 +282,10 @@ pub struct AppConfig {
     pub fn_repost_tis_fallback: bool,
 
     // ── P2：R11 Windows TSF ──
-    /// Windows 优先用 TSF CommitText 上屏（未安装则静默回退）。
-    /// 默认关闭：TSF 上屏 FFI（命名管道 client）尚未落地，`tsf_enabled` 目前无消费方，
-    /// 默认 true 会承诺不存在的功能；FFI 落地后改回默认开启。
+    /// Windows 优先用 TSF CommitText 上屏。FFI（TIP DLL + 命名管道 client）已落地，
+    /// 但 Win11 实测枚举/激活只认 HKLM（管理员）注册的 TIP：per-user 安装下探测为
+    /// RegistrationBroken → insert_ex 零成本回退 R7。故默认 false；
+    /// 以管理员运行一次 `regsvr32 OpenImeTsf.dll` 后可在设置页开启。
     #[serde(default = "default_false")]
     pub windows_tsf_enabled: bool,
     /// TSF 提交失败时回退 P1 R7 粘贴。
@@ -321,11 +322,11 @@ fn default_local_language() -> String {
 fn default_translate_target_lang() -> String {
     "en".into()
 }
-fn default_true() -> bool {
-    true
-}
 fn default_false() -> bool {
     false
+}
+fn default_true() -> bool {
+    true
 }
 fn default_short_press_ms() -> u32 {
     300

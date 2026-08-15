@@ -20,6 +20,9 @@ pub const OPENIME_PROFILE_GUID: &str = "{B6D24E91-0C53-4A8F-9E17-2A5D8C3F1B40}";
 pub const OPENIME_IME_PIPE_PREFIX: &str = r"\\.\pipe\OpenImeCommit";
 #[allow(dead_code)]
 pub const OPENIME_IME_PROTOCOL_VERSION: u32 = 1;
+/// 单次提交文本上限（UTF-8 字节数，NFR-11.4；与 DLL 侧 kMaxTextBytes 一致）。
+#[allow(dead_code)]
+pub const MAX_TEXT_BYTES: usize = 65536;
 
 /// 提交结果（status 小写）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
