@@ -137,7 +137,8 @@ pub fn run() {
                 std::thread::Builder::new()
                     .name("tsf-self-register".into())
                     .spawn(move || {
-                        let status = crate::windows_ime::install::ensure_registered(Some(&app_handle));
+                        let status =
+                            crate::windows_ime::install::ensure_registered(Some(&app_handle));
                         log_info!("TSF TIP 状态：{status:?}");
                     })
                     .ok();

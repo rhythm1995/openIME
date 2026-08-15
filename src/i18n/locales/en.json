@@ -17,7 +17,8 @@
     "history": "History",
     "dictionary": "Dictionary",
     "settingsVoice": "Voice",
-    "settingsAi": "AI Enhancement"
+    "settingsAi": "AI Enhancement",
+    "feedback": "Feedback"
   },
   "status": {
     "ready": "Ready",
@@ -252,7 +253,7 @@
     "translate": {
       "title": "Translation",
       "targetLangLabel": "Target language",
-      "targetLangHint": "Fixed language set; takes effect on the next session.",
+      "targetLangHint": "Available languages follow the translation backend; takes effect on the next session.",
       "lang_zh": "中文",
       "lang_en": "English",
       "lang_ja": "日本語",
@@ -260,6 +261,22 @@
       "lang_fr": "français",
       "lang_de": "Deutsch",
       "lang_es": "español",
+      "lang_ar": "العربية",
+      "lang_th": "ไทย",
+      "lang_tr": "Türkçe",
+      "lang_ru": "Русский",
+      "lang_pt_br": "Português (Brasil)",
+      "lang_pt_pt": "Português (Portugal)",
+      "lang_id": "Bahasa Indonesia",
+      "lang_hi": "हिन्दी",
+      "lang_vi": "Tiếng Việt",
+      "lang_pl": "Polski",
+      "lang_uk": "Українська",
+      "lang_fa": "فارسی",
+      "lang_uz": "Oʻzbekcha",
+      "lang_zh_hant": "繁體中文",
+      "lang_yue": "粵語",
+      "polishOnlyLangsHint": "Without a dedicated translation model, the polish model only supports a few target languages (Chinese, English, Japanese, Korean, French, German, Spanish).",
       "polishFirstName": "Polish before translating",
       "polishFirstDesc": "Cloud: polish + translate in one call; local: Light fix then translate (two steps, slower)."
     },

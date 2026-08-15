@@ -29,14 +29,14 @@ openIME/
 │   │   ├── store.rs          # SqliteStore + 迁移（v4：前缀角色）
 │   │   ├── bailian_proto.rs  # 百炼协议帧（run-task/result-generated 编解码）
 │   │   ├── providers/        # bailian.rs / sherpa.rs / openai_asr.rs / multimodal_asr.rs
-│   │   ├── polish/           # L0 规则纠错 / ITN / 繁简 / 云端三协议 / 前缀角色 / prompts
+│   │   ├── polish/           # L0 规则纠错 / ITN / 繁简 / 云端三协议 / 前缀角色 / prompts / runtime（常驻 GGUF）/ translate_router
 │   │   ├── pipeline.rs       # 端到端编排（听写 / 翻译 / 角色 / HUD 警告）
 │   │   ├── transcribe.rs     # 文件转录（长音频分段 + 重叠拼接 + SRT）
 │   │   ├── endpoint.rs       # endpoint SSRF 校验
 │   │   ├── audio.rs          # cpal 采集 + rubato 重采样
 │   │   ├── insert.rs         # 文本插入（InsertOutcome 四态 / TSF 纯函数）
 │   │   ├── model_mgr.rs / model_download.rs  # 模型下载/SHA256/解压/镜像切换
-│   │   └── system.rs / http.rs / permissions.rs / asr_catalog.rs
+│   │   └── system.rs / http.rs / permissions.rs / asr_catalog.rs / llm_catalog.rs
 │   └── tests/                # traits 契约 + 百炼 WS mock + REST ASR mock 集成
 ├── src-tauri/                # Tauri 薄壳
 │   ├── src/                  # commands / state / qa / fn_policy / insert_fallback / windows_ime / credentials / logging / platform
@@ -84,22 +84,23 @@ Windows 打包（对应 macOS 的 build.sh）：`pnpm app:build:win`（= `script
 |---|---|---|
 | 百炼协议帧 | run-task 序列化 / result-generated(partial+final) / task-started/finished/failed 反序列化 | 8 |
 | ASR providers | 百炼 WS mock 全流程 + task-failed / REST ASR mock / sherpa 识别器缓存 | 11 |
-| pipeline | 端到端编排：partial/final 插入落库 / L0 总生效 / L2 跳过与回退 / 翻译分支 / 前缀角色 | 24 |
-| 润色 | L0 纠错 31 / 前缀角色 13 / prompts 12 / 云端三协议 7 / ITN 7 / LlmClient+SSE 7 / sanitize 6 / router 4 / 繁简 3 / 标点 2 | 92 |
+| pipeline | 端到端编排：partial/final 插入落库 / L0 总生效 / L2 跳过与回退 / 翻译分支（含 TranslateRouter 两步 Light）/ 前缀角色 | 37 |
+| 润色 | L0 纠错 31 / 前缀角色 13 / prompts 25 / 云端三协议 7 / ITN 7 / LlmClient+SSE 7 / sanitize 6 / router 4 / 繁简 3 / 标点 2 / runtime 7 / translate_router 2 | 134 |
+| 本地模型目录 | `llm_catalog`：润色 3 档 + 翻译 2 档 id 闭集 / 未知归一 / fallback 解析 | 12 |
 | 文本插入 | InsertOutcome 四态 / diff_prefix 增量 / 剪贴板恢复判定 / TSF 纯函数 | 17 |
 | 文件转录 | symphonia 解码 / 线性重采样 / 长音频分段 + 重叠 stitch / srt 切分 | 14 |
-| 存储 | SQLite CRUD / 级联 / 时间戳 / 迁移(v4 前缀角色) / 热词批量 / 风格包 CRUD / 日记导出 | 13 |
+| 存储 | SQLite CRUD / 级联 / 时间戳 / 迁移(v4 前缀角色) / 热词批量 / 风格包 CRUD / 日记导出 | 17 |
 | endpoint SSRF | validate_endpoint（IMDS / link-local / CGNAT / mapped IPv6 / RFC1918 放行等） | 13 |
-| 配置 | AppConfig / ProviderConfig 校验（含 P1/P2 字段范围） | 13 |
-| 系统采集 | 模型适配度标签：轻量/中量/重型 × 内存分档 / 磁盘不足 / Apple Silicon | 9 |
-| 音频 | f32↔s16le / 重采样比例 / WAV fixture / 错误路径 | 7 |
-| 模型下载 | SHA256 向量 / 校验 / tar.gz 解压 / 下载与镜像（model_mgr 4 + model_download 5） | 9 |
+| 配置 | AppConfig / ProviderConfig 校验（含 P1/P2 字段 + 本地三件套字段 + 旧 id 迁移） | 19 |
+| 系统采集 | 模型适配度标签：轻量/中量/重型 × 内存分档 / 磁盘不足 / Apple Silicon / 三件套 combo 打标 + 推荐器 | 22 |
+| 音频 | f32↔s16le / 重采样比例 / WAV fixture / 错误路径 | 15 |
+| 模型下载 | SHA256 向量 / 校验 / tar.gz 解压 / 下载与镜像（model_mgr 4 + model_download 6） | 10 |
 | 权限 | 状态枚举 / checker / 序列化 | 3 |
 | http | no-redirect client | 1 |
 | 集成 | 百炼 WS mock 2 + REST ASR mock 5 + trait 契约 6 | 13 |
-| 应用壳（src-tauri） | windows_ime 协议 / 粘贴兜底 / commands / qa / fn_policy / credentials / logging 等；macOS 编译路径 43 项，Windows CI 另编译 `platform/windows/*` 专属测试（focus/permissions/fn_monitor/single_instance/uia 等，数量更多） | 43+ |
-| 前端 | App 4 + Settings 11 + History 3 | 18 |
-| **合计** | `cargo test --workspace`（macOS Rust 293：voice-core 237 + 集成 13 + 应用壳 43）+ `pnpm test`（18）；voice-core lib 带/不带 sherpa 特性均 237 | **311** |
+| 应用壳（src-tauri） | windows_ime 协议 / 粘贴兜底 / commands / qa / fn_policy / credentials / logging 等；84 个测试函数（含 `platform/windows/*` 与 `windows_ime` FFI 专属） | 84† |
+| 前端 | Settings（37）/ App / History 等 | 47 |
+| **合计** | 本地可跑 392：`cargo test -p voice-core` 345（lib 332 + 集成 13）+ `pnpm test` 47；应用壳 84 测试函数由 Windows CI 跑（† macOS 因 `windows_ime` FFI 门控待 Windows，`cargo check/test -p openime` 本地不过；CI `tauri-shell-windows` 跑） | **476** |
 
 CI：GitHub Actions 四 job——`core`（三平台矩阵 × fmt+clippy+test）、`tauri-shell`（macOS，clippy -D warnings + check）、`tauri-shell-windows`（windows-latest，clippy -D warnings + check + cargo test，兜住 macOS 专属 API 漏门控 / windows-rs 类型漂移）、`frontend`（vitest + build）。
 

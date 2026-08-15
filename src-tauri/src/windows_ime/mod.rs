@@ -18,20 +18,17 @@ pub fn restore_to_system_default() -> Result<(), String> {
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_APARTMENTTHREADED,
     };
-    use windows::Win32::UI::TextServices::{
-        ITfInputProcessorProfiles, TF_INPUTPROCESSORPROFILE,
-    };
+    use windows::Win32::UI::TextServices::{ITfInputProcessorProfiles, TF_INPUTPROCESSORPROFILE};
 
     let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     let uninit = hr.0 == 0;
     let result = (|| -> Result<(), String> {
         unsafe {
-            let profiles_res: windows::core::Result<ITfInputProcessorProfiles> =
-                CoCreateInstance(
-                    &windows::Win32::UI::TextServices::CLSID_TF_InputProcessorProfiles,
-                    None,
-                    CLSCTX_INPROC_SERVER,
-                );
+            let profiles_res: windows::core::Result<ITfInputProcessorProfiles> = CoCreateInstance(
+                &windows::Win32::UI::TextServices::CLSID_TF_InputProcessorProfiles,
+                None,
+                CLSCTX_INPROC_SERVER,
+            );
             let profiles = profiles_res.map_err(|e| e.to_string())?;
             // 快照当前 → 若是 openIME 则切回微软拼音（系统默认），否则不动。
             let mgr_res: windows::core::Result<
@@ -59,11 +56,15 @@ pub fn restore_to_system_default() -> Result<(), String> {
             // 微软拼音（系统默认）：{81D4E9C9-1D3B-41BC-9E6C-4B40BF79E35E} /
             // profile {FA550B04-5AD7-411F-A5AC-CA038EC515D7}，zh-CN。
             let ms_clsid = windows::core::GUID::from_values(
-                0x81d4e9c9, 0x1d3b, 0x41bc,
+                0x81d4e9c9,
+                0x1d3b,
+                0x41bc,
                 [0x9e, 0x6c, 0x4b, 0x40, 0xbf, 0x79, 0xe3, 0x5e],
             );
             let ms_profile = windows::core::GUID::from_values(
-                0xfa550b04, 0x5ad7, 0x411f,
+                0xfa550b04,
+                0x5ad7,
+                0x411f,
                 [0xa5, 0xac, 0xca, 0x03, 0x8e, 0xc5, 0x15, 0xd7],
             );
             profiles

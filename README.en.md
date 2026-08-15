@@ -27,10 +27,10 @@
 
 - 🔒 **Local-first, private** — On-device `sherpa-onnx` recognition; audio never leaves your machine. One-click model download (SHA256 + resumable + HF→mirror failover).
 - ☁️ **Switchable engines** — Local sherpa / Bailian WebSocket streaming / OpenAI-compatible REST / Multimodal REST; engine URLs are auto-normalized.
-- ✨ **3-tier AI polish** — L0 rule correction (hotword homophone/fuzzy, numeral ITN, simplified/traditional, trailing-punctuation removal) + L2 LLM (local Qwen2.5 first; cloud OpenAI Chat / Anthropic / Responses; original text passthrough on double failure).
+- ✨ **3-tier AI polish** — L0 rule correction (hotword homophone/fuzzy, numeral ITN, simplified/traditional, trailing-punctuation removal) + L2 LLM (local Qwen3.5 first — 0.8/2/4B by machine tier; cloud OpenAI Chat / Anthropic / Responses; original text passthrough on double failure).
 - 📝 **Hotword dictionary & style packs** — Custom terms for pronunciation correction; custom system prompts to switch output style; prefix roles (lines starting with "邮件:" / "翻译:" are routed automatically).
 - 🎬 **File transcription** — Audio file → SRT subtitles; long audio auto-segmented (adjustable duration / overlap, with progress and cancel).
-- 🌐 **Speech translation & selection QA** — Dedicated shortcut: speak the source language, target language is typed at the cursor; select text and ask questions by voice in a floating panel with streaming answers.
+- 🌐 **Speech translation & selection QA** — Dedicated shortcut: speak the source language, target language is typed at the cursor (7 base languages; cloud or a local dedicated translate model — MiLMMT-46 / HY-MT — unlocks an extended set); select text and ask questions by voice in a floating panel with streaming answers.
 - 🌐 **Bilingual UI (CN/EN)** — One-click toggle at the bottom-left. Interface language is fully independent from the ASR recognition language.
 - ⌨️ **Global shortcut** — Default Fn (🌐) with push-to-talk (PTT, release to stop); toggle mode optional.
 - 🧲 **Insertion fallback** — If simulated typing is swallowed by the target app, falls back to paste (Cmd+V) and restores your clipboard; short Fn presses in PTT mode re-post the original 🌐 function.
@@ -81,12 +81,12 @@ cargo test -p voice-core        # Core library
 ./scripts/build.sh install      # Build and install to /Applications (fixed signing)
 ```
 
-311 tests cover the codebase (voice-core 237 + integration 13 + src-tauri 43 + frontend 18). Full dev workflow, test matrix, CI, signing, and releases in [docs/development.md](docs/development.md); logs & troubleshooting in [docs/troubleshooting.md](docs/troubleshooting.md).
+392 tests run locally (voice-core 345 = lib 332 + integration 13; frontend 47); src-tauri app-shell tests run in Windows CI (84). Full dev workflow, test matrix, CI, signing, and releases in [docs/development.md](docs/development.md); logs & troubleshooting in [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Roadmap
 
 - ✅ Engines, overlay, tray, global shortcut, onboarding, history details, UI i18n (Chinese / English)
-- ✅ 3-tier AI polish, hotword dictionary, style packs + prefix roles, translation mode, selection QA panel, file transcription (long-audio segmentation), simplified/traditional, selection injection, journal export, machine-profile → model-fit tagging
+- ✅ 3-tier AI polish, hotword dictionary, style packs + prefix roles, translation mode, selection QA panel, file transcription (long-audio segmentation), simplified/traditional, selection injection, journal export, machine-profile → model-fit tagging, local model suite (ASR + polish + translate, one-click tiered download)
 - ✅ Single-instance lock, ESC interrupt, endpoint SSRF validation, paste fallback + clipboard restore, Fn short-press repost
 - 🔜 Windows (NSIS packaging + real-machine e2e done; TSF native integration pending)
 

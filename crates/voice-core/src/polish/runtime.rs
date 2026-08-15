@@ -313,6 +313,10 @@ fn load_model(
 
 /// 槽满时的逐出受害者选择（纯决策，可单测）：返回一个「不是本次要加载路径」的
 /// 已驻留 path；无候选（槽未满由调用方判断 / 全部是 incoming，后者不可能）返回 None。
+///
+/// 仅 `llm` feature 的 `run_blocking` 槽满分支引用；非 llm 构建下无调用方，
+/// `allow` 抑制 dead_code（保留纯函数以便跨 feature 单测）。
+#[allow(dead_code)]
 pub fn pick_eviction_victim<'a>(
     resident: impl IntoIterator<Item = &'a Path>,
     incoming: &Path,

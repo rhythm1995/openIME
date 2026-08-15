@@ -1,6 +1,6 @@
 # 本地三件套：需求方案 + 技术方案
 
-> 状态：需求已拍板；技术方案按现有 `voice-core` / Tauri 薄壳落地。  
+> 状态：✅ 已实现（`f43012f`）；本文件为设计存档。原「需求已拍板；技术方案按现有 `voice-core` / Tauri 薄壳落地」。落地记录见 [`progress.md`](./progress.md)「本地三件套实现进度」。  
 > 日期：2026-08-15  
 > 调研底稿：[`local-polish-model-catalog.md`](local-polish-model-catalog.md)、[`local-translate-model-research.md`](local-translate-model-research.md)。
 
@@ -342,14 +342,14 @@ voice-core 单测（不链真实 GGUF）：
 
 ## T10. PR 切片
 
-| PR | 内容 | 风险 |
-|---|---|---|
-| **P0** | 本文（需求+技术合一） | 无 |
-| **P1** | ASR 下架 FireRed + 清 Settings fallback；`open_model_directory` + 打开目录按钮 | 低 |
-| **P2** | `llm_catalog` + 下载多 GGUF + SHA256 表；设置三列但推理仍可走旧 1.5B 直到 P3 | 中（URL/SHA 要锁） |
-| **P3** | `GgufRuntime` 常驻；`LocalGgufPolish` 改用；换档不每次 load | 高（llm feature / Metal） |
-| **P4** | `TranslateRouter` + `apply_translate` 两步 Light；兼译；config 新字段 | 中 |
-| **P5** | combo 打标 + 推荐器写默认 + 预算条 + 弱机兼提示 | 低 |
+| PR | 内容 | 风险 | 状态 |
+|---|---|---|---|
+| **P0** | 本文（需求+技术合一） | 无 | ✅ |
+| **P1** | ASR 下架 FireRed + 清 Settings fallback；`open_model_directory` + 打开目录按钮 | 低 | ✅ |
+| **P2** | `llm_catalog` + 下载多 GGUF + SHA256 表；设置三列但推理仍可走旧 1.5B 直到 P3 | 中（URL/SHA 要锁） | ✅ |
+| **P3** | `GgufRuntime` 常驻；`LocalGgufPolish` 改用；换档不每次 load | 高（llm feature / Metal） | ✅ |
+| **P4** | `TranslateRouter` + `apply_translate` 两步 Light；兼译；config 新字段 | 中 | ✅ |
+| **P5** | combo 打标 + 推荐器写默认 + 预算条 + 弱机兼提示 | 低 | ✅ |
 
 P3 开工前半天烟测：现绑定能否 load `qwen35` / `gemma3` / `hunyuan-dense`。不能则 P2 下载回退档，P3 只跑 Qwen3 + MiLMMT（Gemma3 一般更熟）或先升 `llama-cpp-2`。
 

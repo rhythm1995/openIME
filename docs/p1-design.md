@@ -499,6 +499,8 @@ flowchart TD
 
 未知短码：原样传入 prompt（防御），UI 不下发未知值。**P1 不做自由输入目标语言。**
 
+> **注（后续扩展）**：上述「固定 7 语闭集」为 P1 范围；本地三件套（`f43012f`）已将目标语言扩展为「基础 7 语 + 扩展集」分档（启用云端或本地专翻 MiLMMT-46 / HY-MT 解锁扩展集），见 [`local-model-suite-plan.md`](./local-model-suite-plan.md) / [`progress.md`](./progress.md)。本文件为 P1 设计存档，保留原文不改。
+
 ### 非功能
 
 | ID | 需求 |

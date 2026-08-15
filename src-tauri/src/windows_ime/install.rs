@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use tauri::Manager;
 
+#[cfg(target_os = "windows")]
 use super::protocol::OPENIME_TEXT_SERVICE_CLSID;
 
 /// 探测结果（设计 FR-11.11：Installed / NotInstalled / RegistrationBroken）。
@@ -35,7 +36,8 @@ pub fn classify_ime_status(
     let reg_path = PathBuf::from(reg);
     let same = |a: &std::path::Path, b: &std::path::Path| -> bool {
         // 大小写不敏感比较（Windows 路径语义），canonicalize 交给调用方的 exists 探测。
-        a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
     };
     let matches_candidate = candidates
         .iter()
@@ -52,9 +54,7 @@ pub fn classify_ime_status(
             reason: "TSF TIP LanguageProfile 键缺失".into(),
         };
     }
-    ImeInstallStatus::Installed {
-        dll: reg_path,
-    }
+    ImeInstallStatus::Installed { dll: reg_path }
 }
 
 /// DLL 候选路径：dev（manifest/ime）→ 安装包（resource_dir/ime）→ exe 同级 ime/ → exe 同级。
@@ -217,9 +217,9 @@ pub fn system_lists_tip() -> bool {
                 let mut fetched = 0u32;
                 if iter.Next(&mut items, &mut fetched).is_ok() {
                     for item in &items[..fetched as usize] {
-                        if item.clsid.data1 == u32::from_be_bytes([
-                            ours[0], ours[1], ours[2], ours[3],
-                        ]) {
+                        if item.clsid.data1
+                            == u32::from_be_bytes([ours[0], ours[1], ours[2], ours[3]])
+                        {
                             listed = true;
                             break;
                         }
@@ -305,7 +305,12 @@ mod tests {
         let candidates = [p("C:/new/ime/OpenImeTsf.dll")];
         // 文件不在。
         assert!(matches!(
-            classify_ime_status(Some("C:/new/ime/OpenImeTsf.dll"), &candidates, |_| false, true),
+            classify_ime_status(
+                Some("C:/new/ime/OpenImeTsf.dll"),
+                &candidates,
+                |_| false,
+                true
+            ),
             ImeInstallStatus::RegistrationBroken { .. }
         ));
         // 注册的是旧路径（与当前候选不符）→ Broken（防陈旧/劫持，设计 L822）。
@@ -319,7 +324,12 @@ mod tests {
     fn installed_but_tip_key_missing_is_broken() {
         let candidates = [p("C:/app/ime/OpenImeTsf.dll")];
         assert!(matches!(
-            classify_ime_status(Some("C:/app/ime/OpenImeTsf.dll"), &candidates, |_| true, false),
+            classify_ime_status(
+                Some("C:/app/ime/OpenImeTsf.dll"),
+                &candidates,
+                |_| true,
+                false
+            ),
             ImeInstallStatus::RegistrationBroken { .. }
         ));
     }
@@ -340,7 +350,9 @@ mod tests {
         assert!(
             cands.iter().any(|p| {
                 p.to_string_lossy().contains("ime")
-                    && p.file_name().map(|f| f == "OpenImeTsf.dll").unwrap_or(false)
+                    && p.file_name()
+                        .map(|f| f == "OpenImeTsf.dll")
+                        .unwrap_or(false)
             }),
             "候选应含 ime/OpenImeTsf.dll 形态：{cands:?}"
         );

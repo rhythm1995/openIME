@@ -5,9 +5,10 @@
 //! 800ms 内 `WaitNamedPipe` + `CreateFile` 重试 → 读 `clientReady` → 提交/收结果。
 
 use super::protocol::{
-    ime_pipe_name_for_target, ImeErrorCode, ImeProtocolMessage, ImeSubmitStatus,
-    OPENIME_IME_PROTOCOL_VERSION,
+    ImeErrorCode, ImeProtocolMessage, ImeSubmitStatus, OPENIME_IME_PROTOCOL_VERSION,
 };
+#[cfg(target_os = "windows")]
+use super::protocol::ime_pipe_name_for_target;
 
 /// 连接 + clientReady 阶段的失败分类（映射 ImeErrorCode）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,9 +24,15 @@ pub enum IpcConnectError {
 }
 
 /// 一次已建立的会话连接（含句柄）。Drop 关闭。
+#[cfg(target_os = "windows")]
 pub struct IpcClient {
     handle: windows::Win32::Foundation::HANDLE,
 }
+
+/// 非 Windows 占位：session 层的 `Option<IpcClient>` 字段需要类型存在，
+/// 但 `prepare_session` 恒为 NotInstalled，永远构造不出实例。
+#[cfg(not(target_os = "windows"))]
+pub struct IpcClient;
 
 /// 与 `ime_pipe_name_for_target(pid, tid)` 的管道建立连接并读取 clientReady。
 /// 成功标准（KD-10）：读到 `clientReady` 且其 processId == pid（belt），
@@ -94,6 +101,16 @@ pub fn connect_and_wait_ready(
         }
         std::thread::sleep(Duration::from_millis(15));
     }
+}
+
+/// 非 Windows 桩：命名管道仅 Windows 存在；session 层引用此符号以跨平台编译。
+#[cfg(not(target_os = "windows"))]
+pub fn connect_and_wait_ready(
+    _pid: u32,
+    _tid: u32,
+    _deadline_ms: u64,
+) -> Result<IpcClient, IpcConnectError> {
+    Err(IpcConnectError::Timeout)
 }
 
 impl IpcClient {
@@ -165,6 +182,18 @@ impl Drop for IpcClient {
         unsafe {
             let _ = windows::Win32::Foundation::CloseHandle(self.handle);
         }
+    }
+}
+
+/// 非 Windows 桩：session::submit 跨平台编译需要方法存在（运行时不可达）。
+#[cfg(not(target_os = "windows"))]
+impl IpcClient {
+    pub fn read_message(&self, _timeout_ms: u64) -> Option<ImeProtocolMessage> {
+        None
+    }
+
+    pub fn write_message(&self, _msg: &ImeProtocolMessage) -> bool {
+        false
     }
 }
 

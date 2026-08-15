@@ -1899,8 +1899,7 @@ pub fn windows_ime_status(app: AppHandle) -> serde_json::Value {
 pub fn windows_ime_restore_profile() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        crate::windows_ime::restore_to_system_default()
-            .map_err(|e| e.to_string())
+        crate::windows_ime::restore_to_system_default().map_err(|e| e.to_string())
     }
     #[cfg(not(target_os = "windows"))]
     Ok(())

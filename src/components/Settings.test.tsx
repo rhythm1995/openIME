@@ -158,15 +158,16 @@ describe("Settings", () => {
     expect(await screen.findByText("翻译")).toBeTruthy();
     expect(screen.getByText("目标语言")).toBeTruthy();
     expect(screen.getByText("先润色再翻译")).toBeTruthy();
-    // 目标语言下拉默认 en。
+    // 默认（云端策略）目标语言下拉出扩展集，选中 en。
     const langSelect = screen
       .getByText("目标语言")
       .closest(".field")!
       .querySelector("select") as HTMLSelectElement;
     expect(langSelect.value).toBe("en");
-    for (const code of ["zh", "ja", "ko", "fr", "de", "es"]) {
+    for (const code of ["fr", "ar", "th", "ko", "tr", "es", "ru", "pt-br", "pt-pt", "id", "hi", "vi", "pl", "uk", "fa", "uz", "zh-hant", "yue"]) {
       expect(
         Array.from(langSelect.options).some((o) => o.value === code),
+        `扩展集缺 ${code}`,
       ).toBeTruthy();
     }
   });
@@ -441,6 +442,80 @@ describe("Settings", () => {
         ),
       { timeout: 2500 },
     );
+  });
+
+  // ── 目标语言下拉分档（云端/专翻 = 扩展集；本地无专翻 = 基础 7 语 + 限制提示） ──
+
+  /** 取「目标语言」下拉（含其全部 option）。 */
+  async function targetLangSelect() {
+    const label = await screen.findByText("目标语言");
+    return label.closest(".field")!.querySelector("select") as HTMLSelectElement;
+  }
+
+  it("云端策略：目标语言下拉出扩展语种集（20 语），不出润色限制提示", async () => {
+    mockInvoke({ get_config: defaultConfig, list_style_packs: [] });
+    render(<Settings view="ai" />);
+    const select = await targetLangSelect();
+    const options = Array.from(select.querySelectorAll("option"));
+    expect(options).toHaveLength(20);
+    // 扩展集专属项在列（巴葡/葡葡分列 + 繁中/粤语）。
+    expect(options.some((o) => o.textContent === "Português (Brasil)")).toBe(true);
+    expect(options.some((o) => o.textContent === "Português (Portugal)")).toBe(true);
+    expect(options.some((o) => o.textContent === "繁體中文")).toBe(true);
+    expect(options.some((o) => o.textContent === "粵語")).toBe(true);
+    // 扩展集不含简中/日语（用户选定清单）；不出现润色模型限制提示。
+    expect(options.some((o) => o.value === "zh")).toBe(false);
+    expect(options.some((o) => o.value === "ja")).toBe(false);
+    expect(screen.queryByText(/润色模型只支持/)).toBeNull();
+  });
+
+  it("本地策略 + 已选专翻：同样出扩展语种集，不出润色限制提示", async () => {
+    mockInvoke({
+      get_config: { ...defaultConfig, translate_policy: "prefer_local" },
+      list_style_packs: [],
+    });
+    render(<Settings view="ai" />);
+    const select = await targetLangSelect();
+    expect(select.querySelectorAll("option")).toHaveLength(20);
+    expect(screen.queryByText(/润色模型只支持/)).toBeNull();
+  });
+
+  it("本地策略 + 无专翻：仅基础 7 语 + 润色模型限制提示", async () => {
+    mockInvoke({
+      get_config: {
+        ...defaultConfig,
+        translate_policy: "prefer_local",
+        translate_local_model: "",
+      },
+      list_style_packs: [],
+    });
+    render(<Settings view="ai" />);
+    const select = await targetLangSelect();
+    const options = Array.from(select.querySelectorAll("option"));
+    expect(options).toHaveLength(7);
+    // 基础 7 语含中文/日语；扩展集专属项不在列。
+    expect(options.some((o) => o.value === "zh")).toBe(true);
+    expect(options.some((o) => o.value === "ja")).toBe(true);
+    expect(options.some((o) => o.value === "yue")).toBe(false);
+    expect(await screen.findByText(/润色模型只支持/)).toBeTruthy();
+  });
+
+  it("现值不在当前档时保留为附加项（不静默改配置）", async () => {
+    // 本地无专翻但配置仍是扩展语种（yue）：下拉应显示「粵語」附加项且选中不变。
+    mockInvoke({
+      get_config: {
+        ...defaultConfig,
+        translate_policy: "prefer_local",
+        translate_local_model: "",
+        translate_target_lang: "yue",
+      },
+      list_style_packs: [],
+    });
+    render(<Settings view="ai" />);
+    const select = await targetLangSelect();
+    expect(select.value).toBe("yue");
+    const yue = Array.from(select.querySelectorAll("option")).find((o) => o.value === "yue");
+    expect(yue?.textContent).toBe("粵語");
   });
 
   // ── 模型排序与「不使用本地专翻」卡片 ──

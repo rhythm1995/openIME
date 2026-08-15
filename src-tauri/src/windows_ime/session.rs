@@ -7,8 +7,11 @@
 //! 2. submit：SubmitText → 等匹配 sessionId 的 SubmitResult（≤64KiB）。
 //! 3. restore：按 `profile::restore_decision` 还原（幂等；Drop 兜底）。
 
+#[cfg(target_os = "windows")]
 use super::install::{detect_status, ImeInstallStatus};
-use super::ipc::{connect_and_wait_ready, submit_text_frame, IpcClient};
+#[cfg(target_os = "windows")]
+use super::ipc::connect_and_wait_ready;
+use super::ipc::{submit_text_frame, IpcClient};
 use super::profile::{restore_decision, ImeProfileSnapshot, ProfileRestoreDecision};
 use super::protocol::{ImeErrorCode, ImeSubmitStatus, MAX_TEXT_BYTES};
 

@@ -116,7 +116,10 @@ impl CompositeInserter {
         use voice_core::InsertOutcome;
 
         let info = crate::platform::windows::focus::frontmost_process_info()?;
-        let installed = matches!(detect_status(Some(&self.app)), ImeInstallStatus::Installed { .. });
+        let installed = matches!(
+            detect_status(Some(&self.app)),
+            ImeInstallStatus::Installed { .. }
+        );
         if tsf_gate(opts.tsf_enabled, text.len(), info.machine, installed).is_err() {
             return None; // 门控不过 → 原路径
         }
@@ -133,7 +136,10 @@ impl CompositeInserter {
             Ok(mut s) => match s.submit(text) {
                 Ok(status) => {
                     s.restore_session();
-                    if matches!(status, crate::windows_ime::protocol::ImeSubmitStatus::Committed) {
+                    if matches!(
+                        status,
+                        crate::windows_ime::protocol::ImeSubmitStatus::Committed
+                    ) {
                         log_info!("插入成功（TSF Committed）：{} 字", text.chars().count());
                         Some(InsertOutcome::Committed)
                     } else {

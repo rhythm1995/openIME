@@ -12,6 +12,10 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ startDragging: vi.fn().mockResolvedValue(undefined) }),
 }));
+const openUrlMock = vi.fn().mockResolvedValue(undefined);
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: (...args: unknown[]) => openUrlMock(...args),
+}));
 
 const bailianConfig = {
   active_provider: 0,
@@ -83,6 +87,20 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(screen.getByText("历史记录"));
     await waitFor(() => expect(screen.getByText("还没有录音记录")).toBeInTheDocument());
+  });
+
+  it("点击左下角意见反馈会打开 GitHub Issues", async () => {
+    mockInvoke({
+      ping: "ok",
+      get_config: bailianConfig,
+      check_permission: { kind: "accessibility", state: "granted", hint: "" },
+      list_hotwords: [],
+    });
+    render(<App />);
+    fireEvent.click(screen.getByText("意见反馈"));
+    await waitFor(() =>
+      expect(openUrlMock).toHaveBeenCalledWith("https://github.com/rhythm1995/openIME/issues")
+    );
   });
 
   it("未授权时不显示顶部横幅，设置页仍有系统权限", async () => {

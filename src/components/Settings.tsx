@@ -32,6 +32,22 @@ import { ipc, permissionLabelKey, type PermissionKind, type PermissionStatus } f
 // 默认本地 ASR id（与 voice-core asr_catalog 对齐；未安装时不算「使用中」）。
 const DEFAULT_LOCAL_ASR = "sensevoice";
 
+// 翻译目标语言分档（与 voice-core prompts::lang_display_name / lang_english_name 对齐）：
+// 基础 7 语 = 润色模型兼译可靠档；扩展集 = 云端与本地专翻（MiLMMT-46 / HY-MT）可选语种。
+const TRANSLATE_LANGS_BASIC: readonly string[] = ["zh", "en", "ja", "ko", "fr", "de", "es"];
+const TRANSLATE_LANGS_FULL: readonly string[] = [
+  "en", "fr", "ar", "de", "th", "ko", "tr", "es", "ru",
+  "pt-br", "pt-pt", "id", "hi", "vi", "pl", "uk", "fa", "uz",
+  "zh-hant", "yue",
+];
+const TRANSLATE_LANG_I18N_KEYS: Record<string, string> = {
+  zh: "lang_zh", en: "lang_en", ja: "lang_ja", ko: "lang_ko", fr: "lang_fr",
+  de: "lang_de", es: "lang_es", ar: "lang_ar", th: "lang_th", tr: "lang_tr",
+  ru: "lang_ru", "pt-br": "lang_pt_br", "pt-pt": "lang_pt_pt", id: "lang_id",
+  hi: "lang_hi", vi: "lang_vi", pl: "lang_pl", uk: "lang_uk", fa: "lang_fa",
+  uz: "lang_uz", "zh-hant": "lang_zh_hant", yue: "lang_yue",
+};
+
 // R9：「Hold 下短按 Fn 补发 🌐」仅 macOS 渲染（非 macOS 隐藏，不灰字占位）。
 const IS_MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
 // 系统权限提示文案随平台切换（Windows 无辅助功能授权概念，且深链走 ms-settings 设置页）。
@@ -560,6 +576,21 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
   const sortedTranslateModels = [...translateModels].sort(
     (a, b) => Number(b.recommended) - Number(a.recommended) || perfRank(a) - perfRank(b),
   );
+
+  // 目标语言分档：云端策略或已选本地专翻 → 扩展语种集；本地且无专翻（润色模型兼译）→ 基础 7 语。
+  const translateDedicatedActive = (config.translate_local_model ?? "").trim() !== "";
+  const translateLangsFull =
+    translateDedicatedActive || (config.translate_policy ?? "prefer_cloud") === "prefer_cloud";
+  const translateLangOptions: readonly string[] = translateLangsFull
+    ? TRANSLATE_LANGS_FULL
+    : TRANSLATE_LANGS_BASIC;
+  const translateTargetLang = config.translate_target_lang ?? "en";
+  // 现值不在当前档（如从云端切到本地兼译时仍选中扩展语种）：追加为附加项，不静默改配置。
+  const translateLangExtra =
+    !translateLangOptions.includes(translateTargetLang) &&
+    TRANSLATE_LANG_I18N_KEYS[translateTargetLang]
+      ? translateTargetLang
+      : null;
 
   return (
     <div>
@@ -2301,20 +2332,28 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
         <div className="field">
           <label className="field-label">{t("settings.translate.targetLangLabel")}</label>
           <select
-            value={config.translate_target_lang ?? "en"}
+            value={translateTargetLang}
             onChange={(e) =>
               setConfig({ ...config, translate_target_lang: e.target.value })
             }
           >
-            <option value="zh">{t("settings.translate.lang_zh")}</option>
-            <option value="en">{t("settings.translate.lang_en")}</option>
-            <option value="ja">{t("settings.translate.lang_ja")}</option>
-            <option value="ko">{t("settings.translate.lang_ko")}</option>
-            <option value="fr">{t("settings.translate.lang_fr")}</option>
-            <option value="de">{t("settings.translate.lang_de")}</option>
-            <option value="es">{t("settings.translate.lang_es")}</option>
+            {translateLangOptions.map((v) => (
+              <option key={v} value={v}>
+                {t(`settings.translate.${TRANSLATE_LANG_I18N_KEYS[v] ?? v}`)}
+              </option>
+            ))}
+            {translateLangExtra && (
+              <option value={translateLangExtra}>
+                {t(`settings.translate.${TRANSLATE_LANG_I18N_KEYS[translateLangExtra]}`)}
+              </option>
+            )}
           </select>
           <span className="field-hint">{t("settings.translate.targetLangHint")}</span>
+          {!translateLangsFull && (
+            <span className="field-hint" style={{ display: "block", marginTop: 4 }}>
+              {t("settings.translate.polishOnlyLangsHint")}
+            </span>
+          )}
         </div>
         <div className="set-row">
           <div>

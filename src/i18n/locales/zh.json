@@ -17,7 +17,8 @@
     "history": "历史记录",
     "dictionary": "词典",
     "settingsVoice": "语音配置",
-    "settingsAi": "AI 增强配置"
+    "settingsAi": "AI 增强配置",
+    "feedback": "意见反馈"
   },
   "status": {
     "ready": "已就绪",
@@ -252,7 +253,7 @@
     "translate": {
       "title": "翻译",
       "targetLangLabel": "目标语言",
-      "targetLangHint": "固定语言集；下次翻译会话生效。",
+      "targetLangHint": "可选语种随翻译后端变化；下次翻译会话生效。",
       "lang_zh": "中文",
       "lang_en": "English",
       "lang_ja": "日本語",
@@ -260,6 +261,22 @@
       "lang_fr": "français",
       "lang_de": "Deutsch",
       "lang_es": "español",
+      "lang_ar": "العربية",
+      "lang_th": "ไทย",
+      "lang_tr": "Türkçe",
+      "lang_ru": "Русский",
+      "lang_pt_br": "Português (Brasil)",
+      "lang_pt_pt": "Português (Portugal)",
+      "lang_id": "Bahasa Indonesia",
+      "lang_hi": "हिन्दी",
+      "lang_vi": "Tiếng Việt",
+      "lang_pl": "Polski",
+      "lang_uk": "Українська",
+      "lang_fa": "فارسی",
+      "lang_uz": "Oʻzbekcha",
+      "lang_zh_hant": "繁體中文",
+      "lang_yue": "粵語",
+      "polishOnlyLangsHint": "未启用本地专翻时，润色模型只支持翻译成少数几种语言（中文、英语、日语、韩语、法语、德语、西班牙语）。",
       "polishFirstName": "先润色再翻译",
       "polishFirstDesc": "云端：一次调用润色+翻译；本地：先 Light 纠错再翻译（两步，比纯翻译慢）。"
     },

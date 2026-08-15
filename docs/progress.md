@@ -133,7 +133,7 @@
 
 ## PR4 — 翻译 + hotkey 中心 ✅
 
-- [x] 4.1 设置页：翻译快捷键 / 固定目标语言下拉（zh/en/ja/ko/fr/de/es）/「先润色再翻译」开关
+- [x] 4.1 设置页：翻译快捷键 / 目标语言下拉 /「先润色再翻译」开关（P1 范围为固定 7 语 zh/en/ja/ko/fr/de/es；本地三件套后续扩展为基础 7 语 + 扩展集，见下文「本地三件套实现进度」节）
 - [x] 4.2 `SessionIntent{Dictate,Translate,Qa}` + `pending_intent`（guard 抢到后 take，失败清回 Dictate）
 - [x] 4.3 `lib.rs` 注册中心收口：`apply_hotkey(cfg)` 注册 录音/风格/翻译/QA；`parse_code` 扩展 `;`/`'`/`[`/`]`/`,`/`.`/`/`/`=`/`-` + `Cmd+Shift+;` 单测
 - [x] 4.4 `on_hotkey` 分流 + 互斥表（听写中翻译/QA 键拒绝+toast；QA 打开时翻译键忽略；风格循环允许）+ `toast://info`（App.tsx 监听）
@@ -164,8 +164,10 @@
 
 ## 全量验证
 
-- `cargo test`（workspace）：openime 21 passed · voice-core 219 passed · 集成 13 passed，0 failed
-- `pnpm test`：18 passed（Settings 11 / App 4 / History 3）
+- `cargo test -p voice-core`：voice-core 345 passed（lib 332 + 集成 13）；openime 应用壳 macOS 不跑（windows_ime FFI 门控待 Windows），由 Windows CI 跑（84 测试函数）
+- `pnpm test`：47 passed（Settings 37 / App 5 / History 3 + 其他）
+
+> 以上为 2026-08-16 实测（本地模型三件套 `f43012f` 落地后 + 翻译目标语言分档改动）。
 - `pnpm build`（tsc + vite）：通过
 - `cargo check -p openime`：无错误（仅 app_focus.m 既有 ObjC 非 ARC 告警，HEAD 既有）
 
@@ -174,3 +176,22 @@
 - **Windows 编译已验证**（2026-08-14，`4c0845e`）：Windows 真机 `cargo check`/`tauri build`（NSIS）+ 运行期 e2e 通过；CI `tauri-shell-windows` job 常态兜底。`insert_fallback::windows_ctrl_v`、`platform/windows/focus.rs` 等 windows 0.58 API 均已实编验证。
 - 手工验收项（需真机/真模型）未跑：A4.1/A4.2/A4.4、A5.1/A5.2、A6.1、A6.6、A7.1–A7.5。对应自动化：A4.3/A4.4b/A4.5、A5.1b–A5.8、A6.1b/A6.2–A6.7（纯函数部分）、A7.7 均通过。
 - 与设计稿的小偏差：`insert_finals_with_polish` 返回 `Vec<FinalInsertResult>`（= 文本+四态+警告 超集，覆盖设计中 `PolishOutcome.warning` 与 `InsertOutcome` 两路 HUD 映射）。
+
+---
+
+# 本地三件套实现进度
+
+跟踪 [`local-model-suite-plan.md`](./local-model-suite-plan.md)（需求 + 技术方案合一）。已落地（`f43012f`）。
+
+| PR | 主题 | 状态 |
+|---|---|---|
+| P1 | ASR 下架 FireRed + 清 Settings fallback；`open_model_directory` + 打开目录按钮 | ✅ 完成 |
+| P2 | `llm_catalog`（润色 3 档 + 翻译 2 档）+ 多 GGUF 下载 + SHA256 表 | ✅ 完成 |
+| P3 | `GgufRuntime` 常驻（润色 + 翻译槽）；换档不每次 load | ✅ 完成 |
+| P4 | `TranslateRouter` + `apply_translate` 两步 Light；兼译；config 新字段 | ✅ 完成 |
+| P5 | combo 打标 + 推荐器写默认 + 预算条 + 弱机兼提示 | ✅ 完成 |
+
+- **润色**：`qwen3.5-0.8b` / `qwen3.5-2b`（默认）/ `qwen3.5-4b`；加载失败回退 Qwen3-0.6B / 1.7B / 4B-Instruct-2507。旧 `qwen2.5-1.5b-*` 配置读入时映射到 `qwen3.5-2b`。
+- **翻译**：`milmmt-1b`（默认专翻）/ `hy-mt-1.8b`（自选）；MiLMMT-46 不含乌克兰语 → 通用模板回退，HY-MT 中文变体（简/繁/粤）走中文模板。
+- **翻译目标语言分档**（本次语言分档改动 `Settings.tsx` / `prompts.rs`）：纯本地润色模型兼译 = 基础 7 语；启用云端或本地专翻 = 扩展集（含繁中 / 粤语 / 阿拉伯 / 俄 / 葡 / 印地 / 越南 / 波兰 / 波斯 / 乌兹等约 20 种）。
+- **测试**：`cargo test -p voice-core` 345（lib 332 + 集成 13，含 `llm_catalog` 12 / `runtime` 7 / `translate_router` 2 / `system` 22 等）；`pnpm test` 47。

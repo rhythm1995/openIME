@@ -2,7 +2,8 @@ import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { History as HistoryIcon, BookOpen, Mic, Sparkles, type LucideIcon } from "lucide-react";
+import { History as HistoryIcon, BookOpen, Mic, Sparkles, MessageSquarePlus, type LucideIcon } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import Settings from "./components/Settings";
 import History from "./components/History";
 import Dictionary from "./components/Dictionary";
@@ -13,6 +14,9 @@ type Page = "settings-voice" | "settings-ai" | "history" | "dictionary";
 
 /** 两个设置入口共享同一个 Settings 挂载实例（各自实例会各持一份 config 状态，保存互相覆盖）。 */
 const isSettingsPage = (p: Page) => p === "settings-voice" || p === "settings-ai";
+
+/** 意见反馈入口：GitHub Issues，用系统默认浏览器打开（沿用浏览器里的 GitHub 登录态）。 */
+const FEEDBACK_URL = "https://github.com/rhythm1995/openIME/issues";
 
 /** Overlay 标题栏拖拽：data-tauri-drag-region + startDragging 双保险 */
 function onDragRegionMouseDown(e: ReactMouseEvent) {
@@ -133,6 +137,19 @@ export default function App() {
             );
           })}
         </nav>
+        {/* 左下角意见反馈：动作而非页面导航，不参与 page 状态；复用 nav-item 视觉样式 */}
+        <button
+          type="button"
+          className="nav-item"
+          onClick={() =>
+            openUrl(FEEDBACK_URL).catch((e) => logger.error("打开反馈页面失败:", e))
+          }
+        >
+          <span className="nav-icon">
+            <MessageSquarePlus strokeWidth={2} />
+          </span>
+          {t("nav.feedback")}
+        </button>
         <div className="sidebar-footer">
           <span className={`status-dot ${pong ? "ready" : "connecting"}`} />
           {pong ? t("status.ready") : t("status.connecting")}

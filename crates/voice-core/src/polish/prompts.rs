@@ -8,17 +8,34 @@ use crate::traits::PolishMode;
 pub const POLISHED_SOURCE_SENTINEL: &str = "[[OPENIME_POLISHED_SOURCE]]";
 pub const TRANSLATION_SENTINEL: &str = "[[OPENIME_TRANSLATION]]";
 
-/// R4：目标语言短码 → prompt 用名（固定闭集；未知短码原样传入，UI 不下发未知值）。
+/// 目标语言短码 → prompt 用名（未知短码原样传入，UI 不下发未知值）。
+///
+/// 基础 7 语（润色模型兼译可用）+ 扩展集（云端 / 本地专翻可选，见 Settings 目标语言分档）。
+/// 乌克兰语（uk）仅 HY-MT 与云端支持；MiLMMT 走 `lang_english_name` 的 None 回退。
 pub fn lang_display_name(code: &str) -> &str {
     let lower = code.trim().to_lowercase();
     match lower.as_str() {
         "zh" => "中文",
+        "zh-hant" | "zh-tw" => "繁體中文",
+        "yue" => "粵語",
         "en" | "en-us" => "English",
         "ja" => "日本語",
         "ko" => "한국어",
         "fr" => "français",
         "de" => "Deutsch",
         "es" => "español",
+        "ar" => "العربية",
+        "th" => "ไทย",
+        "tr" => "Türkçe",
+        "ru" => "Русский",
+        "pt" | "pt-br" | "pt-pt" => "Português",
+        "id" => "Bahasa Indonesia",
+        "hi" => "हिन्दी",
+        "vi" => "Tiếng Việt",
+        "pl" => "Polski",
+        "uk" => "Українська",
+        "fa" => "فارسی",
+        "uz" => "Oʻzbekcha",
         // 未知短码：原样传入（借用输入参数，生命周期安全）。
         _ => code,
     }
@@ -65,9 +82,12 @@ pub fn build_polish_translate_messages(text: &str, target_lang: &str) -> Vec<(St
 // ── 本地专翻 prompt（T8）────────────────────────────────
 
 /// 语言短码 → MiLMMT 官方模板用英文名（未知返回 None，调用方回退通用模板）。
+///
+/// MiLMMT-46 不含乌克兰语（uk）→ None → 通用模板；其余扩展集语种均映射。
 pub fn lang_english_name(code: &str) -> Option<&'static str> {
     match code.trim().to_lowercase().as_str() {
         "zh" | "zh-cn" | "zh-hans" => Some("Chinese (Simplified)"),
+        "zh-hant" | "zh-tw" => Some("Chinese (Traditional)"),
         "yue" => Some("Cantonese"),
         "en" | "en-us" => Some("English"),
         "ja" => Some("Japanese"),
@@ -75,6 +95,17 @@ pub fn lang_english_name(code: &str) -> Option<&'static str> {
         "fr" => Some("French"),
         "de" => Some("German"),
         "es" => Some("Spanish"),
+        "ar" => Some("Arabic"),
+        "th" => Some("Thai"),
+        "tr" => Some("Turkish"),
+        "ru" => Some("Russian"),
+        "pt" | "pt-br" | "pt-pt" => Some("Portuguese"),
+        "id" => Some("Indonesian"),
+        "hi" => Some("Hindi"),
+        "vi" => Some("Vietnamese"),
+        "pl" => Some("Polish"),
+        "fa" => Some("Persian"),
+        "uz" => Some("Uzbek"),
         _ => None,
     }
 }
@@ -122,7 +153,9 @@ pub fn build_local_translate_messages(
             None => build_translate_messages(text, target_lang),
         },
         "hy-mt-1.8b" => {
-            let is_zh_pair = src_lang == "zh" || target_lang == "中文";
+            // 中文变体（简/繁/粤）目标用中文模板，其余用英文模板（官方双语模板）。
+            let is_zh_pair =
+                src_lang == "zh" || matches!(target_lang, "中文" | "繁體中文" | "粵語");
             let user = if is_zh_pair {
                 format!(
                     "将以下文本翻译为{target_lang}，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
@@ -322,8 +355,49 @@ mod tests {
         assert_eq!(lang_display_name("fr"), "français");
         assert_eq!(lang_display_name("de"), "Deutsch");
         assert_eq!(lang_display_name("es"), "español");
+        // 扩展集（云端 / 专翻可选语种）。
+        assert_eq!(lang_display_name("zh-hant"), "繁體中文");
+        assert_eq!(lang_display_name("zh-TW"), "繁體中文");
+        assert_eq!(lang_display_name("yue"), "粵語");
+        assert_eq!(lang_display_name("ar"), "العربية");
+        assert_eq!(lang_display_name("th"), "ไทย");
+        assert_eq!(lang_display_name("tr"), "Türkçe");
+        assert_eq!(lang_display_name("ru"), "Русский");
+        assert_eq!(lang_display_name("pt"), "Português");
+        assert_eq!(lang_display_name("pt-br"), "Português");
+        assert_eq!(lang_display_name("pt-PT"), "Português");
+        assert_eq!(lang_display_name("id"), "Bahasa Indonesia");
+        assert_eq!(lang_display_name("hi"), "हिन्दी");
+        assert_eq!(lang_display_name("vi"), "Tiếng Việt");
+        assert_eq!(lang_display_name("pl"), "Polski");
+        assert_eq!(lang_display_name("uk"), "Українська");
+        assert_eq!(lang_display_name("fa"), "فارسی");
+        assert_eq!(lang_display_name("uz"), "Oʻzbekcha");
         // 未知短码原样传入（防御；UI 不下发未知值）。
-        assert_eq!(lang_display_name("yue"), "yue");
+        assert_eq!(lang_display_name("xx"), "xx");
+    }
+
+    #[test]
+    fn lang_english_name_table() {
+        // MiLMMT 模板用英文名：扩展集（除乌克兰语——MiLMMT-46 不含）全映射。
+        assert_eq!(lang_english_name("zh"), Some("Chinese (Simplified)"));
+        assert_eq!(lang_english_name("zh-hant"), Some("Chinese (Traditional)"));
+        assert_eq!(lang_english_name("yue"), Some("Cantonese"));
+        assert_eq!(lang_english_name("ar"), Some("Arabic"));
+        assert_eq!(lang_english_name("th"), Some("Thai"));
+        assert_eq!(lang_english_name("tr"), Some("Turkish"));
+        assert_eq!(lang_english_name("ru"), Some("Russian"));
+        assert_eq!(lang_english_name("pt-br"), Some("Portuguese"));
+        assert_eq!(lang_english_name("pt-pt"), Some("Portuguese"));
+        assert_eq!(lang_english_name("id"), Some("Indonesian"));
+        assert_eq!(lang_english_name("hi"), Some("Hindi"));
+        assert_eq!(lang_english_name("vi"), Some("Vietnamese"));
+        assert_eq!(lang_english_name("pl"), Some("Polish"));
+        assert_eq!(lang_english_name("fa"), Some("Persian"));
+        assert_eq!(lang_english_name("uz"), Some("Uzbek"));
+        // MiLMMT-46 不支持乌克兰语 → None → 通用模板回退。
+        assert_eq!(lang_english_name("uk"), None);
+        assert_eq!(lang_english_name("xx"), None);
     }
 
     #[test]
@@ -410,6 +484,37 @@ mod tests {
             msgs[0].1
         );
         assert!(!msgs[0].1.contains("Translate the following"));
+    }
+
+    #[test]
+    fn hymt_chinese_variants_use_chinese_template() {
+        // 繁體中文 / 粵語目标同样走中文模板（混元以中文语料为主）。
+        for tgt in ["繁體中文", "粵語"] {
+            let msgs = build_local_translate_messages("hy-mt-1.8b", "Hello", "en", tgt);
+            assert!(
+                msgs[0].1.contains(&format!("将以下文本翻译为{tgt}")),
+                "目标 {tgt} 得到 {}",
+                msgs[0].1
+            );
+        }
+    }
+
+    #[test]
+    fn milmmt_extended_langs_use_official_template() {
+        // 扩展集源语：官方模板能拿到英文名（繁中分列 / 巴葡归一）。
+        let msgs = build_local_translate_messages("milmmt-1b", "你好", "zh-hant", "Português");
+        assert!(msgs[0].1.contains("Chinese (Traditional)"));
+        let msgs = build_local_translate_messages("milmmt-1b", "olá", "pt-br", "English");
+        assert!(msgs[0]
+            .1
+            .contains("Translate this from Portuguese to English"));
+    }
+
+    #[test]
+    fn milmmt_ukrainian_src_falls_back_to_generic() {
+        // uk 不在 MiLMMT-46 → 通用模板（云端或 HY-MT 兜底该语种）。
+        let msgs = build_local_translate_messages("milmmt-1b", "Привіт", "uk", "English");
+        assert_eq!(msgs[0].0, "system");
     }
 
     #[test]

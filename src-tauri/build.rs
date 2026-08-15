@@ -1,4 +1,16 @@
 fn main() {
+    // macOS 无 TSF DLL（仅 Windows 的 build_tsf_dll 产出），但 tauri_build::build() 会
+    // 校验 tauri.conf.json 声明的 resources 文件存在；建空占位通过校验，Windows 侧
+    // build_tsf_dll 产出的真 DLL 会覆盖它。占位目录已 .gitignore（src-tauri/ime/）。
+    #[cfg(target_os = "macos")]
+    {
+        let dll = std::path::Path::new("ime/OpenImeTsf.dll");
+        if !dll.exists() {
+            std::fs::create_dir_all("ime").ok();
+            std::fs::write("ime/OpenImeTsf.dll", []).ok();
+        }
+    }
+
     tauri_build::build();
 
     #[cfg(target_os = "macos")]
@@ -77,8 +89,15 @@ fn build_tsf_dll() -> Result<(), String> {
 
     let mut cmd = Command::new(tool.path());
     cmd.current_dir(&src)
-        .arg("/nologo").arg("/LD").arg("/MT").arg("/W4").arg("/EHsc")
-        .arg("/std:c++17").arg("/DUNICODE").arg("/D_UNICODE").arg("/DNDEBUG")
+        .arg("/nologo")
+        .arg("/LD")
+        .arg("/MT")
+        .arg("/W4")
+        .arg("/EHsc")
+        .arg("/std:c++17")
+        .arg("/DUNICODE")
+        .arg("/D_UNICODE")
+        .arg("/DNDEBUG")
         .args(sources.iter().map(|s| src.join(s)))
         .arg(format!("/Fo:{}", objs_dir.display()))
         .arg(format!("/Fe:{}", dll.display()))
@@ -86,7 +105,9 @@ fn build_tsf_dll() -> Result<(), String> {
         // /DEF 是链接器选项，必须在 /link 之后（cl 不透传给链接器）。
         .arg("/link")
         .arg("/DEF:OpenImeTsf.def")
-        .arg("ole32.lib").arg("advapi32.lib").arg("user32.lib");
+        .arg("ole32.lib")
+        .arg("advapi32.lib")
+        .arg("user32.lib");
     for (k, v) in tool.env() {
         cmd.env(k, v);
     }
