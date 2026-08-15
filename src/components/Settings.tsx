@@ -1002,7 +1002,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
             </span>
           )}
           {suiteInfo && (
-            <span className="field-hint" style={{ flex: 1, minWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t("settings.localLlm.pathTitle")}>
+            <span style={{ flex: 1, minWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t("settings.localLlm.pathTitle")}>
               {suiteInfo.model_root}
             </span>
           )}
@@ -1136,8 +1136,8 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                       </button>
                     )}
                     <button
-                      className="btn btn-sm"
-                      disabled={!m.installed || selected || !!dl}
+                      className={`btn btn-sm${selected ? " btn-ghost" : ""}`}
+                      disabled={!m.installed || selected || enablingId === m.id || !!dl}
                       title={
                         !m.installed
                           ? t("settings.localAsr.enableTipInstallFirst")
@@ -1146,33 +1146,46 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                             : t("settings.localAsr.enableTipAction")
                       }
                       onClick={async () => {
+                        setEnablingId(m.id);
                         try {
                           await ipc.setActivePolishModel(m.id);
                           ipc.listLocalPolishModels().then((l) => setPolishModels(l)).catch(() => {});
                           ipc.getModelSuiteInfo().then(setSuiteInfo).catch(() => {});
                         } catch (e) {
                           setMsg({ ok: false, text: String(e) });
+                        } finally {
+                          setEnablingId(null);
                         }
                       }}
                     >
-                      {selected ? t("settings.localAsr.enabled") : t("settings.localAsr.enable")}
+                      {enablingId === m.id ? (
+                        <Loader2 size={13} className="spin" />
+                      ) : selected ? (
+                        t("settings.localAsr.enabled")
+                      ) : (
+                        t("settings.localAsr.enable")
+                      )}
                     </button>
-                    {m.installed && (
+                    {m.installed && !selected && (
                       <button
                         className="btn btn-sm btn-icon"
                         title={t("settings.localAsr.deleteModelTitle")}
+                        disabled={enablingId === m.id || deletingId === m.id || !!dl}
                         onClick={async () => {
                           if (!window.confirm(t("settings.localAsr.confirmDeleteModel", { title: m.title }))) return;
+                          setDeletingId(m.id);
                           try {
                             await ipc.deleteLlmModel(m.id);
                             ipc.listLocalPolishModels().then((l) => setPolishModels(l)).catch(() => {});
                             ipc.getModelSuiteInfo().then(setSuiteInfo).catch(() => {});
                           } catch (e) {
                             alert(t("settings.localAsr.deleteFailed", { error: e }));
+                          } finally {
+                            setDeletingId(null);
                           }
                         }}
                       >
-                        <Trash2 size={14} />
+                        {deletingId === m.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
                       </button>
                     )}
                   </div>
@@ -1259,7 +1272,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
             </span>
             <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
               <button
-                className="btn btn-sm"
+                className={`btn btn-sm${(config.translate_local_model ?? "") === "" ? " btn-ghost" : ""}`}
                 disabled={(config.translate_local_model ?? "") === ""}
                 title={
                   (config.translate_local_model ?? "") === ""
@@ -1399,8 +1412,8 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                       </button>
                     )}
                     <button
-                      className="btn btn-sm"
-                      disabled={!m.installed || selected || !!dl}
+                      className={`btn btn-sm${selected ? " btn-ghost" : ""}`}
+                      disabled={!m.installed || selected || enablingId === m.id || !!dl}
                       title={
                         !m.installed
                           ? t("settings.localAsr.enableTipInstallFirst")
@@ -1409,33 +1422,46 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                             : t("settings.localAsr.enableTipAction")
                       }
                       onClick={async () => {
+                        setEnablingId(m.id);
                         try {
                           await ipc.setActiveTranslateModel(m.id);
                           ipc.listLocalTranslateModels().then((l) => setTranslateModels(l)).catch(() => {});
                           ipc.getModelSuiteInfo().then(setSuiteInfo).catch(() => {});
                         } catch (e) {
                           setMsg({ ok: false, text: String(e) });
+                        } finally {
+                          setEnablingId(null);
                         }
                       }}
                     >
-                      {selected ? t("settings.localAsr.enabled") : t("settings.localAsr.enable")}
+                      {enablingId === m.id ? (
+                        <Loader2 size={13} className="spin" />
+                      ) : selected ? (
+                        t("settings.localAsr.enabled")
+                      ) : (
+                        t("settings.localAsr.enable")
+                      )}
                     </button>
-                    {m.installed && (
+                    {m.installed && !selected && (
                       <button
                         className="btn btn-sm btn-icon"
                         title={t("settings.localAsr.deleteModelTitle")}
+                        disabled={enablingId === m.id || deletingId === m.id || !!dl}
                         onClick={async () => {
                           if (!window.confirm(t("settings.localAsr.confirmDeleteModel", { title: m.title }))) return;
+                          setDeletingId(m.id);
                           try {
                             await ipc.deleteLlmModel(m.id);
                             ipc.listLocalTranslateModels().then((l) => setTranslateModels(l)).catch(() => {});
                             ipc.getModelSuiteInfo().then(setSuiteInfo).catch(() => {});
                           } catch (e) {
                             alert(t("settings.localAsr.deleteFailed", { error: e }));
+                          } finally {
+                            setDeletingId(null);
                           }
                         }}
                       >
-                        <Trash2 size={14} />
+                        {deletingId === m.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
                       </button>
                     )}
                   </div>
