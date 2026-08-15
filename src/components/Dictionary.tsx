@@ -159,7 +159,7 @@ export default function Dictionary() {
               </span>
               <input
                 className="search-box"
-                style={{ width: "100%", height: 30, paddingLeft: 30, fontSize: 13 }}
+                style={{ width: "100%", height: 30, padding: "0 8px 0 30px", margin: 0, fontSize: 13 }}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={t("common.searchPh")}

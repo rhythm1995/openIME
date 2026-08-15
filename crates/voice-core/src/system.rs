@@ -245,6 +245,237 @@ pub fn compute_model_tag(approx_size: u64, sys: &SystemInfo) -> ModelPerfTag {
     }
 }
 
+// ── 本地三件套：combo 打标 + 推荐器（T6）────────────────────────
+
+const GB_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// 机器总内存 → OS/应用预留（GB 字节）。预算表：8GB→2.5 / 16→10 / 32→24 / 48→38。
+fn os_reserve(total_mem: u64) -> u64 {
+    let total_gb = total_mem / GB_BYTES;
+    if total_gb <= 8 {
+        // 预算 2.5GB → 预留 = 总 - 2.5（8GB 机 → 5.5GB）。
+        total_mem.saturating_sub((2.5 * GB_BYTES as f64) as u64)
+    } else if total_gb <= 16 {
+        6 * GB_BYTES
+    } else if total_gb <= 32 {
+        8 * GB_BYTES
+    } else {
+        10 * GB_BYTES
+    }
+}
+
+/// 留给三件套（ASR + 润色 + 翻译）的内存预算。
+pub fn combo_budget(sys: &SystemInfo) -> u64 {
+    sys.total_mem.saturating_sub(os_reserve(sys.total_mem))
+}
+
+/// TPS 基准行（A=M4 16GB / B=M5 / C=M4 Pro；对不上按内存分桶）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TpsRow {
+    A,
+    B,
+    C,
+}
+
+/// 按 CPU 品牌 + 内存选 TPS 行。
+pub fn chip_row(sys: &SystemInfo) -> TpsRow {
+    let brand = sys.cpu_brand.to_lowercase();
+    let is_apple = sys.is_apple_silicon || brand.contains("apple");
+    let total_gb = sys.total_mem / GB_BYTES;
+    if is_apple {
+        let pro_max = brand.contains("pro") || brand.contains("max") || brand.contains("ultra");
+        if brand.contains("m4") && pro_max {
+            return TpsRow::C; // M4 Pro/Max：24/48GB 同带宽
+        }
+        if brand.contains("m5") && !pro_max {
+            return TpsRow::B; // M5 基配
+        }
+        if brand.contains("m4") && !pro_max {
+            return TpsRow::A; // M4 基配 16GB
+        }
+        if brand.contains("m5") {
+            return TpsRow::C; // M5 Pro/Max 按高档估
+        }
+    }
+    // 对不上 → 按内存分桶近似（reason 标注）。
+    if total_gb <= 16 {
+        TpsRow::A
+    } else if total_gb <= 36 {
+        TpsRow::B
+    } else {
+        TpsRow::C
+    }
+}
+
+/// 估测解码速度（tok/s，Q4_K_M，关 thinking；静态表见方案 §T6）。
+pub fn est_tps(row: TpsRow, model_id: &str) -> f32 {
+    let (a, b, c) = match model_id {
+        "qwen3.5-0.8b" | "qwen3-0.6b" => (66.0, 85.0, 150.0),
+        "qwen3.5-2b" => (39.0, 50.0, 89.0),
+        "qwen3-1.7b" => (29.0, 37.0, 89.0),
+        "qwen3.5-4b" => (23.0, 29.0, 52.0),
+        "qwen3-4b-instruct-2507" => (17.0, 17.0, 40.0),
+        "milmmt-1b" => (29.0, 37.0, 89.0),  // 按 1.7B 档估
+        "hy-mt-1.8b" => (33.0, 43.0, 76.0), // 略低于 2B 档
+        _ => (25.0, 30.0, 55.0),
+    };
+    match row {
+        TpsRow::A => a,
+        TpsRow::B => b,
+        TpsRow::C => c,
+    }
+}
+
+/// ASR 常驻内存估算（GB 字节；冻结目录 §1）。
+pub fn asr_rss_bytes(asr_id: &str) -> u64 {
+    match asr_id {
+        crate::asr_catalog::ASR_MODEL_FUNASR_NANO_INT8 => 1_288_490_189, // ~1.2 GB
+        crate::asr_catalog::ASR_MODEL_FUNASR_NANO_FP16 => 2_147_483_648, // ~2.0 GB
+        _ => 751_619_277,                                                // sensevoice ~0.7 GB
+    }
+}
+
+/// LLM 常驻内存估算（目录 rss_bytes；未知取 1GB）。
+pub fn llm_rss_bytes(model_id: &str) -> u64 {
+    crate::llm_catalog::llm_model_by_id(model_id)
+        .map(|m| m.rss_bytes)
+        .unwrap_or(GB_BYTES)
+}
+
+fn fmt_gb(bytes: u64) -> String {
+    format!("{:.1}", bytes as f64 / GB_BYTES as f64)
+}
+
+/// 三件套 combo 打标：`combo = rss(asr) + rss(this) + rss(other)`，再按 TPS 与预算判档。
+///
+/// ```text
+/// combo > budget             → not_recommended（装不下三件套）
+/// tps < 15                   → not_recommended（输入法会明显卡）
+/// tps < 25 或 combo>0.85预算 → usable
+/// 否则                       → suitable
+/// ```
+pub fn compute_combo_tag(
+    sys: &SystemInfo,
+    asr_id: &str,
+    this_id: &str,
+    other_llm_id: Option<&str>,
+) -> ModelPerfTag {
+    let total_gb = sys.total_mem / GB_BYTES;
+    if total_gb == 0 {
+        return ModelPerfTag {
+            tag: "未知".into(),
+            kind: "unknown".into(),
+            reason: "未能采集本机内存信息，请点\"重新采集\"重试".into(),
+            color: "var(--text-tertiary)".into(),
+        };
+    }
+    let budget = combo_budget(sys);
+    let combo = asr_rss_bytes(asr_id)
+        + llm_rss_bytes(this_id)
+        + other_llm_id.map(llm_rss_bytes).unwrap_or(0);
+    let row = chip_row(sys);
+    let tps = est_tps(row, this_id);
+    let combo_desc = |with_other: bool| {
+        if with_other {
+            format!(
+                "本机总内存 {total_gb} GB / 三件套预算 {} GB；与当前识别+翻译模型合计约 {} GB",
+                fmt_gb(budget),
+                fmt_gb(combo)
+            )
+        } else {
+            format!(
+                "本机总内存 {total_gb} GB / 三件套预算 {} GB；与当前识别模型合计约 {} GB",
+                fmt_gb(budget),
+                fmt_gb(combo)
+            )
+        }
+    };
+    let has_other = other_llm_id.map(|s| !s.is_empty()).unwrap_or(false);
+    if combo > budget {
+        return ModelPerfTag {
+            tag: "超预算".into(),
+            kind: "not_recommended".into(),
+            reason: format!(
+                "{}，超出三件套预算（运行时可能卡顿或崩溃）",
+                combo_desc(has_other)
+            ),
+            color: "var(--danger)".into(),
+        };
+    }
+    if tps < 15.0 {
+        return ModelPerfTag {
+            tag: "估速过慢".into(),
+            kind: "not_recommended".into(),
+            reason: format!(
+                "{}；估测解码 {tps} tok/s，40 字需约 {:.1}s（输入法会明显卡）",
+                combo_desc(has_other),
+                40.0 / tps
+            ),
+            color: "var(--danger)".into(),
+        };
+    }
+    if tps < 25.0 || combo > budget.saturating_mul(85) / 100 {
+        return ModelPerfTag {
+            tag: "可用但较慢".into(),
+            kind: "usable".into(),
+            reason: format!(
+                "{}；估测解码 {tps} tok/s，40 字约 {:.1}s",
+                combo_desc(has_other),
+                40.0 / tps
+            ),
+            color: "var(--warning)".into(),
+        };
+    }
+    ModelPerfTag {
+        tag: "适合".into(),
+        kind: "suitable".into(),
+        reason: format!(
+            "{}；估测解码 {tps} tok/s，40 字约 {:.1}s",
+            combo_desc(has_other),
+            40.0 / tps
+        ),
+        color: "var(--success)".into(),
+    }
+}
+
+/// 推荐默认三件套（方案 §T6）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecommendedDefaults {
+    pub asr: &'static str,
+    pub polish: &'static str,
+    /// 空串 = 不下专翻（弱机，勾兼译）。
+    pub translate: &'static str,
+    pub use_llm_fallback: bool,
+}
+
+/// 按机型推荐默认：≤8GB/非 Apple <16GB 弱机；16–31GB Apple 均衡；≥32GB Apple 高质量。
+pub fn recommend_defaults(sys: &SystemInfo) -> RecommendedDefaults {
+    let total_gb = sys.total_mem / GB_BYTES;
+    let is_apple = sys.is_apple_silicon || sys.cpu_brand.to_lowercase().contains("apple");
+    if total_gb <= 8 || (!is_apple && total_gb < 16) {
+        RecommendedDefaults {
+            asr: crate::asr_catalog::ASR_MODEL_SENSEVOICE,
+            polish: "qwen3.5-0.8b",
+            translate: "",
+            use_llm_fallback: true,
+        }
+    } else if !is_apple || total_gb <= 31 {
+        RecommendedDefaults {
+            asr: crate::asr_catalog::ASR_MODEL_SENSEVOICE,
+            polish: "qwen3.5-2b",
+            translate: "milmmt-1b",
+            use_llm_fallback: false,
+        }
+    } else {
+        RecommendedDefaults {
+            asr: crate::asr_catalog::ASR_MODEL_FUNASR_NANO_INT8,
+            polish: "qwen3.5-4b",
+            translate: "milmmt-1b",
+            use_llm_fallback: false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,5 +626,174 @@ mod tests {
                 matched
             );
         }
+    }
+
+    // ── 本地三件套：combo 打标 + 推荐器（T6/T9）──────────────
+
+    #[test]
+    fn budget_tiers_match_plan() {
+        assert_eq!(
+            combo_budget(&sys_with_mem(8, 200)),
+            (2.5 * GB_BYTES as f64) as u64
+        );
+        assert_eq!(combo_budget(&sys_with_mem(16, 200)), 10 * GB_BYTES);
+        assert_eq!(combo_budget(&sys_with_mem(32, 200)), 24 * GB_BYTES);
+        assert_eq!(combo_budget(&sys_with_mem(48, 200)), 38 * GB_BYTES);
+    }
+
+    #[test]
+    fn recommend_defaults_three_tiers() {
+        // 弱机（≤8GB 或非 Apple <16GB）：sensevoice + 0.8b + 不装专翻 + 兼译。
+        let weak = recommend_defaults(&sys_with_mem(8, 200));
+        assert_eq!(weak.asr, "sensevoice");
+        assert_eq!(weak.polish, "qwen3.5-0.8b");
+        assert_eq!(weak.translate, "");
+        assert!(weak.use_llm_fallback);
+        let weak_win = recommend_defaults(&sys_with_mem(12, 200));
+        assert_eq!(weak_win.polish, "qwen3.5-0.8b");
+
+        // 16–31GB Apple：sensevoice + 2b + milmmt。
+        let mid = recommend_defaults(&sys_apple_with_mem(16, 200));
+        assert_eq!(mid.asr, "sensevoice");
+        assert_eq!(mid.polish, "qwen3.5-2b");
+        assert_eq!(mid.translate, "milmmt-1b");
+        assert!(!mid.use_llm_fallback);
+
+        // ≥32GB Apple：nano-int8 + 4b + milmmt。
+        let high = recommend_defaults(&sys_apple_with_mem(48, 200));
+        assert_eq!(high.asr, "funasr-nano-int8");
+        assert_eq!(high.polish, "qwen3.5-4b");
+        assert_eq!(high.translate, "milmmt-1b");
+        assert!(!high.use_llm_fallback);
+    }
+
+    #[test]
+    fn combo_tag_16gb_heavy_stack_is_warn_or_worse() {
+        // 16GB + FunASR fp16 + 4B + hy-mt：combo ≈ 2.0+2.8+1.4=6.2 < 10 预算，
+        // 但 4B 在 M4 16GB 上 tps≈23 < 25 → 黄（可用但较慢）。
+        let sys = sys_apple_with_mem(16, 200);
+        let t = compute_combo_tag(&sys, "funasr-nano-fp16", "qwen3.5-4b", Some("hy-mt-1.8b"));
+        assert!(
+            matches!(t.kind.as_str(), "usable" | "not_recommended"),
+            "16GB 重组合应是黄或红，得到 {}",
+            t.kind
+        );
+        // 8GB + fp16 + 4B：combo 6.2 > 2.5 预算 → 红。
+        let sys8 = sys_apple_with_mem(8, 200);
+        let t8 = compute_combo_tag(&sys8, "funasr-nano-fp16", "qwen3.5-4b", Some("hy-mt-1.8b"));
+        assert_eq!(t8.kind, "not_recommended");
+    }
+
+    #[test]
+    fn combo_tag_48gb_4b_milmmt_is_green() {
+        // 48GB Pro + nano-int8 + 4B + milmmt：combo ≈ 1.2+2.8+1.1=5.1 < 38，
+        // C 行 4B tps≈52 → 绿。
+        let mut sys = sys_apple_with_mem(48, 200);
+        sys.cpu_brand = "Apple M4 Pro".into();
+        let t = compute_combo_tag(&sys, "funasr-nano-int8", "qwen3.5-4b", Some("milmmt-1b"));
+        assert_eq!(t.kind, "suitable", "得到 {}", t.reason);
+    }
+
+    #[test]
+    fn combo_tag_16gb_2b_default_is_green() {
+        // M4 16GB + sensevoice + 2B + milmmt：combo ≈ 0.7+1.5+1.1=3.3 < 10，
+        // A 行 2B tps≈39 → 绿。
+        let mut sys = sys_apple_with_mem(16, 200);
+        sys.cpu_brand = "Apple M4".into();
+        let t = compute_combo_tag(&sys, "sensevoice", "qwen3.5-2b", Some("milmmt-1b"));
+        assert_eq!(t.kind, "suitable", "得到 {}", t.reason);
+    }
+
+    #[test]
+    fn combo_tag_low_tps_is_usable_not_suitable() {
+        // 内存足够但估速 <25 → 黄（可用但较慢）。
+        let sys16 = sys_apple_with_mem(16, 200);
+        let t16 = compute_combo_tag(
+            &sys16,
+            "sensevoice",
+            "qwen3-4b-instruct-2507",
+            Some("milmmt-1b"),
+        );
+        assert_eq!(t16.kind, "usable", "得到 {}", t16.reason);
+        // 同组合在 48GB Pro（C 行 tps≈40）→ 绿。
+        let sys48 = sys_apple_with_mem(48, 200);
+        let t48 = compute_combo_tag(
+            &sys48,
+            "sensevoice",
+            "qwen3-4b-instruct-2507",
+            Some("milmmt-1b"),
+        );
+        assert_eq!(t48.kind, "suitable", "得到 {}", t48.reason);
+    }
+
+    #[test]
+    fn chip_row_falls_back_by_memory() {
+        // 对不上 Apple 品牌 → 按内存分桶。
+        let mut sys = sys_with_mem(16, 200);
+        sys.cpu_brand = "Intel Core i7".into();
+        assert_eq!(chip_row(&sys), TpsRow::A);
+        let mut sys = sys_with_mem(32, 200);
+        sys.cpu_brand = "AMD Ryzen".into();
+        assert_eq!(chip_row(&sys), TpsRow::B);
+        let mut sys = sys_with_mem(64, 200);
+        sys.cpu_brand = "Intel Xeon".into();
+        assert_eq!(chip_row(&sys), TpsRow::C);
+        // M4 Pro → C；M5 基配 → B；M4 基配 → A。
+        let mut sys = sys_apple_with_mem(48, 200);
+        sys.cpu_brand = "Apple M4 Pro".into();
+        assert_eq!(chip_row(&sys), TpsRow::C);
+        let mut sys = sys_apple_with_mem(32, 200);
+        sys.cpu_brand = "Apple M5".into();
+        assert_eq!(chip_row(&sys), TpsRow::B);
+    }
+
+    #[test]
+    fn chip_row_m5_pro_max_and_m4_base() {
+        // M5 Pro/Max → C（按高档估）；M4 基配 → A；is_apple_silicon 但品牌非 apple 也认。
+        let mut sys = sys_apple_with_mem(48, 200);
+        sys.cpu_brand = "Apple M5 Pro".into();
+        assert_eq!(chip_row(&sys), TpsRow::C);
+        sys.cpu_brand = "Apple M5 Max".into();
+        assert_eq!(chip_row(&sys), TpsRow::C);
+        let mut sys = sys_apple_with_mem(16, 200);
+        sys.cpu_brand = "Apple M4".into();
+        assert_eq!(chip_row(&sys), TpsRow::A);
+        // 品牌字符串不含 apple 但 is_apple_silicon=true → 仍按 Apple 路径分桶。
+        let mut sys = sys_apple_with_mem(16, 200);
+        sys.cpu_brand = "Unknown ARM SoC".into();
+        assert_eq!(chip_row(&sys), TpsRow::A);
+    }
+
+    #[test]
+    fn est_tps_unknown_model_uses_default_row() {
+        // 未知模型 id（旧配置/自定义）：默认行 A=25/B=30/C=55，不 panic。
+        assert_eq!(est_tps(TpsRow::A, "my-model"), 25.0);
+        assert_eq!(est_tps(TpsRow::B, "my-model"), 30.0);
+        assert_eq!(est_tps(TpsRow::C, "my-model"), 55.0);
+    }
+
+    #[test]
+    fn rss_unknown_ids_use_conservative_defaults() {
+        // 未知 ASR id → 按 sensevoice ~0.7GB；未知 LLM id → 1GB（宁高勿低）。
+        assert_eq!(asr_rss_bytes("no-such-asr"), 751_619_277);
+        assert_eq!(llm_rss_bytes("no-such-llm"), GB_BYTES);
+    }
+
+    #[test]
+    fn combo_tag_unknown_when_mem_collection_fails() {
+        // 内存采集失败（total=0，容器/CI 真实发生）→ unknown 档，不误判红/绿。
+        let sys = sys_with_mem(0, 200);
+        let t = compute_combo_tag(&sys, "sensevoice", "qwen3.5-2b", Some("milmmt-1b"));
+        assert_eq!(t.kind, "unknown");
+        assert!(t.reason.contains("重新采集"), "得到 {}", t.reason);
+    }
+
+    #[test]
+    fn recommend_defaults_non_apple_16gb_is_balanced() {
+        // 边界：非 Apple 恰好 16GB → 均衡档（弱机线是 <16GB）。
+        let rec = recommend_defaults(&sys_with_mem(16, 200));
+        assert_eq!(rec.polish, "qwen3.5-2b");
+        assert_eq!(rec.translate, "milmmt-1b");
+        assert!(!rec.use_llm_fallback);
     }
 }

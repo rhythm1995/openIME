@@ -29,6 +29,16 @@ use state::AppState;
 /// Fn 键回调在原生块上下文执行（无捕获），需要全局拿到 AppHandle。
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
+/// 设置页「快捷键捕获」进行中：挂起录音键（Fn/CapsLock 边沿）与全局组合键响应，
+/// 避免用户录入新快捷键时把旧键当录音触发。capture 结束立即恢复。
+static CAPTURE_SUSPEND: AtomicBool = AtomicBool::new(false);
+
+/// 设置页正在录入新快捷键时挂起/恢复按键响应（见 `commands::set_capture_suspend`）。
+pub fn set_capture_suspend(suspend: bool) {
+    CAPTURE_SUSPEND.store(suspend, Ordering::SeqCst);
+    log_info!("快捷键捕获挂起：{suspend}");
+}
+
 /// 兜底组合键（非 macOS）：
 /// - 单键（Fn / CapsLock）在 Windows 上注册钩子的同时**总是注册**它——单键在
 ///   openIME 自有窗口前台时被 WebView 屏蔽（Tauri #14770），且 Fn 多数键盘固件消费，
@@ -321,6 +331,7 @@ pub fn run() {
             commands::cancel_transcribe,
             commands::export_diary,
             commands::frontend_log,
+            commands::set_capture_suspend,
             commands::set_launch_at_login,
             commands::get_launch_at_login,
             commands::list_local_asr_models,
@@ -329,8 +340,14 @@ pub fn run() {
             commands::delete_local_asr_model,
             commands::get_local_model_status,
             commands::install_local_model,
-            commands::get_polish_model_status,
-            commands::install_polish_model,
+            commands::list_local_polish_models,
+            commands::list_local_translate_models,
+            commands::set_active_polish_model,
+            commands::set_active_translate_model,
+            commands::install_llm_model,
+            commands::delete_llm_model,
+            commands::get_model_suite_info,
+            commands::open_model_directory,
             commands::qa_refresh_selection,
             commands::qa_cancel,
             commands::qa_insert_last,
@@ -369,16 +386,35 @@ pub fn run() {
                 show_main_window(app_handle);
             }
         }
+        // 退出收敛：绕过 C++ 静态析构（exit → __cxa_finalize 阶段）。
+        // onnxruntime / llama.cpp 的静态析构器在该阶段会直接 abort() → 用户看到
+        // 「退出时崩溃」（SIGABRT in __cxa_finalize_ranges）。macOS 上 AppKit 的
+        // `-[NSApplication terminate:]` 会在 delegate 询问（applicationShouldTerminate，
+        // 即本 ExitRequested 事件）返回后立即调 exit()——必须**在此处**抢先退出，
+        // RunEvent::Exit（run 循环尾部）永远来不及执行。
+        // Tauri 清理已无必要（菜单栏常驻 app 无窗口状态可存），进程资源由 OS 回收。
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            log_info!("退出请求 → 直接退出（绕过 C++ 静态析构，规避 exit 阶段 abort）");
+            std::process::exit(0);
+        }
+        if let tauri::RunEvent::Exit = event {
+            log_info!("进程退出（跳过 C++ 静态析构）");
+            std::process::exit(0);
+        }
         #[cfg(not(target_os = "macos"))]
         {
             let _ = (app_handle, event);
         }
     });
-    log_info!("Tauri 事件循环结束，进程退出");
 }
 
 /// 全局快捷键：按注册中心分流——录音（听写/QA 录音）→ 翻译 → QA 窗开关 → 风格循环。
 fn on_hotkey(app: &tauri::AppHandle, shortcut: &Shortcut) {
+    // 设置页正在捕获新快捷键：所有全局组合键静默忽略。
+    if CAPTURE_SUSPEND.load(Ordering::SeqCst) {
+        log_info!("快捷键捕获中，忽略全局快捷键 {shortcut:?}");
+        return;
+    }
     // R2:润色中按 ESC → 取消润色（ESC 由润色流程动态注册，见 commands.rs）。
     // R6:QA 流式中按 ESC → 取消 QA 流（保留已输出）。
     if shortcut.key == Code::Escape && shortcut.mods.is_empty() {
@@ -449,7 +485,7 @@ fn effective_record_shortcut(cfg: &voice_core::AppConfig) -> Option<Shortcut> {
     parse_shortcut(trimmed).or_else(|| parse_shortcut(DEFAULT_HOTKEY))
 }
 
-/// R4：翻译快捷键（P1 仅 Toggle）。无云端 key → 不写 intent、不录音（FR-4.5）。
+/// R4：翻译快捷键（P1 仅 Toggle）。云端或本地（专翻/兼译）任一可用才开录。
 fn on_translate_hotkey(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     // 互斥表：听写 / 翻译录音中 → 忽略 + toast；QA 窗可见 → 忽略。
@@ -464,12 +500,12 @@ fn on_translate_hotkey(app: &tauri::AppHandle) {
         let _ = app.emit("toast://info", "问答面板打开中，翻译键已忽略");
         return;
     }
-    if !state.has_cloud_key() {
+    if !state.has_cloud_key() && !state.has_local_translate() {
         let _ = app.emit(
             "toast://info",
-            "请先配置云端 LLM（润色 endpoint + API Key）",
+            "请先配置翻译后端：云端 LLM（endpoint + API Key），或在设置 → 本地模型下载翻译/润色模型",
         );
-        log_info!("翻译键：无云端 key，拒绝开始");
+        log_info!("翻译键：无云端 key 且无本地翻译模型，拒绝开始");
         return;
     }
     if let Ok(mut intent) = state.pending_intent.lock() {
@@ -1059,6 +1095,11 @@ fn parse_code(p: &str) -> Option<Code> {
 /// R9：Hold+Fn delay-start——按下只 `ArmHoldTimer`，`short_press_ms` 到期仍按住才开录；
 /// 提前松开只 `RepostOnly`（PR3 补发 🌐），**不进** pipeline。Toggle 松开不再停（KD-2）。
 pub(crate) fn on_fn_edge(pressed: bool) {
+    // 设置页正在捕获新快捷键：Fn/CapsLock 边沿静默忽略（不开录、不补发）。
+    if CAPTURE_SUSPEND.load(Ordering::SeqCst) {
+        log_info!("快捷键捕获中，忽略录音键边沿（pressed={pressed}）");
+        return;
+    }
     // 推送事件给前端（测试模块用）。
     if let Some(app) = APP_HANDLE.get() {
         let _ = app.emit("fn://edge", pressed);

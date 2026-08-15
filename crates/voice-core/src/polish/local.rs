@@ -1,32 +1,56 @@
-//! 本地 GGUF 润色（Qwen2.5-1.5B-Instruct Q4_K_M 等）。
+//! 本地 GGUF 润色 / 翻译（Qwen3.5 / MiLMMT / HY-MT 等，目录见 `llm_catalog`）。
 //!
-//! - 开启 `llm` feature：llama.cpp 进程内推理。
-//! - 未开启：返回明确错误（与 sherpa stub 同风格）。
+//! - 推理统一走常驻 [`crate::polish::GgufRuntime`]（不再每次 `load_from_file`）。
+//! - [`LocalGgufPolish`]：实现 [`TextPolishProvider`]，听写润色。
+//! - [`LocalGgufTranslate`]：实现 [`LlmClient::translate_text`]，本地专翻 / 兼译；
+//!   `polish` / `polish_and_translate` / `chat_stream` 返回「不支持」。
+//! - 未开启 `llm` feature：运行时返回引导错误（与 sherpa stub 同风格）。
 
-use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::polish::prompts::{
+    build_local_translate_messages, build_messages, detect_source_lang, lang_display_name,
+    looks_like_instruction_leak,
+};
+use crate::polish::runtime::{CompletionRequest, GgufRuntime};
 use crate::traits::{PolishMode, PolishRequest, PolishResponse, TextPolishProvider};
 use crate::{Error, Result};
 
-use super::prompts::build_messages;
+/// 目录 id 是否属于 Qwen3/3.5 系（需关 thinking）。
+pub fn arch_needs_no_think(model_id: &str) -> bool {
+    model_id.starts_with("qwen3") || model_id.starts_with("qwen2.5")
+}
 
 /// 本地 GGUF 润色。
 pub struct LocalGgufPolish {
+    pub runtime: Arc<GgufRuntime>,
     pub model_path: PathBuf,
+    /// 目录 id（取 n_predict / 关 thinking 等参数用）。
+    pub model_id: String,
     /// 生成时上下文长度（短改写足够小）。
     pub n_ctx: u32,
     pub n_predict: i32,
 }
 
 impl LocalGgufPolish {
-    pub fn new(model_path: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        runtime: Arc<GgufRuntime>,
+        model_path: impl Into<PathBuf>,
+        model_id: impl Into<String>,
+    ) -> Self {
+        let model_id = model_id.into();
+        let n_predict = crate::llm_catalog::llm_model_by_id(&model_id)
+            .map(|m| m.n_predict)
+            .unwrap_or(128);
         Self {
+            runtime,
             model_path: model_path.into(),
+            model_id,
             n_ctx: 2048,
-            n_predict: 128,
+            n_predict,
         }
     }
 
@@ -52,154 +76,239 @@ impl TextPolishProvider for LocalGgufPolish {
             )));
         }
 
-        let path = self.model_path.clone();
-        let n_ctx = self.n_ctx;
-        let n_predict = self.n_predict;
         let messages = build_messages(
             &req.text,
             req.mode,
             &req.hotwords,
             req.style_prompt.as_deref(),
         );
-        let timeout = req.timeout;
-
-        // llama.cpp 绑定非 async：丢到 blocking 线程，再套超时。
-        let fut = tokio::task::spawn_blocking(move || {
-            run_gguf_completion(&path, &messages, n_ctx, n_predict)
-        });
-        let joined = tokio::time::timeout(timeout, fut)
-            .await
-            .map_err(|_| Error::Provider(format!("本地润色超时（{}ms）", timeout.as_millis())))?
-            .map_err(|e| Error::Provider(format!("本地润色任务失败: {e}")))?;
-
-        let t0 = Instant::now(); // latency 在 run 内更准；此处兜底
-        let (text, ms) = joined?;
+        let completion = CompletionRequest {
+            messages,
+            n_ctx: self.n_ctx,
+            n_predict: self.n_predict,
+            temperature: 0.3,
+            no_think: arch_needs_no_think(&self.model_id),
+        };
+        let (text, ms) = self
+            .runtime
+            .complete(self.model_path.clone(), completion, req.timeout)
+            .await?;
         Ok(PolishResponse {
             text,
             provider: "local-gguf".into(),
-            latency_ms: if ms > 0 {
-                ms
-            } else {
-                t0.elapsed().as_millis() as u32
-            },
+            latency_ms: ms,
         })
     }
 }
 
-/// 本地推理入口。
-///
-/// `llm` feature 开启且系统装有 cmake 时链接 llama.cpp；否则返回引导错误。
-/// （当前环境若未装 cmake，默认构建不含 llm，下载 GGUF 仍可用，推理走云端或回退原文。）
-fn run_gguf_completion(
-    model_path: &Path,
-    messages: &[(String, String)],
-    n_ctx: u32,
-    n_predict: i32,
-) -> Result<(String, u32)> {
-    #[cfg(feature = "llm")]
-    {
-        return run_gguf_completion_llama(model_path, messages, n_ctx, n_predict);
+/// 本地 GGUF 翻译（专翻 / 兼译同一实现，prompt 按 `model_id` 选模板）。
+pub struct LocalGgufTranslate {
+    pub runtime: Arc<GgufRuntime>,
+    pub model_path: PathBuf,
+    pub model_id: String,
+    pub n_ctx: u32,
+    pub n_predict: i32,
+}
+
+impl LocalGgufTranslate {
+    pub fn new(
+        runtime: Arc<GgufRuntime>,
+        model_path: impl Into<PathBuf>,
+        model_id: impl Into<String>,
+    ) -> Self {
+        let model_id = model_id.into();
+        let n_predict = crate::llm_catalog::llm_model_by_id(&model_id)
+            .map(|m| m.n_predict)
+            .unwrap_or(256);
+        Self {
+            runtime,
+            model_path: model_path.into(),
+            model_id,
+            n_ctx: 2048,
+            n_predict,
+        }
     }
-    #[cfg(not(feature = "llm"))]
-    {
-        let _ = (model_path, messages, n_ctx, n_predict);
-        Err(Error::Provider(
-            "本地润色引擎未启用：请安装 cmake 后以 `--features llm` 编译（llama.cpp + GGUF）。\
-             也可配置百炼 api_key 使用云端润色。"
-                .into(),
-        ))
+
+    pub fn model_exists(&self) -> bool {
+        self.model_path.is_file()
     }
 }
 
-#[cfg(feature = "llm")]
-fn run_gguf_completion_llama(
-    model_path: &Path,
-    messages: &[(String, String)],
-    n_ctx: u32,
-    n_predict: i32,
-) -> Result<(String, u32)> {
-    use llama_cpp_2::context::params::LlamaContextParams;
-    use llama_cpp_2::llama_backend::LlamaBackend;
-    use llama_cpp_2::llama_batch::LlamaBatch;
-    use llama_cpp_2::model::params::LlamaModelParams;
-    use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
-    use llama_cpp_2::sampling::LlamaSampler;
-    use std::num::NonZeroU32;
-
-    let t0 = Instant::now();
-    let backend = LlamaBackend::init()
-        .map_err(|e| Error::Provider(format!("初始化 llama backend 失败: {e}")))?;
-
-    let model_params = LlamaModelParams::default();
-    let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
-        .map_err(|e| Error::Provider(format!("加载 GGUF 失败: {e}")))?;
-
-    let ctx_params = LlamaContextParams::default().with_n_ctx(Some(
-        NonZeroU32::new(n_ctx).unwrap_or(NonZeroU32::new(2048).unwrap()),
-    ));
-    let mut ctx = model
-        .new_context(&backend, ctx_params)
-        .map_err(|e| Error::Provider(format!("创建 llama context 失败: {e}")))?;
-
-    let chat_msgs: Vec<LlamaChatMessage> = messages
-        .iter()
-        .filter_map(|(role, content)| LlamaChatMessage::new(role.clone(), content.clone()).ok())
-        .collect();
-
-    // 新版 llama-cpp-2：apply_chat_template 需要显式 &LlamaChatTemplate。
-    // 优先用模型内置模板（chat_template），拿不到则回退 chatml（Qwen2.5 Instruct 兼容）。
-    let tmpl = model
-        .chat_template(None)
-        .or_else(|_| LlamaChatTemplate::new("chatml"))
-        .map_err(|e| Error::Provider(format!("取 chat_template 失败: {e}")))?;
-    let prompt = model
-        .apply_chat_template(&tmpl, &chat_msgs, true)
-        .map_err(|e| Error::Provider(format!("apply_chat_template 失败: {e}")))?;
-
-    let tokens = model
-        .str_to_token(&prompt, AddBos::Always)
-        .map_err(|e| Error::Provider(format!("tokenize 失败: {e}")))?;
-
-    let mut batch = LlamaBatch::new(tokens.len() + n_predict.max(1) as usize, 1);
-    let last_idx = tokens.len().saturating_sub(1);
-    for (i, token) in tokens.into_iter().enumerate() {
-        batch
-            .add(token, i as i32, &[0], i == last_idx)
-            .map_err(|e| Error::Provider(format!("batch.add 失败: {e}")))?;
-    }
-    ctx.decode(&mut batch)
-        .map_err(|e| Error::Provider(format!("prompt decode 失败: {e}")))?;
-
-    let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::temp(0.3),
-        LlamaSampler::top_p(0.9, 1),
-        LlamaSampler::greedy(),
-    ]);
-
-    let mut out = String::new();
-    let mut n_cur = batch.n_tokens();
-    for _ in 0..n_predict.max(1) {
-        let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-        sampler.accept(token);
-        if model.is_eog_token(token) {
-            break;
+#[async_trait]
+impl crate::LlmClient for LocalGgufTranslate {
+    /// 本地翻译（R4/R5 + 兼译）。专翻模型用官方模板，兼译用通用 Instruct。
+    async fn translate_text(&self, req: crate::TranslateRequest) -> Result<String> {
+        if req.text.trim().is_empty() {
+            return Ok(String::new());
         }
-        let piece = model
-            .token_to_str(token, llama_cpp_2::model::Special::Tokenize)
-            .unwrap_or_default();
-        out.push_str(&piece);
-        batch.clear();
-        batch
-            .add(token, n_cur, &[0], true)
-            .map_err(|e| Error::Provider(format!("decode step 失败: {e}")))?;
-        n_cur += 1;
-        ctx.decode(&mut batch)
-            .map_err(|e| Error::Provider(format!("decode 失败: {e}")))?;
+        if !self.model_exists() {
+            return Err(Error::Provider(format!(
+                "本地翻译模型未安装：{}",
+                self.model_path.display()
+            )));
+        }
+        let src = detect_source_lang(&req.text, &req.source_lang);
+        let tgt = lang_display_name(&req.target_lang);
+        let messages = build_local_translate_messages(&self.model_id, &req.text, &src, tgt);
+        let completion = CompletionRequest {
+            messages,
+            n_ctx: self.n_ctx,
+            n_predict: self.n_predict,
+            // 翻译抖动比润色更不可接受：接近 greedy。
+            temperature: 0.2,
+            no_think: arch_needs_no_think(&self.model_id),
+        };
+        let (text, _ms) = self
+            .runtime
+            .complete(self.model_path.clone(), completion, req.timeout)
+            .await?;
+        if looks_like_instruction_leak(&text) {
+            return Err(Error::Provider("本地翻译输出疑似指令泄漏，视为失败".into()));
+        }
+        Ok(text)
     }
 
-    let text = out.trim().to_string();
-    if text.is_empty() {
-        return Err(Error::Provider("本地润色返回空文本".into()));
+    /// 本地不做润色（专用实现只译）。
+    async fn polish(&self, _req: PolishRequest) -> Result<PolishResponse> {
+        Err(Error::Provider("本地翻译模型不支持润色".into()))
     }
-    Ok((text, t0.elapsed().as_millis() as u32))
+
+    /// 本地禁止哨兵合成（方案：本地一律两步 Light → 译）。
+    async fn polish_and_translate(
+        &self,
+        _req: crate::TranslateRequest,
+    ) -> Result<crate::PolishTranslate> {
+        Err(Error::Provider(
+            "本地翻译不支持哨兵合成（应先 Light 润色再译）".into(),
+        ))
+    }
+
+    /// QA 流式保持云端（小模型质量不承诺）。
+    async fn chat_stream(&self, _req: crate::ChatRequest) -> Result<String> {
+        Err(Error::Provider("本地翻译模型不支持流式问答".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::LlmClient;
+
+    #[test]
+    fn no_think_arch_heuristic() {
+        assert!(arch_needs_no_think("qwen3.5-2b"));
+        assert!(arch_needs_no_think("qwen3-1.7b"));
+        assert!(!arch_needs_no_think("milmmt-1b"));
+        assert!(!arch_needs_no_think("hy-mt-1.8b"));
+    }
+
+    #[test]
+    fn n_predict_from_catalog() {
+        let rt = Arc::new(GgufRuntime::new());
+        let p = LocalGgufPolish::new(rt.clone(), "/tmp/x.gguf", "qwen3.5-2b");
+        assert_eq!(p.n_predict, 128);
+        let t = LocalGgufTranslate::new(rt, "/tmp/y.gguf", "milmmt-1b");
+        assert_eq!(t.n_predict, 256);
+    }
+
+    #[tokio::test]
+    async fn translate_missing_model_errors() {
+        let rt = Arc::new(GgufRuntime::new());
+        let t = LocalGgufTranslate::new(rt, "/nonexistent/not-installed.gguf", "milmmt-1b");
+        let req = crate::TranslateRequest {
+            text: "你好".into(),
+            target_lang: "English".into(),
+            timeout: std::time::Duration::from_secs(1),
+            max_tokens: 256,
+            source_lang: "auto".into(),
+        };
+        let err = t.translate_text(req).await.unwrap_err();
+        assert!(format!("{err}").contains("未安装"));
+    }
+
+    fn polish_req(mode: PolishMode, text: &str) -> PolishRequest {
+        PolishRequest {
+            text: text.into(),
+            mode,
+            style_prompt: None,
+            hotwords: vec![],
+            timeout: std::time::Duration::from_secs(1),
+            max_tokens: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn polish_passthrough_on_off_mode_and_empty_text() {
+        // Off / 空文本早退：原样返回 + provider=passthrough（pipeline 据此视为未润色）。
+        let rt = Arc::new(GgufRuntime::new());
+        let p = LocalGgufPolish::new(rt, "/nonexistent/x.gguf", "qwen3.5-2b");
+        let r = p.polish(polish_req(PolishMode::Off, "原文")).await.unwrap();
+        assert_eq!(r.text, "原文");
+        assert_eq!(r.provider, "passthrough");
+        let r = p
+            .polish(polish_req(PolishMode::Light, "   "))
+            .await
+            .unwrap();
+        assert_eq!(r.provider, "passthrough");
+    }
+
+    #[tokio::test]
+    async fn polish_missing_model_errors() {
+        // 模型文件缺失 → 明确的「未安装」错误（早于任何推理调用）。
+        let rt = Arc::new(GgufRuntime::new());
+        let p = LocalGgufPolish::new(rt, "/nonexistent/x.gguf", "qwen3.5-2b");
+        let err = p
+            .polish(polish_req(PolishMode::Light, "这句话足够长会走到模型检查"))
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains("未安装"));
+    }
+
+    #[tokio::test]
+    async fn translate_empty_text_returns_empty_without_model_check() {
+        // 空文本早退在模型检查之前：即使模型未装也 Ok("")。
+        let rt = Arc::new(GgufRuntime::new());
+        let t = LocalGgufTranslate::new(rt, "/nonexistent/y.gguf", "milmmt-1b");
+        let req = crate::TranslateRequest {
+            text: "   ".into(),
+            target_lang: "English".into(),
+            timeout: std::time::Duration::from_secs(1),
+            max_tokens: 256,
+            source_lang: "auto".into(),
+        };
+        assert_eq!(t.translate_text(req).await.unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn translate_handle_rejects_non_translate_operations() {
+        // 方案契约：本地专翻只译——polish / 哨兵合成 / 流式问答一律「不支持」。
+        let rt = Arc::new(GgufRuntime::new());
+        let t = LocalGgufTranslate::new(rt, "/nonexistent/y.gguf", "milmmt-1b");
+        let tr = crate::TranslateRequest {
+            text: "hi".into(),
+            target_lang: "English".into(),
+            timeout: std::time::Duration::from_secs(1),
+            max_tokens: 64,
+            source_lang: "auto".into(),
+        };
+        let e = t
+            .polish(polish_req(PolishMode::Light, "x"))
+            .await
+            .unwrap_err();
+        assert!(format!("{e}").contains("不支持润色"));
+        let e = t.polish_and_translate(tr).await.unwrap_err();
+        assert!(format!("{e}").contains("哨兵"));
+        let e = t
+            .chat_stream(crate::ChatRequest {
+                messages: vec![("user".into(), "hi".into())],
+                timeout: std::time::Duration::from_secs(1),
+                max_tokens: 64,
+                cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                gen: 0,
+                on_delta: Box::new(|_| {}),
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{e}").contains("流式"));
+    }
 }

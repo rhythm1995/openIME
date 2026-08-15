@@ -1,12 +1,12 @@
 //! 本地 ASR 模型目录：可下载、可选中启用。
 //!
-//! 当前候选：
+//! 当前候选（本地三件套方案冻结目录）：
 //! - `sensevoice`：SenseVoice 离线（轻量多语）
-//! - `firered-large`：FireRedASR Large 离线（本地中文高精度）
 //! - `funasr-nano-int8`：FunASR Nano int8 离线（encoder+LLM，方言/抗噪强）
 //! - `funasr-nano-fp16`：FunASR Nano fp16 离线（同上，fp16 LLM 精度略高）
 //!
-//! 已移除：`paraformer-trilingual`（流式逐字上屏不稳定）/ `zipformer-zh-2025` / `zipformer-zh-xlarge`。
+//! 已移除：`firered-large`（本地三件套方案决定下架，不做迁移；旧配置归一为 sensevoice）、
+//! `paraformer-trilingual` / `zipformer-zh-2025` / `zipformer-zh-xlarge`。
 
 use serde::Serialize;
 
@@ -68,15 +68,6 @@ pub fn asr_model_catalog() -> &'static [AsrModelInfo] {
             approx_size: 239_233_841 + 315_894,
         },
         AsrModelInfo {
-            id: ASR_MODEL_FIRERED_LARGE,
-            title: "FireRedASR Large",
-            description: "离线整段解码 · 中英 · 约 1.7GB · 普通话最准。开源 SOTA 档（CER≈3%），适合正式文稿/会议/长句，纠错最少。AED 架构整段解码，更慢、峰值内存 ~2GB+，低配机可能卡顿。仅中英，不支持方言/日韩。追求识别率选它。",
-            dir_name: FIRERED_LARGE_DIR,
-            backend: AsrBackend::OfflineFireRed,
-            recommended: false,
-            approx_size: 1_293_430_814 + 445_469_383 + 71_448,
-        },
-        AsrModelInfo {
             id: ASR_MODEL_FUNASR_NANO_INT8,
             title: "FunASR Nano int8",
             description: "离线 encoder+LLM · 中(7方言)+英+日 · 约 948MB · 方言/抗噪强。int8 量化体积最小；内置 ITN（数字/日期归一化），支持吴/粤/闽/客/赣等 7 方言 + 日文，嘈杂场景稳。注意：int8 偶有重复字小瑕疵，要更高精度选 fp16 版。",
@@ -102,7 +93,7 @@ pub fn asr_model_by_id(id: &str) -> Option<&'static AsrModelInfo> {
 }
 
 pub fn default_asr_model_id() -> &'static str {
-    // 默认偏轻量：SenseVoice 适合首装（快、带标点）；用户可改选 FireRed 或 FunASR Nano。
+    // 默认偏轻量：SenseVoice 适合首装（快、带标点）；用户可改选 FunASR Nano。
     ASR_MODEL_SENSEVOICE
 }
 
@@ -110,7 +101,6 @@ pub fn default_asr_model_id() -> &'static str {
 pub fn asr_model_files(id: &str) -> Vec<LocalModelFile> {
     let mut files = match id {
         ASR_MODEL_SENSEVOICE => sensevoice_files(),
-        ASR_MODEL_FIRERED_LARGE => firered_large_files(),
         ASR_MODEL_FUNASR_NANO_INT8 => funasr_nano_files(FunasrNanoVariant::Int8),
         ASR_MODEL_FUNASR_NANO_FP16 => funasr_nano_files(FunasrNanoVariant::Fp16),
         _ => Vec::new(),
@@ -140,42 +130,6 @@ fn sensevoice_files() -> Vec<LocalModelFile> {
             ],
             sha256: "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
             size: 315_894,
-        },
-    ]
-}
-
-fn firered_large_files() -> Vec<LocalModelFile> {
-    // SHA256 = Git LFS oid（同上，勿用 HTTP ETag）。
-    vec![
-        LocalModelFile {
-            file_name: "encoder.int8.onnx",
-            rel_dir: FIRERED_LARGE_DIR,
-            urls: &[
-                "https://huggingface.co/csukuangfj/sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16/resolve/main/encoder.int8.onnx",
-                "https://hf-mirror.com/csukuangfj/sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16/resolve/main/encoder.int8.onnx",
-            ],
-            sha256: "e60cfef737a0ea324846a64eca8b9dae35898f353f4e34b62ad7e536e2d86add",
-            size: 1_293_430_814,
-        },
-        LocalModelFile {
-            file_name: "decoder.int8.onnx",
-            rel_dir: FIRERED_LARGE_DIR,
-            urls: &[
-                "https://huggingface.co/csukuangfj/sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16/resolve/main/decoder.int8.onnx",
-                "https://hf-mirror.com/csukuangfj/sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16/resolve/main/decoder.int8.onnx",
-            ],
-            sha256: "c08b9d0297ed17ad84087085e27a4adedcc4e8b3ef14770369f1665681cc507d",
-            size: 445_469_383,
-        },
-        LocalModelFile {
-            file_name: "tokens.txt",
-            rel_dir: FIRERED_LARGE_DIR,
-            urls: &[
-                "https://huggingface.co/csukuangfj/sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16/resolve/main/tokens.txt",
-                "https://hf-mirror.com/csukuangfj/sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16/resolve/main/tokens.txt",
-            ],
-            sha256: "6907215aeb034f6926b26bf8abfd650f756781622480a2342ec1f29b2072cafe",
-            size: 71_448,
         },
     ]
 }

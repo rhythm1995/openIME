@@ -20,6 +20,7 @@ pub mod config;
 pub mod endpoint;
 pub mod http;
 pub mod insert;
+pub mod llm_catalog;
 pub mod model_download;
 pub mod model_mgr;
 pub mod permissions;
@@ -39,18 +40,22 @@ pub use asr_catalog::{
 };
 pub use config::{
     AppConfig, ChineseScriptPreference, HotkeyMode, InsertStrategy, PolishCloudProtocol,
-    PolishPolicy, ProviderConfig, ProviderKind, POLISH_DEFAULT_LOCAL_MODEL,
+    PolishPolicy, ProviderConfig, ProviderKind, TranslatePolicy, POLISH_DEFAULT_LOCAL_MODEL,
 };
 pub use insert::{
     decide_restore, matches_paste_fallback, remember_pending, should_restore_clipboard,
     EnigoInserter, InsertOpts, InsertOutcome, PendingRestore, RestoreDecision,
 };
+pub use llm_catalog::{
+    is_llm_model_installed, is_polish_catalog_id, is_translate_catalog_id, llm_files,
+    llm_model_by_id, llm_model_path, normalize_polish_model_id, polish_catalog, resolve_llm_id,
+    translate_catalog, LlmArch, LlmKind, LlmModelInfo,
+};
 pub use model_download::{
-    install_local_engine, install_polish_model, is_local_engine_installed,
-    is_local_engine_installed_for, is_polish_model_installed, local_model_files,
-    local_model_files_for, missing_files, missing_files_for, normalize_asr_model_id,
-    polish_model_path, DownloadProgress, LLM_DIR, POLISH_GGUF_FILE, POLISH_MODEL_ID,
-    SENSEVOICE_MODEL_NAME, SHERPA_MODEL_NAME, VAD_DIR,
+    install_llm_model, install_local_engine, is_local_engine_installed,
+    is_local_engine_installed_for, local_model_files, local_model_files_for, missing_files,
+    missing_files_for, normalize_asr_model_id, DownloadProgress, LLM_DIR, SENSEVOICE_MODEL_NAME,
+    SHERPA_MODEL_NAME, VAD_DIR,
 };
 pub use model_mgr::ModelManager;
 pub use pipeline::{
@@ -59,14 +64,17 @@ pub use pipeline::{
 };
 pub use polish::{
     detect_prefix_role, parse_polish_translate, parse_sse_line, BailianChatPolish, ChatRequest,
-    CloudPolishProvider, LlmClient, LocalGgufPolish, PolishRouter, PolishRouterConfig,
-    PolishTranslate, SseLine, TranslateRequest,
+    CloudPolishProvider, GgufRuntime, LlmClient, LocalGgufPolish, LocalGgufTranslate, PolishRouter,
+    PolishRouterConfig, PolishTranslate, SseLine, TranslateRequest, TranslateRouter,
 };
 pub use providers::bailian::test_connection;
 pub use providers::sherpa::{SherpaModelPaths, SherpaProvider};
 pub use providers::RoutingProvider;
 pub use store::{Hotword, OutputMode, RoleKind, SqliteStore, StylePack};
-pub use system::{collect_system_info, compute_model_tag, ModelPerfTag, SystemInfo};
+pub use system::{
+    asr_rss_bytes, collect_system_info, combo_budget, compute_combo_tag, compute_model_tag,
+    llm_rss_bytes, recommend_defaults, ModelPerfTag, RecommendedDefaults, SystemInfo,
+};
 pub use traits::{
     AsrProvider, AsrSession, AudioFormat, AudioFrame, AudioSource, HistoryStore, PolishMode,
     PolishRequest, PolishResponse, SessionSummary, TextInserter, TextPolishProvider,

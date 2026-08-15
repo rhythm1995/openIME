@@ -73,12 +73,29 @@
       "cloudEndpointPh": "Empty = use Bailian-compatible URL / or fill https://openrouter.ai/api/v1",
       "cloudApiKeyLabel": "Cloud API key (optional)",
       "cloudApiKeyPh": "Empty = use the ASR engine's Bailian API key",
-      "localPolishModelTitle": "Local model Qwen2.5-1.5B-Instruct Q4_K_M",
-      "installedSize": "Installed · {{size}}",
-      "notInstalledSize": "Not installed · ~{{size}}",
+      "localModelMovedHint": "Local model tiers (fast / balanced / high quality) have moved to the \"Local models\" card below; download one to enable it. Local first, falls back to cloud on failure.",
       "llmFeatureOff": " · Local inference is disabled in this build (rebuild with ./scripts/build.sh)",
-      "statusLoading": "Loading status…",
-      "downloadModel": "Download model"
+      "statusLoading": "Loading status…"
+    },
+    "localLlm": {
+      "title": "Local models",
+      "openDir": "Open models folder",
+      "openDirOk": "Opened models folder: {{path}}",
+      "pathTitle": "Models folder path",
+      "budgetBar": "Suite ~{{used}} / budget {{budget}}",
+      "polishTitle": "Polish models (download on demand)",
+      "translateTitle": "Translation models (optional)",
+      "translatePolicyLabel": "Translation routing",
+      "policy_cloud": "Cloud first (uses cloud when online, falls back to local)",
+      "policy_local": "Local first (private / offline, falls back to cloud)",
+      "fallbackName": "Use polish model for translation",
+      "fallbackDesc": "When the dedicated translation model is not installed, the same polish model does a two-step translation (Light fix → translate). Lower quality than the dedicated model; for low-end machines / offline.",
+      "fallbackHint": "Hint: when online, cloud is still used by default; the polish model covers offline use or when you skip downloading the dedicated model.",
+      "noDedicated": "No local translation model (cloud / fallback only)",
+      "noDedicatedDesc": "Skip downloading a translation model; translation goes through the cloud or the polish model (fallback).",
+      "noDedicatedSize": "Nothing to download · no extra footprint",
+      "noDedicatedEnableTip": "Enable \"no local translation model\"",
+      "noInstall": "Nothing to install"
     },
     "engine": {
       "title": "Recognition engine",
@@ -134,48 +151,46 @@
       "enable": "Enable",
       "enabledTip": "Enabled \"{{title}}\"",
       "models": {
-        "firered_large": {
-          "title": "FireRedASR Large",
-          "desc": "Offline full-clip · high-accuracy CN/EN · ~1.7GB · more accurate but slower; for chasing accuracy"
-        },
-        "zipformer_zh_xlarge": {
-          "title": "Zipformer CN xlarge",
-          "desc": "Streaming xlarge int8 · large CN model · ~735MB · more accurate than large"
-        },
-        "zipformer_zh_2025": {
-          "title": "Zipformer CN 2025",
-          "desc": "Streaming large int8 · CN · ~167MB · balanced size and speed"
-        },
         "sensevoice": {
           "title": "SenseVoice",
           "desc": "Offline full-clip · CN/EN/JP/KO/Yue · ~240MB · fast, light on resources"
+        },
+        "funasr_nano_int8": {
+          "title": "FunASR Nano int8",
+          "desc": "Offline encoder+LLM · CN(7 dialects)+EN+JP · ~950MB · strong on dialects/noise"
+        },
+        "funasr_nano_fp16": {
+          "title": "FunASR Nano fp16",
+          "desc": "Offline encoder+LLM · CN(7 dialects)+EN+JP · ~1.5GB · Apple Silicon friendly"
         }
       }
     },
     "hotkey": {
       "title": "Hotkeys",
       "recordLabel": "Recording hotkey",
-      "recordHint": "Default Fn (🌐 key). Or a combo like Alt+Shift+D.",
-      "recordHintWin": "Default is CapsLock (hold to talk, release to stop; short taps keep the original caps function). Fn is not recommended (most keyboards handle it in firmware, invisible to the OS). Works even inside openIME windows (raw input fallback); fallback combo Ctrl+Shift+D also registered.",
+      "recordHint": "Click the button and press the keys you want (combos supported, Esc cancels). Default Fn on macOS; Fn cannot be captured from the keyboard, use the preset button.",
+      "recordHintWin": "Click the button and press the keys you want (combos supported, Esc cancels). Default is CapsLock (hold to talk, release to stop; short taps keep the original caps function). Fn is not recommended (most keyboards handle it in firmware, invisible to the OS). Works even inside openIME windows (raw input fallback); fallback combo Ctrl+Shift+D also registered.",
       "modeLabel": "Trigger mode",
       "mode_toggle": "Toggle (press to start / stop)",
       "mode_hold": "Hold (release to stop)",
       "styleSwitchLabel": "Style-pack cycle shortcut (optional)",
       "styleSwitchPh": "e.g. Ctrl+Shift+P (empty = off)",
-      "fnWarning": "Fn needs System Settings → Keyboard → “Press 🌐 key to” = “Do Nothing”, otherwise the system swallows the event.",
+      "fnWarning": "Fn needs System Settings → Keyboard → “Press 🌐 (Fn) key to” = “Do Nothing”, otherwise the system swallows the event.",
       "fnWarningWin": "On Windows the Fn key is consumed by keyboard firmware on most machines and never reaches the OS (a few keyboards except). Fallback Ctrl+Shift+D is also registered; for a single-key experience use CapsLock instead.",
       "translateLabel": "Translation shortcut (optional)",
-      "translatePh": "e.g. Alt+Shift+T (empty = off)",
       "translateHint": "Speak in the source language; the target language appears at the caret.",
       "qaLabel": "Selection QA shortcut (optional)",
-      "qaPh": "e.g. Cmd+Shift+; (empty = off)",
       "qaHint": "Select text, press the key: a QA panel opens, ask by voice, streamed answer.",
       "shortPressLabel": "Short-press threshold (ms)",
-      "shortPressHint": "In Hold mode, recording starts only after Fn is held longer than this; releasing earlier re-posts 🌐 (100–800, default 300)",
-      "fnRepostName": "Re-post 🌐 on short Fn press",
-      "fnRepostDesc": "On Hold + Fn tap (below threshold), re-post the 🌐 key so the system performs its original action (e.g. switch input source). macOS only.",
-      "fnRepostNameWin": "Keep CapsLock working on short taps",
-      "fnRepostDescWin": "On Hold + CapsLock tap (below threshold), the key is re-posted so CapsLock toggles normally; recording starts only when held past the threshold (CapsLock is reserved while configured)."
+      "shortPressHint": "In Hold mode, recording starts only after {{key}} is held longer than this; releasing earlier does not record (for single keys the original function is re-posted) (100–800, default 300)",
+      "fnRepostName": "Re-post original function on short {{key}} press",
+      "fnRepostDesc": "On Hold + {{key}} tap (below threshold), the key is re-posted so the system performs its original action (e.g. switch input source). macOS only.",
+      "fnRepostNameWin": "Keep {{key}} working on short taps",
+      "fnRepostDescWin": "On Hold + {{key}} tap (below threshold), the key is re-posted so it works normally; recording starts only when held past the threshold ({{key}} is reserved while recording).",
+      "capturing": "Press shortcut… (Esc cancels)",
+      "unset": "Not set (click to record)",
+      "clear": "Clear",
+      "presetTitle": "Set to {{key}}"
     },
     "transcribe": {
       "title": "File transcription",
@@ -220,8 +235,8 @@
     },
     "fnTest": {
       "title": "Function test",
-      "hint": "Press Fn (🌐) to start recording, speak into the microphone, and recognized text appears in the box below in real time. Press Fn again to stop.",
-      "hintWin": "Hold CapsLock and speak (release to stop); recognized text appears below in real time. Short taps keep the original caps function. Combo keys (e.g. Ctrl+Shift+D) also work in toggle mode.",
+      "hint": "Press {{key}} to start recording, speak into the microphone, and recognized text appears in the box below in real time. Press {{key}} again to stop.",
+      "hintWin": "Hold {{key}} and speak (release to stop); recognized text appears below in real time. Short taps keep the key’s original function. Combo keys (e.g. Ctrl+Shift+D) also work in toggle mode.",
       "recording": "Recording…",
       "triggered": "Triggered {{count}} time(s)",
       "ready": "Ready",
@@ -246,7 +261,7 @@
       "lang_de": "Deutsch",
       "lang_es": "español",
       "polishFirstName": "Polish before translating",
-      "polishFirstDesc": "One call: remove filler words and smooth the text, then translate (slower)."
+      "polishFirstDesc": "Cloud: polish + translate in one call; local: Light fix then translate (two steps, slower)."
     },
     "insert": {
       "title": "Insertion & Clipboard",
@@ -264,12 +279,15 @@
     "roles": {
       "title": "Roles / Style Packs",
       "enabledName": "Enable prefix roles",
-      "enabledDesc": "Dictation starting with a prefix like “邮件:” or “翻译:” is handled by the matching role. Dictation then inserts as a whole (no streaming).",
-      "hint": "A prefix overrides the default style for that utterance; translate roles share the target language with the translate hotkey. Clear a prefix to turn it back into a plain style pack.",
+      "enabledDesc": "Say “assistant name + role” to trigger a role, e.g. “小友翻译我想要走了” translates the content, “小友邮件明天开会” drafts an email. Roles use the same model as AI polish by default (local first) and can be overridden per role on the right. When enabled, dictation inserts as a whole (no streaming).",
+      "assistantNameLabel": "Assistant name",
+      "assistantNameDesc": "Wake name for prefix roles (combo words are added to hotwords for accurate recognition); empty disables prefix roles.",
+      "assistantNamePh": "e.g. 小友",
       "prefixBadge": "Prefix: {{prefix}}",
       "translateKind": "translate role",
       "prefixPh": "Prefix aliases (| separated, e.g. mail|email)",
-      "providerCloud": "Cloud (default)",
+      "providerFollow": "Follow AI polish (default)",
+      "providerCloud": "Cloud",
       "providerLocal": "Local GGUF",
       "promptPh": "Role instruction (system prompt)",
       "newBtn": "New role / style pack",

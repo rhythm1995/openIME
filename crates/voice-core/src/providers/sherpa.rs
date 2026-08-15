@@ -357,15 +357,16 @@ pub(crate) mod engine {
         let stream = recognizer.create_stream();
         let mut sentence_index: u32 = 0;
         const WINDOW: usize = 512; // silero 16kHz 窗口
-        let mut buf: Vec<f32> = Vec::new();
+                                   // 定窗缓冲：跨批累积样本、按 VAD 窗口切片（纯逻辑，见 audio::WindowBuffer 测试）。
+        let mut window_buf =
+            crate::audio::WindowBuffer::new(WINDOW).expect("WINDOW 常量 ≥1，构造不可能失败");
 
-        // 每收到一批样本，累积到 VAD 窗口整数倍后送 VAD；VAD 输出语音段送 recognizer。
+        // 每收到一批样本，累积到 VAD 窗口整数倍后送 VAD；VAD 输出语音段送 recognizer 解码。
         while let Ok(samples) = audio_rx.recv() {
-            buf.extend_from_slice(&samples);
+            window_buf.push(&samples);
 
-            // 按 VAD 窗口切片喂 VAD。
-            while buf.len() >= WINDOW {
-                let window: Vec<f32> = buf.drain(..WINDOW).collect();
+            // 按 VAD 窗口切片喂 VAD；不足一窗的残余留在缓冲里等下一批。
+            while let Some(window) = window_buf.next_window() {
                 vad.accept_waveform(&window);
                 // 取出 VAD 识别的语音段，送 recognizer 解码。
                 while let Some(seg) = vad.front() {

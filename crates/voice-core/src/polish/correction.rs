@@ -405,11 +405,30 @@ fn normalize_punct(s: &str) -> String {
 // ── 5) 同音纠错（保守小字典）─────────────────────────────
 
 /// 把汉字串转为无声调拼音（非汉字自动跳过）。如"智谱"→"zhipu"。
+///
+/// 例外：ASR 常把汉字读音错写成**读音相同的英文字母**（「优」→U、「微」→V），
+/// 这些字母按谐音映射回读音（见 [`letter_reading`]），使「小U翻译」与热词
+/// 「小优翻译」拼音串相等、可被纠回。
 fn to_pinyin_plain(s: &str) -> String {
-    s.to_pinyin()
-        .flatten()
-        .map(|p| p.plain().to_string())
-        .collect()
+    let mut out = String::new();
+    for c in s.chars() {
+        if let Some(py) = c.to_pinyin().map(|p| p.plain().to_string()) {
+            out.push_str(&py);
+        } else if let Some(reading) = letter_reading(c) {
+            out.push_str(reading);
+        }
+    }
+    out
+}
+
+/// 与常见汉字读音同音的英文字母 → 读音映射（拼音匹配用）。
+/// 只收确认发生过 ASR 混淆的字母，宁缺勿滥（避免正文里的字母被误拼）。
+fn letter_reading(c: char) -> Option<&'static str> {
+    match c.to_ascii_lowercase() {
+        'u' => Some("you"), // 优/悠/游 ↔ U
+        'v' => Some("wei"), // 微/维 ↔ V
+        _ => None,
+    }
 }
 
 /// B2：模糊音归一（zh→z, sh→s, ch→c, eng→en, ing→in），用于近似匹配热词。
@@ -842,6 +861,38 @@ mod tests {
         assert_eq!(
             correct_hotword_homophones("去森正了", &["深圳".into()]),
             "去深圳了"
+        );
+    }
+
+    #[test]
+    fn hotword_homophone_fixes_prefix_alias() {
+        // 前缀别名热词（seed_builtin_prefix_alias_hotwords）：ASR 把「邮件」
+        // 错写成同音「油件」时由 L0 纠回，detect_prefix_role 才能命中邮件角色。
+        let r = correct_l0("油件: 明天三点会议室见", &["邮件".into()]);
+        assert!(
+            r.text.starts_with("邮件"),
+            "应纠回前缀别名，得到 {}",
+            r.text
+        );
+    }
+
+    #[test]
+    fn letter_homophone_corrected_to_hotword() {
+        // ASR 把「优」（you 音）错写成字母 U：拼音归一把 U→you，
+        // 「小U翻译」与热词「小优翻译」同音 → 纠回，前缀角色可命中。
+        assert_eq!(
+            correct_hotword_homophones("小U翻译，明天我要开会", &["小优翻译".into()]),
+            "小优翻译，明天我要开会"
+        );
+        // V→wei 同理。
+        assert_eq!(
+            correct_hotword_homophones("小V信", &["小微信".into()]),
+            "小微信"
+        );
+        // 无关字母不受影响（无映射即跳过）。
+        assert_eq!(
+            correct_hotword_homophones("CPU 占用高", &["小优翻译".into()]),
+            "CPU 占用高"
         );
     }
 

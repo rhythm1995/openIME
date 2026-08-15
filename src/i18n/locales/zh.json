@@ -73,12 +73,29 @@
       "cloudEndpointPh": "留空 = 用百炼兼容地址 / 自填 https://openrouter.ai/api/v1",
       "cloudApiKeyLabel": "云端 API Key（可选）",
       "cloudApiKeyPh": "留空 = 用识别引擎的百炼 API Key",
-      "localPolishModelTitle": "本地模型 Qwen2.5-1.5B-Instruct Q4_K_M",
-      "installedSize": "已安装 · {{size}}",
-      "notInstalledSize": "未安装 · 约 {{size}}",
+      "localModelMovedHint": "本地模型档位（极速/均衡/高质量）已移到下方「本地模型」卡片，下载后即可启用；本地优先，失败自动回退云端。",
       "llmFeatureOff": " · 当前构建未启用本地推理（需用 ./scripts/build.sh 重新打包）",
-      "statusLoading": "状态加载中…",
-      "downloadModel": "下载模型"
+      "statusLoading": "状态加载中…"
+    },
+    "localLlm": {
+      "title": "本地模型",
+      "openDir": "打开模型目录",
+      "openDirOk": "已打开模型目录：{{path}}",
+      "pathTitle": "模型目录路径",
+      "budgetBar": "三件套约 {{used}} / 预算 {{budget}}",
+      "polishTitle": "润色模型（按需下载）",
+      "translateTitle": "翻译模型（可选）",
+      "translatePolicyLabel": "翻译路由策略",
+      "policy_cloud": "云端优先（有网默认走云，失败回本地）",
+      "policy_local": "本地优先（隐私/离线，失败回云端）",
+      "fallbackName": "用润色模型兼做翻译",
+      "fallbackDesc": "专翻装不下或未安装时，用同一颗润色模型两步完成翻译（Light 纠错 → 译）。质量低于专翻，适合弱机/离线。",
+      "fallbackHint": "提示：有网默认仍走云端；离线或不想下载专翻时可用润色模型兼译。",
+      "noDedicated": "不使用本地专翻（纯云端 / 兼译）",
+      "noDedicatedDesc": "不下载翻译模型；翻译由云端或润色模型（兼译）完成。",
+      "noDedicatedSize": "无需下载 · 无额外占用",
+      "noDedicatedEnableTip": "启用「不使用本地专翻」",
+      "noInstall": "无需安装"
     },
     "engine": {
       "title": "识别引擎",
@@ -134,48 +151,46 @@
       "enable": "启用",
       "enabledTip": "已启用「{{title}}」",
       "models": {
-        "firered_large": {
-          "title": "FireRedASR Large",
-          "desc": "离线整段 · 中英高精度 · 约 1.7GB · 更准更慢，适合追求识别率"
-        },
-        "zipformer_zh_xlarge": {
-          "title": "Zipformer 中文 xlarge",
-          "desc": "流式 xlarge int8 · 中文大模型 · 约 735MB · 比 large 更准"
-        },
-        "zipformer_zh_2025": {
-          "title": "Zipformer 中文 2025",
-          "desc": "流式 large int8 · 中文 · 约 167MB · 体积与速度折中"
-        },
         "sensevoice": {
           "title": "SenseVoice",
           "desc": "离线整段 · 中英日韩粤 · 约 240MB · 快、省资源"
+        },
+        "funasr_nano_int8": {
+          "title": "FunASR Nano int8",
+          "desc": "离线 encoder+LLM · 中(7方言)+英+日 · 约 950MB · 方言/抗噪强"
+        },
+        "funasr_nano_fp16": {
+          "title": "FunASR Nano fp16",
+          "desc": "离线 encoder+LLM · 中(7方言)+英+日 · 约 1.5GB · Apple Silicon 友好"
         }
       }
     },
     "hotkey": {
       "title": "快捷键",
       "recordLabel": "录音快捷键",
-      "recordHint": "默认 Fn（🌐 键）。也可填组合键如 Alt+Shift+D。",
-      "recordHintWin": "默认 CapsLock（按住说话，松开停止；短按保留大小写切换原功能）。不建议 Fn（多数键盘由固件处理，系统感知不到）。在 openIME 窗口内同样可用（raw input 兜底），另有兜底组合键 Ctrl+Shift+D。",
+      "recordHint": "点击按钮后按下想要的按键即可设置（支持组合键，Esc 取消）。macOS 默认 Fn；Fn 无法由键盘捕获，点右侧预设按钮一键设置。",
+      "recordHintWin": "点击按钮后按下想要的按键即可设置（支持组合键，Esc 取消）。默认 CapsLock（按住说话，松开停止；短按保留大小写切换原功能）。不建议 Fn（多数键盘由固件处理，系统感知不到）。在 openIME 窗口内同样可用（raw input 兜底），另有兜底组合键 Ctrl+Shift+D。",
+      "capturing": "按下快捷键…（Esc 取消）",
+      "unset": "未设置（点击录入）",
+      "clear": "清除",
+      "presetTitle": "一键设为 {{key}}",
       "modeLabel": "触发模式",
       "mode_toggle": "切换（按一次开 / 再按一次停）",
       "mode_hold": "按住说话（松开停止）",
       "styleSwitchLabel": "风格包切换快捷键（可选）",
       "styleSwitchPh": "如 Ctrl+Shift+P（留空不启用）",
-      "fnWarning": "使用 Fn 键需在 系统设置 → 键盘 → 「按下 🌐 键时」选「不执行任何操作」，否则系统会拦截 Fn 事件。",
+      "fnWarning": "使用 Fn 键需在 系统设置 → 键盘 → 「按下 🌐（即 Fn）键时」选「不执行任何操作」，否则系统会拦截 Fn 事件。",
       "fnWarningWin": "Windows 的 Fn 键多由键盘固件处理，系统感知不到（个别键盘例外）。已同时注册兜底快捷键 Ctrl+Shift+D；想要单键体验请改填 CapsLock。",
       "translateLabel": "翻译快捷键（可选）",
-      "translatePh": "如 Alt+Shift+T（留空不启用）",
       "translateHint": "按一下开始说源语言，光标处插入目标语言；再按一下停止。",
       "qaLabel": "划词问答快捷键（可选）",
-      "qaPh": "如 Cmd+Shift+;（留空不启用）",
       "qaHint": "选中文字后按下：弹出问答浮窗，语音提问，流式回答。",
       "shortPressLabel": "短按阈值（毫秒）",
-      "shortPressHint": "Hold 模式下按住 Fn 超过该时长才开录；提前松开只补发 🌐（100–800，默认 300）",
-      "fnRepostName": "短按 Fn 补发 🌐",
-      "fnRepostDesc": "Hold + Fn 轻点（未达到阈值）时补发 🌐 键，让系统执行切输入法等原功能。仅 macOS 显示。",
-      "fnRepostNameWin": "短按 CapsLock 保留原功能",
-      "fnRepostDescWin": "Hold + CapsLock 轻点（未达到阈值）时补发按键，正常执行大小写锁定；按住超过阈值才开录（此时 CapsLock 被占用）。"
+      "shortPressHint": "Hold 模式下按住 {{key}} 超过该时长才开录；提前松开不开录（{{key}} 为单键时补发其原功能）（100–800，默认 300）",
+      "fnRepostName": "短按 {{key}} 补发原功能",
+      "fnRepostDesc": "Hold + {{key}} 轻点（未达到阈值）时补发按键，让系统执行切输入法等原功能。仅 macOS 显示。",
+      "fnRepostNameWin": "短按 {{key}} 保留原功能",
+      "fnRepostDescWin": "Hold + {{key}} 轻点（未达到阈值）时补发按键，正常执行原功能；按住超过阈值才开录（此时 {{key}} 被占用）。"
     },
     "transcribe": {
       "title": "文件转录",
@@ -220,8 +235,8 @@
     },
     "fnTest": {
       "title": "功能测试",
-      "hint": "按 Fn（🌐）键开始录音，对麦克风说话，识别结果实时显示在下方文本框中。再按 Fn 停止。",
-      "hintWin": "按住 CapsLock 说话（松开停止），识别结果实时显示在下方文本框中；短按保留大小写切换原功能。也可用组合键（如 Ctrl+Shift+D）切换模式触发。",
+      "hint": "按 {{key}} 开始录音，对麦克风说话，识别结果实时显示在下方文本框中。再按 {{key}} 停止。",
+      "hintWin": "按住 {{key}} 说话（松开停止），识别结果实时显示在下方文本框中；短按保留原功能。也可用组合键（如 Ctrl+Shift+D）切换模式触发。",
       "recording": "录音中…",
       "triggered": "已触发 {{count}} 次",
       "ready": "就绪",
@@ -246,7 +261,7 @@
       "lang_de": "Deutsch",
       "lang_es": "español",
       "polishFirstName": "先润色再翻译",
-      "polishFirstDesc": "一次调用：先去掉口头禅、通顺化，再翻译（比纯翻译慢）。"
+      "polishFirstDesc": "云端：一次调用润色+翻译；本地：先 Light 纠错再翻译（两步，比纯翻译慢）。"
     },
     "insert": {
       "title": "插入与剪贴板",
@@ -264,12 +279,15 @@
     "roles": {
       "title": "角色 / 风格包",
       "enabledName": "启用前缀角色",
-      "enabledDesc": "听写结果以「邮件:」「翻译:」等前缀开头时，按对应角色处理。开启后听写改为整段上屏（不再逐字流式）。",
-      "hint": "前缀在单次输入中覆盖默认风格；翻译角色与翻译快捷键共用目标语言。清空前缀 = 退回纯风格包（重新进入风格循环）。",
+      "enabledDesc": "说出「助手名+角色名」触发对应角色，如「小友翻译我想要走了」直接翻译正文、「小友邮件明天开会」生成邮件。角色默认使用与 AI 润色相同的模型（本地优先），可在右侧单独指定。开启后听写改为整段上屏。",
+      "assistantNameLabel": "助手名称",
+      "assistantNameDesc": "触发前缀角色的唤醒名（组合词已写入热词精准识别）；留空则关闭前缀角色。",
+      "assistantNamePh": "如：小友",
       "prefixBadge": "前缀：{{prefix}}",
       "translateKind": "翻译角色",
       "prefixPh": "前缀别名（| 分隔，如 邮件|mail）",
-      "providerCloud": "云端（默认）",
+      "providerFollow": "跟随 AI 润色（默认）",
+      "providerCloud": "云端",
       "providerLocal": "本地 GGUF",
       "promptPh": "角色指令（system prompt）",
       "newBtn": "新建角色 / 风格包",

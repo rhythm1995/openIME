@@ -23,6 +23,8 @@ pub struct TranslateRequest {
     pub text: String,
     /// 已是 prompt 用名（如 "English"）；调用方先 `lang_display_name`。
     pub target_lang: String,
+    /// 源语言短码（`zh`/`en`/`auto`…）；本地专翻模板用，云端忽略。
+    pub source_lang: String,
     pub timeout: Duration,
     pub max_tokens: u32,
 }

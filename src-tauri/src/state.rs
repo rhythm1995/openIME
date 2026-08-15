@@ -7,9 +7,9 @@ use tauri::AppHandle;
 use tokio::sync::RwLock;
 use voice_core::pipeline::{Pipeline, PipelineDeps, PolishContext, SessionIntent};
 use voice_core::{
-    AppConfig, BailianChatPolish, CloudPolishProvider, Error, HistoryStore, LlmClient,
-    LocalGgufPolish, PolishMode, PolishPolicy, PolishRouter, PolishRouterConfig, RoutingProvider,
-    SqliteStore, TextInserter, TextPolishProvider,
+    AppConfig, BailianChatPolish, CloudPolishProvider, Error, GgufRuntime, HistoryStore, LlmClient,
+    LocalGgufPolish, LocalGgufTranslate, PolishMode, PolishPolicy, PolishRouter,
+    PolishRouterConfig, RoutingProvider, SqliteStore, TextInserter, TextPolishProvider,
 };
 
 use crate::insert_fallback::CompositeInserter;
@@ -47,6 +47,8 @@ pub struct AppState {
     inserter: OnceLock<Arc<CompositeInserter>>,
     /// Tauri 句柄（剪贴板主线程调度 / QA 插入用）。
     app: AppHandle,
+    /// 本地三件套：进程级常驻 GGUF 运行时（润色 + 翻译共用；invalidate_pipeline 不卸）。
+    pub gguf_runtime: Arc<GgufRuntime>,
 }
 
 impl AppState {
@@ -69,10 +71,42 @@ impl AppState {
                 p.model = "sherpa-onnx-streaming-paraformer-bilingual-zh-en".to_string();
             }
         }
-        let _ = store.seed_builtin_style_packs_if_empty();
-        // R5：内置前缀角色包按 id 补缺失（不清用户改动）。
+        // R5：内置前缀角色包按 id 补缺失（不清用户改动；同步内置排序，翻译第一）。
         let _ = store.seed_builtin_prefix_packs_if_missing();
+        // 「助手名+角色别名」组合词同步进热词表（改名自动换词；清理旧裸别名）。
+        let _ = store.sync_assistant_combo_hotwords(&config.assistant_name);
+        // 已下架的内置风格包（正式/口语/commit）清理；选中项被删则清空引用并落盘。
+        if let Ok(removed) = store.remove_legacy_builtin_style_packs() {
+            if !removed.is_empty() {
+                if let Some(id) = config.active_style_pack_id.as_deref() {
+                    if removed.iter().any(|r| r == id) {
+                        config.active_style_pack_id = None;
+                        let _ = save_config(&store, &config);
+                    }
+                }
+            }
+        }
         let store_arc: Arc<SqliteStore> = Arc::new(store);
+        let gguf_runtime = Arc::new(GgufRuntime::new());
+        // T2：启动期探测加载已下载的首选 GGUF（后台，不阻塞启动）。
+        // 绑定认不出的架构记 arch_unsupported → 首次录音前 resolve 已能选对回退档。
+        if let Some(model_root) = sherpa_root.as_ref().map(|(root, _)| root.clone()) {
+            let rt = gguf_runtime.clone();
+            let polish_id = config.resolved_polish_local_model();
+            let translate_id = config.resolved_translate_local_model();
+            tauri::async_runtime::spawn_blocking(move || {
+                for id in [polish_id, translate_id] {
+                    if id.is_empty() {
+                        continue;
+                    }
+                    let (_, path) =
+                        voice_core::resolve_llm_id(&id, &model_root, &|p| rt.arch_unsupported(p));
+                    if path.is_file() {
+                        rt.probe_loadable(&path);
+                    }
+                }
+            });
+        }
         Ok(Self {
             store: store_arc,
             config: Arc::new(RwLock::new(config)),
@@ -89,6 +123,7 @@ impl AppState {
             pending_intent: Mutex::new(SessionIntent::Dictate),
             inserter: OnceLock::new(),
             app,
+            gguf_runtime,
         })
     }
 
@@ -128,6 +163,8 @@ impl AppState {
         // P1：分开的 cloud（LlmClient）与 local（GGUF）句柄。
         let cloud = self.cloud_llm().await;
         let local = self.local_polish().await;
+        // 本地三件套：专翻（dedicated）与兼译（local_llm = 润色模型兼做翻译）。
+        let (dedicated, local_llm) = self.local_translate_pair().await;
         let deps = PipelineDeps {
             provider,
             inserter,
@@ -135,6 +172,8 @@ impl AppState {
             polish,
             cloud,
             local,
+            dedicated,
+            local_llm,
         };
         let p = Arc::new(Pipeline::new(deps));
         *guard = Some(p.clone());
@@ -144,6 +183,12 @@ impl AppState {
     /// 配置变更后丢弃 pipeline，使润色/引擎设置在下次录音生效。
     pub async fn invalidate_pipeline(&self) {
         let mut guard = self.pipeline.write().await;
+        *guard = None;
+    }
+
+    /// 同步版 invalidate_pipeline（同步命令里用）。
+    pub fn invalidate_pipeline_blocking(&self) {
+        let mut guard = self.pipeline.blocking_write();
         *guard = None;
     }
 
@@ -177,18 +222,77 @@ impl AppState {
             .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
     }
 
-    /// P1：本地 GGUF 句柄（provider=local 的前缀角色）。
+    /// P1：本地 GGUF 句柄（provider=local 的前缀角色 + 译前 Light）。
     pub async fn local_polish(&self) -> Option<Arc<dyn TextPolishProvider>> {
         let cfg = self.config.read().await.clone();
         self.local_polish_from(&cfg)
     }
 
-    fn local_polish_from(&self, _cfg: &AppConfig) -> Option<Arc<dyn TextPolishProvider>> {
-        let model_root = self.model_root();
-        model_root.map(|root| {
-            let path = voice_core::polish_model_path(&root);
-            Arc::new(LocalGgufPolish::new(path)) as Arc<dyn TextPolishProvider>
-        })
+    fn local_polish_from(&self, cfg: &AppConfig) -> Option<Arc<dyn TextPolishProvider>> {
+        let model_root = self.model_root()?;
+        let id = cfg.resolved_polish_local_model();
+        // 目录解析：首选 → 回退档（含 arch_unsupported 记录）；文件不存在则不装句柄
+        // （路由会直接走云端，不再让每次润色都报「未安装」）。
+        let (resolved_id, path) = voice_core::resolve_llm_id(&id, &model_root, &|p| {
+            self.gguf_runtime.arch_unsupported(p)
+        });
+        if !path.is_file() {
+            return None;
+        }
+        Some(Arc::new(LocalGgufPolish::new(
+            self.gguf_runtime.clone(),
+            path,
+            resolved_id,
+        )) as Arc<dyn TextPolishProvider>)
+    }
+
+    /// 本地三件套：解析（专翻句柄, 兼译句柄）。
+    ///
+    /// - 专翻：`translate_local_model` 已选且文件可用 → `LocalGgufTranslate`。
+    /// - 兼译：`translate_use_llm_fallback` 开启且润色模型可用 → 同一颗模型做翻译。
+    pub async fn local_translate_pair(
+        &self,
+    ) -> (Option<Arc<dyn LlmClient>>, Option<Arc<dyn LlmClient>>) {
+        let cfg = self.config.read().await.clone();
+        let Some(model_root) = self.model_root() else {
+            return (None, None);
+        };
+        let translate_id = cfg.resolved_translate_local_model();
+        let dedicated = if translate_id.is_empty() {
+            None
+        } else {
+            let (resolved_id, path) =
+                voice_core::resolve_llm_id(&translate_id, &model_root, &|p| {
+                    self.gguf_runtime.arch_unsupported(p)
+                });
+            if path.is_file() {
+                Some(Arc::new(LocalGgufTranslate::new(
+                    self.gguf_runtime.clone(),
+                    path,
+                    resolved_id,
+                )) as Arc<dyn LlmClient>)
+            } else {
+                None
+            }
+        };
+        let fallback = if cfg.translate_use_llm_fallback {
+            let polish_id = cfg.resolved_polish_local_model();
+            let (resolved_id, path) = voice_core::resolve_llm_id(&polish_id, &model_root, &|p| {
+                self.gguf_runtime.arch_unsupported(p)
+            });
+            if path.is_file() {
+                Some(Arc::new(LocalGgufTranslate::new(
+                    self.gguf_runtime.clone(),
+                    path,
+                    resolved_id,
+                )) as Arc<dyn LlmClient>)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        (dedicated, fallback)
     }
 
     /// 云端润色：优先用独立配置（polish_cloud_endpoint/api_key/protocol），
@@ -243,6 +347,31 @@ impl AppState {
         independent || via_provider
     }
 
+    /// 本地翻译是否可用：专翻已装，或兼译开启且润色模型已装。
+    /// 与 [`Self::has_cloud_key`] 一起构成翻译热键的「可否开始」检查。
+    pub fn has_local_translate(&self) -> bool {
+        let cfg = self.config.blocking_read();
+        let Some(model_root) = self.model_root() else {
+            return false;
+        };
+        let arch = |p: &std::path::Path| self.gguf_runtime.arch_unsupported(p);
+        let translate_id = cfg.resolved_translate_local_model();
+        if !translate_id.is_empty() {
+            let (_, path) = voice_core::resolve_llm_id(&translate_id, &model_root, &arch);
+            if path.is_file() {
+                return true;
+            }
+        }
+        if cfg.translate_use_llm_fallback {
+            let polish_id = cfg.resolved_polish_local_model();
+            let (_, path) = voice_core::resolve_llm_id(&polish_id, &model_root, &arch);
+            if path.is_file() {
+                return true;
+            }
+        }
+        false
+    }
+
     /// 录音插入前的润色上下文。P1 字段：intent / prefix_roles_enabled / style_packs /
     /// translate_target_lang / translate_with_polish。
     pub async fn polish_context(&self, intent: SessionIntent) -> PolishContext {
@@ -285,9 +414,18 @@ impl AppState {
             cancel: Some(self.polish_cancel.clone()),
             intent,
             prefix_roles_enabled: cfg.prefix_roles_enabled,
+            assistant_name: cfg.assistant_name.trim().to_string(),
             style_packs,
             translate_target_lang: cfg.translate_target_lang.clone(),
             translate_with_polish: cfg.translate_with_polish,
+            translate_policy: cfg.translate_policy,
+            translate_use_llm_fallback: cfg.translate_use_llm_fallback,
+            // 源语：ASR local_language；auto/空由脚本粗分（prompts::detect_source_lang）。
+            source_lang: if cfg.local_language.trim().is_empty() {
+                "auto".into()
+            } else {
+                cfg.local_language.trim().to_lowercase()
+            },
         }
     }
 

@@ -291,6 +291,7 @@ textarea,
 }
 input[type="text"],
 input[type="password"],
+input[type="number"],
 input:not([type]),
 input[type="textarea"],
 select {

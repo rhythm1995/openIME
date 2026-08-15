@@ -25,20 +25,8 @@ pub const SENSEVOICE_MODEL_NAME: &str = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue
 /// VAD 文件相对 model_root 的子目录。
 pub const VAD_DIR: &str = "vad";
 
-/// 二期本地润色 GGUF 子目录（相对 model_root）。
+/// 二期本地润色/翻译 GGUF 子目录（相对 model_root）。
 pub const LLM_DIR: &str = "llm";
-
-/// 默认本地润色模型文件名（Qwen2.5-1.5B-Instruct Q4_K_M）。
-pub const POLISH_GGUF_FILE: &str = "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf";
-
-/// 与 AppConfig.polish_local_model 对齐的模型 id。
-pub const POLISH_MODEL_ID: &str = "qwen2.5-1.5b-instruct-q4_k_m";
-
-// 润色 GGUF：bartowski 量化（与官方 Qwen GGUF 等价 Q4_K_M）。
-const URL_POLISH_GGUF_HF: &str =
-    "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf";
-const URL_POLISH_GGUF_MIRROR: &str =
-    "https://hf-mirror.com/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf";
 
 // 流式 Paraformer 下载源。
 const URL_ENC_HF: &str = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/resolve/main/encoder.int8.onnx";
@@ -228,44 +216,37 @@ pub fn is_local_engine_installed(model_root: &Path) -> bool {
     missing_files(model_root).is_empty()
 }
 
-// ──────────────── 二期：本地润色 GGUF ────────────────
+// ──────────────── 本地 LLM GGUF（润色 / 翻译，目录见 llm_catalog）────────
 
-/// 本地润色模型文件清单（当前仅默认 Qwen2.5-1.5B Q4_K_M）。
-pub fn polish_model_files() -> Vec<LocalModelFile> {
-    vec![LocalModelFile {
-        file_name: POLISH_GGUF_FILE,
-        rel_dir: LLM_DIR,
-        urls: &[URL_POLISH_GGUF_HF, URL_POLISH_GGUF_MIRROR],
-        // LFS oid sha256 from HF pointer
-        sha256: "1adf0b11065d8ad2e8123ea110d1ec956dab4ab038eab665614adba04b6c3370",
-        size: 986_048_768,
-    }]
+/// 某 LLM 目录 id 的下载文件清单（首选 GGUF，含回退档解析）。
+pub fn llm_model_files_for(id: &str) -> Vec<LocalModelFile> {
+    crate::llm_catalog::llm_files(id)
 }
 
-/// 润色 GGUF 安装路径。
-pub fn polish_model_path(model_root: &Path) -> PathBuf {
-    model_root.join(LLM_DIR).join(POLISH_GGUF_FILE)
+/// LLM GGUF 安装路径（首选文件；回退档见 `llm_catalog::resolve_llm_id`）。
+pub fn llm_model_path(model_root: &Path, id: &str) -> PathBuf {
+    crate::llm_catalog::llm_model_path(model_root, id)
 }
 
-/// 本地润色模型是否已安装且校验通过。
-pub fn is_polish_model_installed(model_root: &Path) -> bool {
-    polish_model_files()
-        .into_iter()
-        .all(|f| f.is_installed_lenient(model_root))
+/// LLM 目录模型是否已可用（首选或回退档任一已装且校验通过）。
+pub fn is_llm_model_installed(model_root: &Path, id: &str) -> bool {
+    crate::llm_catalog::is_llm_model_installed(model_root, id)
 }
 
-/// 下载/安装本地润色 GGUF（进度回调与 ASR 模型相同）。
-pub async fn install_polish_model(
+/// 下载/安装某个 LLM GGUF（进度回调与 ASR 模型相同；target 前缀为 catalog id）。
+pub async fn install_llm_model(
     model_root: &Path,
+    id: &str,
     on_progress: &(impl Fn(DownloadProgress) + Send + Sync),
 ) -> crate::Result<()> {
-    // 进度挂到设置页「润色」卡片。
-    install_file_list(
-        model_root,
-        &polish_model_files(),
-        "本地润色模型安装完成",
-        &|p| on_progress(p.with_target("polish")),
-    )
+    let files = crate::llm_catalog::llm_files(id);
+    if files.is_empty() {
+        return Err(Error::Config(format!("未知本地 LLM 模型 id：{id}")));
+    }
+    let id_owned = id.to_string();
+    install_file_list(model_root, &files, "本地 LLM 模型安装完成", &|p| {
+        on_progress(p.with_target(&id_owned))
+    })
     .await
 }
 
@@ -340,10 +321,12 @@ pub fn normalize_asr_model_id(id_or_mode: &str) -> &str {
         | "zipformer"
         | "zipformer-zh-xlarge"
         | "zipformer-xlarge"
-        | "xlarge" => crate::asr_catalog::ASR_MODEL_SENSEVOICE,
-        "firered-large" | "firered" | "fire-red" | "fire_red_asr" => {
-            crate::asr_catalog::ASR_MODEL_FIRERED_LARGE
-        }
+        | "xlarge"
+        // 本地三件套方案下架 FireRed：旧配置直接归一为默认 SenseVoice，不做迁移。
+        | "firered-large"
+        | "firered"
+        | "fire-red"
+        | "fire_red_asr" => crate::asr_catalog::ASR_MODEL_SENSEVOICE,
         other => other,
     }
 }
@@ -593,17 +576,22 @@ mod tests {
 
     #[test]
     fn manifest_has_catalog_files() {
-        // sensevoice + firered 等多模型 + 共享 VAD
+        // 冻结目录：sensevoice + funasr nano int8/fp16 + 共享 VAD（FireRed 已下架）。
         let files = local_model_files();
         assert!(files.len() >= 6);
         let names: Vec<_> = files.iter().map(|f| f.file_name).collect();
-        // paraformer-trilingual: encoder.int8 + decoder.int8 + tokens
-        assert!(names.contains(&"encoder.int8.onnx"));
-        assert!(names.contains(&"decoder.int8.onnx"));
         // sensevoice: model.int8
         assert!(names.contains(&"model.int8.onnx"));
         assert!(names.contains(&"tokens.txt"));
+        // funasr nano: embedding + encoder_adaptor + llm
+        assert!(names.contains(&"embedding.int8.onnx"));
+        assert!(names.contains(&"encoder_adaptor.int8.onnx"));
+        assert!(names.contains(&"llm.int8.onnx"));
+        assert!(names.contains(&"llm.fp16.onnx"));
         assert!(names.contains(&"silero_vad.onnx"));
+        // FireRed 下架：不再有 encoder/decoder 文件。
+        assert!(!names.contains(&"encoder.int8.onnx"));
+        assert!(!names.contains(&"decoder.int8.onnx"));
     }
 
     #[test]
@@ -655,6 +643,10 @@ mod tests {
             missing_files_for(dir.path(), "paraformer-trilingual").len(),
             3
         );
+        // 本地三件套方案下架 FireRed：旧配置归一为 sensevoice（3 文件），不再指向旧目录。
+        assert_eq!(missing_files_for(dir.path(), "firered-large").len(), 3);
+        assert_eq!(normalize_asr_model_id("firered-large"), "sensevoice");
+        assert!(crate::asr_model_by_id("firered-large").is_none());
     }
 
     #[test]
@@ -669,5 +661,18 @@ mod tests {
             std::fs::write(&dest, b"wrong content").unwrap();
         }
         assert_eq!(missing_files(root).len(), files.len());
+    }
+
+    #[tokio::test]
+    async fn install_llm_model_unknown_id_errors_before_network() {
+        // 未知 id 在任何网络 IO 之前拒绝（错误路径零成本，防 UI 静默死循环）。
+        let dir = tempfile::tempdir().unwrap();
+        let err = install_llm_model(dir.path(), "no-such-llm", &|_| {})
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("未知本地 LLM 模型 id"),
+            "got: {err}"
+        );
     }
 }

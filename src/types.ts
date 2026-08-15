@@ -18,6 +18,9 @@ export type PolishPolicy =
   | "cloud_only"
   | "off";
 
+/** 翻译路由策略：prefer_cloud（有网默认走云）/ prefer_local（本地专翻优先）。 */
+export type TranslatePolicy = "prefer_cloud" | "prefer_local";
+
 export type PolishCloudProtocol = "openai_chat" | "anthropic" | "openai_responses";
 
 /** 润色程度：off（保持原样）/ light（中度，仅校对）/ heavy（高度，改写润色）。 */
@@ -78,12 +81,20 @@ export interface AppConfig {
   translate_hotkey?: string | null;
   /** 翻译目标语言（BCP-47 短码，固定下拉） */
   translate_target_lang?: string;
-  /** 「先润色再翻译」哨兵合成调用 */
+  /** 「先润色再翻译」：云端哨兵合成；本地 = Light 纠错再译（两步） */
   translate_with_polish?: boolean;
+  /** 本地专翻模型 id：milmmt-1b | hy-mt-1.8b | ""（未选） */
+  translate_local_model?: string;
+  /** 弱机兼译：专翻不可用时用润色模型兼做翻译 */
+  translate_use_llm_fallback?: boolean;
+  /** 翻译路由策略：prefer_cloud（默认）/ prefer_local */
+  translate_policy?: TranslatePolicy;
 
   // ── P1：R5 前缀角色 ──
   /** 识别结果前缀分流到角色（开 → 听写整段插入，关 → 恢复流式上屏） */
   prefix_roles_enabled?: boolean;
+  /** 助手名称：「助手名+角色别名」组合触发前缀角色（空 = 关闭） */
+  assistant_name?: string;
 
   // ── P1：R6 划词问答 ──
   /** QA 快捷键（null = 不注册） */
@@ -139,13 +150,28 @@ export interface StylePack {
   output_mode?: OutputMode;
 }
 
-export interface PolishModelStatus {
+/** 本地 LLM 候选（list_local_polish_models / list_local_translate_models）。 */
+export interface LlmModelEntry {
+  id: string;
+  kind: "polish" | "translate";
+  title: string;
+  description: string;
+  approx_size: number;
   installed: boolean;
-  downloading: boolean;
-  model_id: string;
-  file_name: string;
-  total_size: number;
-  model_path: string;
+  active: boolean;
+  missing_size: number;
+  perf_tag?: ModelPerfTag | null;
+  recommended: boolean;
+  arch: string;
+}
+
+/** 本机三件套概览（get_model_suite_info）。 */
+export interface ModelSuiteInfo {
+  model_root: string;
+  budget_bytes: number;
+  used_bytes: number;
+  has_cloud: boolean;
+  weak_machine: boolean;
   llm_feature: boolean;
 }
 

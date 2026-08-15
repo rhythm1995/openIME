@@ -62,6 +62,104 @@ pub fn build_polish_translate_messages(text: &str, target_lang: &str) -> Vec<(St
     ]
 }
 
+// ── 本地专翻 prompt（T8）────────────────────────────────
+
+/// 语言短码 → MiLMMT 官方模板用英文名（未知返回 None，调用方回退通用模板）。
+pub fn lang_english_name(code: &str) -> Option<&'static str> {
+    match code.trim().to_lowercase().as_str() {
+        "zh" | "zh-cn" | "zh-hans" => Some("Chinese (Simplified)"),
+        "yue" => Some("Cantonese"),
+        "en" | "en-us" => Some("English"),
+        "ja" => Some("Japanese"),
+        "ko" => Some("Korean"),
+        "fr" => Some("French"),
+        "de" => Some("German"),
+        "es" => Some("Spanish"),
+        _ => None,
+    }
+}
+
+/// 源语判定（T8）：配置语言优先；`auto`/空 用脚本粗分（CJK/Hangul/Kana/Latin）。
+pub fn detect_source_lang(text: &str, configured: &str) -> String {
+    let cfg = configured.trim().to_lowercase();
+    if !cfg.is_empty() && cfg != "auto" {
+        return cfg;
+    }
+    let has = |f: fn(char) -> bool| text.chars().any(f);
+    let kana = |c: char| matches!(c as u32, 0x3040..=0x30FF);
+    let hangul = |c: char| matches!(c as u32, 0xAC00..=0xD7AF | 0x1100..=0x11FF);
+    let cjk = |c: char| matches!(c as u32, 0x4E00..=0x9FFF | 0x3400..=0x4DBF);
+    if has(kana) {
+        "ja".into()
+    } else if has(hangul) {
+        "ko".into()
+    } else if has(cjk) {
+        "zh".into()
+    } else {
+        "en".into()
+    }
+}
+
+/// 本地专翻 messages：按模型 id 选官方模板；未知/兼译走通用 Instruct。
+///
+/// - `milmmt-1b`：MiLMMT 官方 `Translate this from {src} to {tgt}`（user-only）。
+/// - `hy-mt-1.8b`：HY-MT 中英模板 / 英文模板（user-only，只输出译文）。
+/// - 其它（兼译 = 润色模型）：通用 `build_translate_messages`。
+pub fn build_local_translate_messages(
+    model_id: &str,
+    text: &str,
+    src_lang: &str,
+    target_lang: &str,
+) -> Vec<(String, String)> {
+    match model_id {
+        "milmmt-1b" => match lang_english_name(src_lang) {
+            Some(src) => vec![(
+                "user".into(),
+                format!(
+                    "Translate this from {src} to {target_lang}:\n{src}: {text}\n{target_lang}:"
+                ),
+            )],
+            None => build_translate_messages(text, target_lang),
+        },
+        "hy-mt-1.8b" => {
+            let is_zh_pair = src_lang == "zh" || target_lang == "中文";
+            let user = if is_zh_pair {
+                format!(
+                    "将以下文本翻译为{target_lang}，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
+                )
+            } else {
+                format!(
+                    "Translate the following text into {target_lang}. Only output the translation without any additional explanation:\n\n{text}"
+                )
+            };
+            vec![("user".into(), user)]
+        }
+        _ => build_translate_messages(text, target_lang),
+    }
+}
+
+/// 明显指令泄漏判定（T8 失败语义）：以这些开头的小模型输出视为失败，不上屏。
+///
+/// `sure` / `当然` 这类确认词后必须紧跟标点（`Sure, …` / `当然，…`）才算泄漏；
+/// `Sure thing …` 这类以确认词开头的正常译文不算（防误伤）。
+pub fn looks_like_instruction_leak(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    starts_with_word_punct(&t, "sure")
+        || starts_with_word_punct(&t, "当然")
+        || starts_with_word_punct(&t, "翻译如下")
+        || t.starts_with("here is")
+        || t.starts_with("here's")
+}
+
+/// 前缀词后紧跟标点（或串尾）才算泄漏句式；紧跟空白+正文则不算。
+fn starts_with_word_punct(t: &str, word: &str) -> bool {
+    let Some(rest) = t.strip_prefix(word) else {
+        return false;
+    };
+    rest.is_empty()
+        || rest.starts_with(|c: char| c.is_ascii_punctuation() || "，。！？：；、…—（".contains(c))
+}
+
 /// R6：QA 系统 prompt。选区以 `<selected_text>` 信封包裹（首轮 user 消息）。
 pub fn build_qa_system() -> String {
     "你是 openIME 划词问答助手。用户选中了一段文字并以语音提问。\n\
@@ -242,6 +340,100 @@ mod tests {
         assert!(sys.contains(POLISHED_SOURCE_SENTINEL));
         assert!(sys.contains(TRANSLATION_SENTINEL));
         assert!(sys.contains("日本語"));
+    }
+
+    // ── T8：本地专翻 prompt ──
+
+    #[test]
+    fn milmmt_uses_official_template() {
+        let msgs = build_local_translate_messages("milmmt-1b", "我爱机器翻译", "zh", "English");
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].0, "user");
+        assert!(msgs[0]
+            .1
+            .contains("Translate this from Chinese (Simplified) to English"));
+        assert!(msgs[0].1.ends_with("English:"));
+    }
+
+    #[test]
+    fn milmmt_unknown_src_falls_back_to_generic() {
+        let msgs = build_local_translate_messages("milmmt-1b", "你好", "xx", "English");
+        assert!(msgs[0].0 == "system");
+    }
+
+    #[test]
+    fn hymt_zh_pair_uses_chinese_template() {
+        let msgs = build_local_translate_messages("hy-mt-1.8b", "你好", "zh", "English");
+        assert!(msgs[0].1.contains("将以下文本翻译为"));
+        let msgs = build_local_translate_messages("hy-mt-1.8b", "Hello", "en", "日本語");
+        assert!(msgs[0].1.contains("Translate the following text"));
+    }
+
+    #[test]
+    fn fallback_generic_translate_prompt() {
+        // 兼译（润色模型 id）走通用 Instruct。
+        let msgs = build_local_translate_messages("qwen3.5-2b", "明天开会", "zh", "English");
+        assert_eq!(msgs.len(), 2);
+        assert!(msgs[0].1.contains("English"));
+    }
+
+    #[test]
+    fn source_lang_detection_by_script() {
+        assert_eq!(detect_source_lang("hello world", "auto"), "en");
+        assert_eq!(detect_source_lang("你好世界", "auto"), "zh");
+        assert_eq!(detect_source_lang("こんにちは", "auto"), "ja");
+        assert_eq!(detect_source_lang("안녕하세요", "auto"), "ko");
+        // 配置语言优先于脚本。
+        assert_eq!(detect_source_lang("こんにちは", "zh"), "zh");
+        assert_eq!(detect_source_lang("你好", ""), "zh");
+    }
+
+    #[test]
+    fn source_lang_detection_edges() {
+        // 空文本 / 空配置 → en（Latin 兜底，不 panic）。
+        assert_eq!(detect_source_lang("", "auto"), "en");
+        assert_eq!(detect_source_lang("", ""), "en");
+        // 假名 + 谚文混排 → ja 优先（kana 判定在前）。
+        assert_eq!(detect_source_lang("こんにちは 안녕", "auto"), "ja");
+        // 配置带空白/大小写 → 归一后生效。
+        assert_eq!(detect_source_lang("hello", " Auto "), "en");
+        assert_eq!(detect_source_lang("hello", " ZH "), "zh");
+    }
+
+    #[test]
+    fn hymt_target_chinese_uses_chinese_template() {
+        // 反向翻译（源英 → 目标中文）：target_lang == "中文" 也算中英对，用中文模板。
+        let msgs = build_local_translate_messages("hy-mt-1.8b", "Hello", "en", "中文");
+        assert!(
+            msgs[0].1.contains("将以下文本翻译为中文"),
+            "得到 {}",
+            msgs[0].1
+        );
+        assert!(!msgs[0].1.contains("Translate the following"));
+    }
+
+    #[test]
+    fn instruction_leak_detection_covers_common_prefixes() {
+        // 大小写不敏感 + here is 变体 + 中文「当然」前缀（小模型高频泄漏）。
+        assert!(looks_like_instruction_leak("SURE, the translation is:"));
+        assert!(looks_like_instruction_leak("Sure! Here you go:"));
+        assert!(looks_like_instruction_leak("Here is the translation:"));
+        assert!(looks_like_instruction_leak("  当然，以下是翻译："));
+        assert!(looks_like_instruction_leak("翻译如下："));
+        // 确认词开头但后接正文的正常译文不算泄漏（防误伤）。
+        assert!(!looks_like_instruction_leak("Sure thing 会议改到三点"));
+        assert!(!looks_like_instruction_leak("当然没问题我可以做到"));
+        assert!(!looks_like_instruction_leak("Hereby signed."));
+    }
+
+    #[test]
+    fn instruction_leak_detection() {
+        assert!(looks_like_instruction_leak(
+            "Sure, here is the translation:"
+        ));
+        assert!(looks_like_instruction_leak("Here's the translation:"));
+        assert!(looks_like_instruction_leak("翻译如下："));
+        assert!(!looks_like_instruction_leak("We have a meeting tomorrow."));
     }
 
     #[test]

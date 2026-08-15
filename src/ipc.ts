@@ -4,9 +4,10 @@ import type {
   AppConfig,
   Hotword,
   HotwordImportResult,
+  LlmModelEntry,
   LocalAsrModelEntry,
   LocalModelStatus,
-  PolishModelStatus,
+  ModelSuiteInfo,
   ProviderConfig,
   StylePack,
   SessionSummary,
@@ -35,6 +36,9 @@ export const ipc = {
   getConfig: () => invoke<AppConfig>("get_config"),
   defaultConfig: () => invoke<AppConfig>("default_config"),
   saveConfig: (config: AppConfig) => invoke<void>("save_app_config", { config }),
+  /** 快捷键捕获期间挂起录音键/全局快捷键（true 开始 / false 结束） */
+  setCaptureSuspend: (suspend: boolean) =>
+    invoke<void>("set_capture_suspend", { suspend }),
   validateProvider: (provider: ProviderConfig) =>
     invoke<void>("validate_provider", { provider }),
   testCloudConnection: (provider: ProviderConfig) =>
@@ -74,9 +78,18 @@ export const ipc = {
     invoke<LocalModelStatus>("get_local_model_status", { mode }),
   installLocalModel: (mode?: string) =>
     invoke<void>("install_local_model", { mode }),
-  // 二期：AI 润色
-  getPolishModelStatus: () => invoke<PolishModelStatus>("get_polish_model_status"),
-  installPolishModel: () => invoke<void>("install_polish_model"),
+  // 二期：AI 润色 / 本地三件套
+  listLocalPolishModels: () => invoke<LlmModelEntry[]>("list_local_polish_models"),
+  listLocalTranslateModels: () =>
+    invoke<LlmModelEntry[]>("list_local_translate_models"),
+  setActivePolishModel: (modelId: string) =>
+    invoke<void>("set_active_polish_model", { modelId }),
+  setActiveTranslateModel: (modelId: string) =>
+    invoke<void>("set_active_translate_model", { modelId }),
+  installLlmModel: (id: string) => invoke<void>("install_llm_model", { id }),
+  deleteLlmModel: (id: string) => invoke<void>("delete_llm_model", { id }),
+  getModelSuiteInfo: () => invoke<ModelSuiteInfo>("get_model_suite_info"),
+  openModelDirectory: () => invoke<string>("open_model_directory"),
   // 风格包（F1）
   listStylePacks: () => invoke<StylePack[]>("list_style_packs"),
   setActiveStylePack: (id: string | null) =>

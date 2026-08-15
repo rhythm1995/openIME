@@ -58,6 +58,12 @@ pub fn frontend_log(level: String, message: String) {
     crate::logging::write(level, &format!("[frontend] {message}"));
 }
 
+/// 设置页快捷键捕获：录入新按键期间挂起录音键/全局快捷键响应，结束恢复。
+#[tauri::command]
+pub fn set_capture_suspend(suspend: bool) {
+    crate::set_capture_suspend(suspend);
+}
+
 #[tauri::command]
 pub fn default_config() -> AppConfig {
     AppConfig::default()
@@ -67,7 +73,13 @@ pub fn default_config() -> AppConfig {
 
 #[tauri::command]
 pub fn get_config(state: State<'_, AppState>) -> AppConfig {
-    state.config.blocking_read().clone()
+    let mut cfg = state.config.blocking_read().clone();
+    if apply_recommended_defaults(&state, &mut cfg) {
+        // 推荐器改写 → 同步到内存（pipeline 下次录音按新档重建）。
+        *state.config.blocking_write() = cfg.clone();
+        state.invalidate_pipeline_blocking();
+    }
+    cfg
 }
 
 #[tauri::command]
@@ -92,6 +104,11 @@ pub async fn save_app_config(
             || old.translate_hotkey != config.translate_hotkey
             || old.qa_hotkey != config.qa_hotkey
     };
+    // 助手名组合热词同步：幂等（名字未变时零开销），保存必校准——
+    // 不做新旧对比条件分支，避免任何一环判断失效导致词典与助手名脱节。
+    let _ = state
+        .store
+        .sync_assistant_combo_hotwords(&config.assistant_name);
     save_config(&state.store, &config).map_err(|e| e.to_string())?;
     *state.config.write().await = config.clone();
     // R9：hotkey_mode（及 hotkey）变化 → 下发吞键模式（即使 hotkeys_changed 为 false）。
@@ -461,6 +478,8 @@ pub fn set_active_asr_model(
             return Err(format!("保存配置失败：{e}"));
         }
     }
+    // 立即生效：丢弃旧 pipeline，下次录音按新 ASR 档重建。
+    state.invalidate_pipeline_blocking();
     log_info!("已启用本地 ASR 模型：{id}");
     let _ = app.emit("asr://active-changed", &id);
     Ok(())
@@ -531,48 +550,309 @@ pub fn get_local_model_status(
     })
 }
 
-/// 本地润色 GGUF 安装状态。
-#[derive(serde::Serialize)]
-pub struct PolishModelStatus {
+/// 设置页 LLM 候选卡片（润色 / 翻译共用）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LlmModelEntry {
+    pub id: String,
+    /// "polish" | "translate"
+    pub kind: String,
+    pub title: String,
+    pub description: String,
+    pub approx_size: u64,
     pub installed: bool,
-    pub downloading: bool,
-    pub model_id: String,
-    pub file_name: String,
-    pub total_size: u64,
-    pub model_path: String,
-    pub llm_feature: bool,
+    pub active: bool,
+    pub missing_size: u64,
+    /// combo 打标（system::compute_combo_tag；首次无缓存时 None）。
+    pub perf_tag: Option<voice_core::ModelPerfTag>,
+    /// 推荐器落点（recommend_defaults）。
+    pub recommended: bool,
+    pub arch: String,
 }
 
+const POLISH_USER_SET_KEY: &str = "polish_model_user_set";
+/// 翻译侧对称守卫：用户手动选过专翻档（含明确选「不使用」）后，推荐器不再覆盖
+/// translate_local_model 与 translate_use_llm_fallback——否则重装/打开设置页时
+/// 机型推荐值会把用户的启用状态改掉（表现为「翻译模型不启用了」）。
+const TRANSLATE_USER_SET_KEY: &str = "translate_model_user_set";
+
+/// 推荐器分字段改写决策（纯决策，可单测）：
+/// - 润色组：用户手动选过润色档（`polish_model_user_set=1`）→ 不改 `polish`。
+/// - 翻译组：用户手动选过专翻档（`translate_model_user_set=1`，含选空）→
+///   不改 `translate` 与 `translate_use_llm_fallback`（推荐器两字段成对改写）。
+/// 各组独立判断；系统信息可用性短路（total_mem==0）由调用方负责。
+/// 返回 (改写润色组, 改写翻译组)。
+fn recommended_defaults_apply(
+    polish_user_set: bool,
+    translate_user_set: bool,
+    polish: &str,
+    translate: &str,
+    use_fallback: bool,
+    rec: &voice_core::RecommendedDefaults,
+) -> (bool, bool) {
+    let apply_polish = !polish_user_set && polish != rec.polish;
+    let apply_translate =
+        !translate_user_set && (translate != rec.translate || use_fallback != rec.use_llm_fallback);
+    (apply_polish, apply_translate)
+}
+
+/// 删除模型后的回退候选（纯决策，可单测）：目录里另一个已装档。
+/// `None` = 无已装候选（调用方按 kind 决定语义：润色保持原 id，专翻回退空）。
+fn delete_fallback_id(
+    mut catalog: impl Iterator<Item = &'static str>,
+    deleted: &str,
+    installed: impl Fn(&str) -> bool,
+) -> Option<&'static str> {
+    catalog.find(|id| *id != deleted && installed(id))
+}
+
+/// 三件套常驻内存计账（纯决策，可单测）。
+///
+/// 现行口径：兼译开启时专翻槽记 0（视作复用润色档）。注意边界：若用户同时
+/// 配置并安装了专翻模型，专翻句柄仍会按路由优先使用（真实常驻被低估）——
+/// 预算条在此组合下偏乐观，属已知取舍。
+fn suite_used_bytes(asr_id: &str, polish_id: &str, translate_id: &str, use_fallback: bool) -> u64 {
+    voice_core::asr_rss_bytes(asr_id)
+        + voice_core::llm_rss_bytes(polish_id)
+        + if translate_id.is_empty() || use_fallback {
+            0
+        } else {
+            voice_core::llm_rss_bytes(translate_id)
+        }
+}
+
+/// 推荐器：设置页首次打开 / get_config 后按机型改写默认三件套。
+/// 润色/翻译两组各有「用户手动选过」守卫（对称）：手动选过只挡对应组。
+/// 返回是否发生了改写。
+fn apply_recommended_defaults(state: &State<'_, AppState>, cfg: &mut AppConfig) -> bool {
+    let setting_is_set =
+        |key: &str| state.store.get_setting(key).ok().flatten().as_deref() == Some("1");
+    let polish_user_set = setting_is_set(POLISH_USER_SET_KEY);
+    let translate_user_set = setting_is_set(TRANSLATE_USER_SET_KEY);
+    if polish_user_set && translate_user_set {
+        return false;
+    }
+    let sys_opt = system_info_ensure(state);
+    let Some(sys) = sys_opt else { return false };
+    if sys.total_mem == 0 {
+        return false;
+    }
+    let rec = voice_core::recommend_defaults(&sys);
+    let (apply_polish, apply_translate) = recommended_defaults_apply(
+        polish_user_set,
+        translate_user_set,
+        &cfg.resolved_polish_local_model(),
+        &cfg.resolved_translate_local_model(),
+        cfg.translate_use_llm_fallback,
+        &rec,
+    );
+    if !apply_polish && !apply_translate {
+        return false;
+    }
+    if apply_polish {
+        cfg.polish_local_model = rec.polish.to_string();
+    }
+    if apply_translate {
+        cfg.translate_local_model = rec.translate.to_string();
+        cfg.translate_use_llm_fallback = rec.use_llm_fallback;
+    }
+    log_info!(
+        "推荐器改写默认三件套：polish={} translate={} fallback={}（polish组改={} 翻译组改={}）",
+        rec.polish,
+        if rec.translate.is_empty() {
+            "（未选）"
+        } else {
+            rec.translate
+        },
+        rec.use_llm_fallback,
+        apply_polish,
+        apply_translate
+    );
+    let _ = save_config(&state.store, cfg);
+    true
+}
+
+fn llm_entry(
+    state: &State<'_, AppState>,
+    model_root: &std::path::Path,
+    kind: &str,
+    info: &voice_core::LlmModelInfo,
+    active_id: &str,
+    other_llm_id: Option<&str>,
+    recommended_id: &str,
+    sys: Option<&voice_core::SystemInfo>,
+) -> LlmModelEntry {
+    let asr_id = state.config.blocking_read().resolved_local_asr_model();
+    let installed = voice_core::is_llm_model_installed(model_root, info.id);
+    let missing_size = if installed {
+        0
+    } else {
+        voice_core::llm_files(info.id)
+            .iter()
+            .filter(|f| !f.is_installed_lenient(model_root))
+            .map(|f| f.size)
+            .sum()
+    };
+    let perf_tag =
+        sys.map(|sys| voice_core::compute_combo_tag(sys, &asr_id, info.id, other_llm_id));
+    LlmModelEntry {
+        id: info.id.to_string(),
+        kind: kind.to_string(),
+        title: info.title.to_string(),
+        description: info.description.to_string(),
+        approx_size: info.approx_size,
+        installed,
+        active: installed && info.id == active_id,
+        missing_size,
+        perf_tag,
+        recommended: !recommended_id.is_empty() && info.id == recommended_id,
+        arch: format!("{:?}", info.arch_hint).to_lowercase(),
+    }
+}
+
+/// 润色目录（本地三件套：极速/均衡/高质量三档 + combo 标签）。
 #[tauri::command]
-pub fn get_polish_model_status(state: State<'_, AppState>) -> Result<PolishModelStatus, String> {
+pub fn list_local_polish_models(state: State<'_, AppState>) -> Result<Vec<LlmModelEntry>, String> {
     let Some(model_root) = state.model_root() else {
         return Err("未配置本地模型目录".to_string());
     };
-    let files = voice_core::model_download::polish_model_files();
-    let total_size: u64 = files.iter().map(|f| f.size).sum();
-    let path = voice_core::polish_model_path(&model_root);
-    Ok(PolishModelStatus {
-        installed: voice_core::is_polish_model_installed(&model_root),
-        downloading: state
-            .model_downloading
-            .load(std::sync::atomic::Ordering::SeqCst),
-        model_id: voice_core::POLISH_MODEL_ID.to_string(),
-        file_name: voice_core::POLISH_GGUF_FILE.to_string(),
-        total_size,
-        model_path: path.display().to_string(),
-        llm_feature: cfg!(feature = "llm"),
-    })
+    let cfg = state.config.blocking_read();
+    let active = cfg.resolved_polish_local_model();
+    let other_str = cfg.resolved_translate_local_model();
+    let other: Option<String> = if other_str.is_empty() {
+        None
+    } else {
+        Some(other_str)
+    };
+    let sys = system_info_ensure(&state);
+    let rec = sys.as_ref().map(voice_core::recommend_defaults);
+    let recommended_id = rec.as_ref().map(|r| r.polish).unwrap_or("");
+    let entries = voice_core::polish_catalog()
+        .iter()
+        .map(|m| {
+            llm_entry(
+                &state,
+                &model_root,
+                "polish",
+                m,
+                &active,
+                other.as_deref(),
+                recommended_id,
+                sys.as_ref(),
+            )
+        })
+        .collect();
+    Ok(entries)
 }
 
-/// 下载安装本地润色 GGUF（进度复用 model://download-progress）。
+/// 翻译目录（MiLMMT 默认 / HY-MT 自选）。
 #[tauri::command]
-pub async fn install_polish_model(
+pub fn list_local_translate_models(
+    state: State<'_, AppState>,
+) -> Result<Vec<LlmModelEntry>, String> {
+    let Some(model_root) = state.model_root() else {
+        return Err("未配置本地模型目录".to_string());
+    };
+    let cfg = state.config.blocking_read();
+    let active = cfg.resolved_translate_local_model();
+    let other = cfg.resolved_polish_local_model();
+    let sys = system_info_ensure(&state);
+    let rec = sys.as_ref().map(voice_core::recommend_defaults);
+    let recommended_id = rec.as_ref().map(|r| r.translate).unwrap_or("");
+    let entries = voice_core::translate_catalog()
+        .iter()
+        .map(|m| {
+            llm_entry(
+                &state,
+                &model_root,
+                "translate",
+                m,
+                &active,
+                Some(&other),
+                recommended_id,
+                sys.as_ref(),
+            )
+        })
+        .collect();
+    Ok(entries)
+}
+
+/// 启用某个润色档：写回 config、标记用户手动选择、立即生效。
+#[tauri::command]
+pub fn set_active_polish_model(
     app: AppHandle,
     state: State<'_, AppState>,
+    model_id: String,
+) -> Result<(), String> {
+    // 双重校验：在总目录（排除手输错 id）且在润色目录（排除翻译/回退档 id）。
+    if voice_core::llm_model_by_id(&model_id).is_none()
+        || !voice_core::is_polish_catalog_id(&model_id)
+    {
+        return Err(format!("未知的润色模型 id：{model_id}"));
+    }
+    {
+        let mut cfg = state.config.blocking_write();
+        cfg.polish_local_model = model_id.clone();
+        if let Err(e) = save_config(&state.store, &cfg) {
+            return Err(format!("保存配置失败：{e}"));
+        }
+    }
+    // 手动选过 → 推荐器不再覆盖。
+    let _ = state.store.set_setting(POLISH_USER_SET_KEY, "1");
+    // 立即生效：丢弃旧 pipeline（GGUF 句柄在 pipeline 构建时解析，不重建会一直用旧档）。
+    state.invalidate_pipeline_blocking();
+    log_info!("已启用本地润色模型：{model_id}");
+    let _ = app.emit("llm://active-changed", "polish");
+    Ok(())
+}
+
+/// 启用/停用本地专翻（空串 = 不装专翻，走云端或兼译）。
+#[tauri::command]
+pub fn set_active_translate_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model_id: String,
+) -> Result<(), String> {
+    let id = model_id.trim().to_lowercase();
+    // 校验与润色侧对称：在总目录且在翻译目录——防止把润色档 id 设为专翻
+    //（运行时会用润色模型当专翻，且 UI 翻译卡片与当前配置失明）。
+    if !id.is_empty()
+        && (voice_core::llm_model_by_id(&id).is_none() || !voice_core::is_translate_catalog_id(&id))
+    {
+        return Err(format!("未知的翻译模型 id：{model_id}"));
+    }
+    {
+        let mut cfg = state.config.blocking_write();
+        cfg.translate_local_model = id.clone();
+        if let Err(e) = save_config(&state.store, &cfg) {
+            return Err(format!("保存配置失败：{e}"));
+        }
+    }
+    // 手动选过（含明确选「不使用」）→ 推荐器不再覆盖翻译组，
+    // 与润色侧 POLISH_USER_SET_KEY 对称。
+    let _ = state.store.set_setting(TRANSLATE_USER_SET_KEY, "1");
+    // 立即生效：重建 pipeline（专翻/兼译句柄按新配置解析）。
+    state.invalidate_pipeline_blocking();
+    log_info!(
+        "已设置本地翻译模型：{}",
+        if id.is_empty() { "（未选）" } else { &id }
+    );
+    let _ = app.emit("llm://active-changed", "translate");
+    Ok(())
+}
+
+/// 下载安装某个 LLM GGUF（润色/翻译目录共用；进度 target = catalog id）。
+#[tauri::command]
+pub async fn install_llm_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
 ) -> Result<(), String> {
     let Some(model_root) = state.model_root() else {
         return Err("未配置本地模型目录".to_string());
     };
+    if voice_core::llm_model_by_id(&id).is_none() {
+        return Err(format!("未知的 LLM 模型 id：{id}"));
+    }
     if state
         .model_downloading
         .compare_exchange(
@@ -585,37 +865,160 @@ pub async fn install_polish_model(
     {
         return Err("模型正在下载中".to_string());
     }
-    if voice_core::is_polish_model_installed(&model_root) {
+    if voice_core::is_llm_model_installed(&model_root, &id) {
         state
             .model_downloading
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        log_info!("本地润色模型已安装，无需下载");
-        // 已安装也发完成事件：前端借此刷新状态（否则用户点击下载无任何可见反馈）。
-        let _ = app.emit("model://download-complete", "polish");
+        log_info!("LLM 模型已安装，无需下载：{id}");
+        // 已安装也发完成事件：前端借此刷新状态。
+        let _ = app.emit("model://download-complete", &id);
         return Ok(());
     }
 
     let flag = state.model_downloading.clone();
     let app_for_task = app.clone();
+    let id_for_task = id.clone();
     tauri::async_runtime::spawn(async move {
         let app_for_cb = app_for_task.clone();
-        let result = voice_core::install_polish_model(&model_root, &move |p| {
+        let id_for_emit = id_for_task.clone();
+        let result = voice_core::install_llm_model(&model_root, &id_for_task, &move |p| {
             let _ = app_for_cb.emit("model://download-progress", &p);
         })
         .await;
         flag.store(false, std::sync::atomic::Ordering::SeqCst);
         match result {
             Ok(()) => {
-                log_info!("本地润色模型安装完成");
-                let _ = app_for_task.emit("model://download-complete", "polish");
+                log_info!("LLM 模型安装完成：{id_for_emit}");
+                // 下载完成即重建 pipeline：下次录音直接可用，无需再改配置触发。
+                let _st = app_for_task.state::<AppState>();
+                _st.invalidate_pipeline_blocking();
+                let _ = app_for_task.emit("model://download-complete", id_for_emit);
             }
             Err(e) => {
-                log_error!("本地润色模型安装失败：{e}");
+                log_error!("LLM 模型安装失败：{e}");
                 let _ = app_for_task.emit("model://download-error", e.to_string());
             }
         }
     });
+    log_info!("LLM 模型下载任务已启动：{id}");
     Ok(())
+}
+
+/// 删除某个已安装 LLM GGUF（含首选与回退档文件与 .part）。
+#[tauri::command]
+pub fn delete_llm_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let Some(model_root) = state.model_root() else {
+        return Err("未配置本地模型目录".to_string());
+    };
+    let Some(info) = voice_core::llm_model_by_id(&id).cloned() else {
+        return Err(format!("未知的 LLM 模型 id：{id}"));
+    };
+    for f in voice_core::llm_files(&id) {
+        let dest = f.dest(&model_root);
+        let _ = std::fs::remove_file(&dest);
+        let _ = std::fs::remove_file(format!("{}.part", dest.display()));
+        // 释放运行时中的驻留槽。
+        state.gguf_runtime.evict(&dest);
+    }
+    // 若删的是当前启用档，回退到目录中另一已装候选（专翻允许回退为空）。
+    let mut cfg = state.config.blocking_write();
+    let (is_active, kind) = if cfg.resolved_polish_local_model() == id {
+        (true, "polish")
+    } else if cfg.resolved_translate_local_model() == id {
+        (true, "translate")
+    } else {
+        (false, "")
+    };
+    if is_active {
+        match kind {
+            "polish" => {
+                // 回退候选：另一已装润色档；无则保持原 id（resolve 时文件缺失→走云端兜底）。
+                let fallback = delete_fallback_id(
+                    voice_core::polish_catalog().iter().map(|m| m.id),
+                    &id,
+                    |m| voice_core::is_llm_model_installed(&model_root, m),
+                );
+                if let Some(fb) = fallback {
+                    cfg.polish_local_model = fb.to_string();
+                    log_info!("删后回退润色档：{fb}");
+                }
+            }
+            "translate" => {
+                // 专翻允许回退为空（走云端或兼译）。
+                let fallback = delete_fallback_id(
+                    voice_core::translate_catalog().iter().map(|m| m.id),
+                    &id,
+                    |m| voice_core::is_llm_model_installed(&model_root, m),
+                );
+                cfg.translate_local_model = fallback.map(str::to_string).unwrap_or_default();
+                log_info!("删后回退翻译档：{}", fallback.unwrap_or("（未选）"));
+            }
+            _ => {}
+        }
+        let _ = save_config(&state.store, &cfg);
+    }
+    // 删除后重建 pipeline（含回退档变更）。
+    state.invalidate_pipeline_blocking();
+    log_info!("已删除 LLM 模型：{}（{}）", id, info.title);
+    let _ = app.emit("llm://active-changed", kind);
+    Ok(())
+}
+
+/// 本机三件套概览（预算条 / 弱机提示 / 打开目录）。
+#[derive(serde::Serialize)]
+pub struct ModelSuiteInfo {
+    pub model_root: String,
+    pub budget_bytes: u64,
+    pub used_bytes: u64,
+    pub has_cloud: bool,
+    pub weak_machine: bool,
+    pub llm_feature: bool,
+}
+
+#[tauri::command]
+pub fn get_model_suite_info(state: State<'_, AppState>) -> Result<ModelSuiteInfo, String> {
+    let Some(model_root) = state.model_root() else {
+        return Err("未配置本地模型目录".to_string());
+    };
+    let cfg = state.config.blocking_read();
+    let sys = system_info_ensure(&state);
+    let budget = sys
+        .as_ref()
+        .map(voice_core::combo_budget)
+        .unwrap_or(10 * 1024 * 1024 * 1024);
+    let asr = cfg.resolved_local_asr_model();
+    let polish = cfg.resolved_polish_local_model();
+    let translate = cfg.resolved_translate_local_model();
+    // 兼译时专翻常驻按口径记 0（见 suite_used_bytes 注释）。
+    let used = suite_used_bytes(&asr, &polish, &translate, cfg.translate_use_llm_fallback);
+    let weak_machine = sys.as_ref().map_or(false, |s| {
+        let gb = s.total_mem / (1024 * 1024 * 1024);
+        gb <= 8 || (!s.is_apple_silicon && gb < 16)
+    });
+    Ok(ModelSuiteInfo {
+        model_root: model_root.display().to_string(),
+        budget_bytes: budget,
+        used_bytes: used,
+        has_cloud: state.has_cloud_key(),
+        weak_machine,
+        llm_feature: cfg!(feature = "llm"),
+    })
+}
+
+/// 打开模型下载目录（Finder/资源管理器），返回路径供前端提示。
+#[tauri::command]
+pub fn open_model_directory(state: State<'_, AppState>) -> Result<String, String> {
+    let Some(model_root) = state.model_root() else {
+        return Err("未配置本地模型目录".to_string());
+    };
+    std::fs::create_dir_all(&model_root).map_err(|e| format!("创建模型目录失败：{e}"))?;
+    tauri_plugin_opener::open_path(model_root.display().to_string(), None::<&str>)
+        .map_err(|e| format!("打开目录失败：{e}"))?;
+    Ok(model_root.display().to_string())
 }
 
 /// 下载安装本地引擎模型（后台进行，进度经 model://download-progress 事件推送）。
@@ -946,10 +1349,21 @@ pub async fn toggle_recording(
         e.to_string()
     })?;
 
-    // 翻译 / QA 只用云端：防御性检查（lib.rs 已拦，双保险）。
-    if intent != voice_core::SessionIntent::Dictate && !state.has_cloud_key() {
+    // 翻译：云端或本地（专翻/兼译）任一可用即可；QA 只用云端（小模型不承诺 QA 质量）。
+    // 防御性检查（lib.rs 已拦，双保险）。
+    let backend_ok = match intent {
+        voice_core::SessionIntent::Dictate => true,
+        voice_core::SessionIntent::Translate => {
+            state.has_cloud_key() || state.has_local_translate()
+        }
+        voice_core::SessionIntent::Qa => state.has_cloud_key(),
+    };
+    if !backend_ok {
         release_recording_guard(&state);
-        return Err("请先配置云端 LLM（润色 endpoint + API Key）".into());
+        return Err(
+            "请先配置翻译后端：云端 LLM（endpoint + API Key），或在设置 → 本地模型下载翻译/润色模型"
+                .into(),
+        );
     }
 
     // 懒初始化 pipeline（含 enigo，可能在无辅助功能权限时失败）。
@@ -1143,10 +1557,10 @@ pub async fn toggle_recording(
                                             "翻译失败，已插入原文"
                                         }
                                         voice_core::PolishWarn::RoleLlmFailed => {
-                                            "角色处理失败，已插入原文"
+                                            "翻译失败，已插入原文（检查云端配置或本地模型是否已下载）"
                                         }
                                         voice_core::PolishWarn::RoleNoBackend => {
-                                            "未配置角色后端，已插入原文"
+                                            "未配置可用的翻译后端：请在设置 → AI 增强配置 配置云端 LLM 或下载本地模型"
                                         }
                                     };
                                     let _ = app_handle.emit("recording://processing", text);
@@ -1565,5 +1979,162 @@ mod tests {
             );
             assert!(!is_self_bundle_id("notepad.exe"));
         }
+    }
+
+    // ── 本地三件套薄壳纯决策（推荐器 / 删后回退 / 预算计账）──
+
+    fn rec(
+        polish: &'static str,
+        translate: &'static str,
+        fb: bool,
+    ) -> voice_core::RecommendedDefaults {
+        voice_core::RecommendedDefaults {
+            asr: "sensevoice",
+            polish,
+            translate,
+            use_llm_fallback: fb,
+        }
+    }
+
+    #[test]
+    fn recommender_never_overrides_user_choice() {
+        // 手动选过润色档 → 润色组不改；手动选过翻译档 → 翻译组不改（各自独立）。
+        assert_eq!(
+            recommended_defaults_apply(
+                true,
+                false,
+                "qwen3.5-0.8b",
+                "milmmt-1b",
+                true,
+                &rec("qwen3.5-4b", "hy-mt-1.8b", false)
+            ),
+            (false, true)
+        );
+        assert_eq!(
+            recommended_defaults_apply(
+                false,
+                true,
+                "qwen3.5-0.8b",
+                "milmmt-1b",
+                true,
+                &rec("qwen3.5-4b", "hy-mt-1.8b", false)
+            ),
+            (true, false)
+        );
+        // 两侧都手动选过 → 全不改。
+        assert_eq!(
+            recommended_defaults_apply(
+                true,
+                true,
+                "qwen3.5-0.8b",
+                "milmmt-1b",
+                true,
+                &rec("qwen3.5-4b", "hy-mt-1.8b", false)
+            ),
+            (false, false)
+        );
+    }
+
+    #[test]
+    fn recommender_applies_only_on_diff() {
+        // 三字段与推荐一致 → 都不改。
+        assert_eq!(
+            recommended_defaults_apply(
+                false,
+                false,
+                "qwen3.5-2b",
+                "milmmt-1b",
+                false,
+                &rec("qwen3.5-2b", "milmmt-1b", false)
+            ),
+            (false, false)
+        );
+        // 润色差异 → 只改润色组。
+        assert_eq!(
+            recommended_defaults_apply(
+                false,
+                false,
+                "qwen3.5-0.8b",
+                "milmmt-1b",
+                false,
+                &rec("qwen3.5-2b", "milmmt-1b", false)
+            ),
+            (true, false)
+        );
+        // 翻译差异（模型或 fallback 任一）→ 只改翻译组。
+        assert_eq!(
+            recommended_defaults_apply(
+                false,
+                false,
+                "qwen3.5-2b",
+                "hy-mt-1.8b",
+                false,
+                &rec("qwen3.5-2b", "milmmt-1b", false)
+            ),
+            (false, true)
+        );
+        assert_eq!(
+            recommended_defaults_apply(
+                false,
+                false,
+                "qwen3.5-2b",
+                "milmmt-1b",
+                true,
+                &rec("qwen3.5-2b", "milmmt-1b", false)
+            ),
+            (false, true)
+        );
+        // 弱机推荐「不装专翻」：translate 空串也是合法落点，三字段一致 → 不改。
+        assert_eq!(
+            recommended_defaults_apply(
+                false,
+                false,
+                "qwen3.5-0.8b",
+                "",
+                true,
+                &rec("qwen3.5-0.8b", "", true)
+            ),
+            (false, false)
+        );
+    }
+
+    #[test]
+    fn delete_fallback_picks_other_installed_entry() {
+        let ids = ["a", "b", "c"];
+        // 删 a：回退到另一已装档 b（跳过未装的）。
+        assert_eq!(
+            delete_fallback_id(ids.iter().copied(), "a", |id| id == "b" || id == "c"),
+            Some("b")
+        );
+        // 删除目标本身已装也不选自己。
+        assert_eq!(
+            delete_fallback_id(ids.iter().copied(), "a", |id| id == "a"),
+            None
+        );
+        // 无其它已装 → None（润色侧保持原 id / 专翻侧回退空的分叉由调用方处理）。
+        assert_eq!(
+            delete_fallback_id(ids.iter().copied(), "a", |_| false),
+            None
+        );
+    }
+
+    #[test]
+    fn suite_used_bytes_current_accounting() {
+        // 钉住现行口径：专翻未选或兼译开启 → 专翻 RSS 记 0（见函数注释的已知取舍）。
+        let base =
+            voice_core::asr_rss_bytes("sensevoice") + voice_core::llm_rss_bytes("qwen3.5-2b");
+        assert_eq!(
+            suite_used_bytes("sensevoice", "qwen3.5-2b", "", false),
+            base
+        );
+        assert_eq!(
+            suite_used_bytes("sensevoice", "qwen3.5-2b", "milmmt-1b", true),
+            base,
+            "兼译开启时专翻译已配置也记 0（现行口径）"
+        );
+        assert_eq!(
+            suite_used_bytes("sensevoice", "qwen3.5-2b", "milmmt-1b", false),
+            base + voice_core::llm_rss_bytes("milmmt-1b")
+        );
     }
 }

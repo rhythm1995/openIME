@@ -15,11 +15,12 @@ import {
 } from "lucide-react";
 import type {
   AppConfig,
+  LlmModelEntry,
   LocalAsrModelEntry,
   LocalModelStatus,
   ModelDownloadProgress,
+  ModelSuiteInfo,
   PolishCloudProtocol,
-  PolishModelStatus,
   ProviderConfig,
   StylePack,
   SystemInfo,
@@ -49,6 +50,152 @@ function StatusIcon({ ok, warn, spin }: { ok?: boolean; warn?: boolean; spin?: b
   if (ok) return <CheckCircle2 {...common} color="var(--success)" />;
   if (warn) return <AlertTriangle {...common} color="var(--warning)" />;
   return <XCircle {...common} color="var(--danger)" />;
+}
+
+/// JS KeyboardEvent.key → 后端 parse_shortcut 接受的键名（无法表达返回 null）。
+function shortcutKeyLabel(key: string): string | null {
+  if (key === " ") return "Space";
+  if (/^[a-zA-Z]$/.test(key)) return key.toUpperCase();
+  if (/^[0-9]$/.test(key)) return key;
+  if (/^F([1-9]|1[0-2])$/.test(key)) return key;
+  switch (key) {
+    case "Enter":
+      return "Enter";
+    case "Tab":
+      return "Tab";
+    case "Backspace":
+      return "Backspace";
+    case "ArrowUp":
+      return "Up";
+    case "ArrowDown":
+      return "Down";
+    case "ArrowLeft":
+      return "Left";
+    case "ArrowRight":
+      return "Right";
+    case ";":
+    case ",":
+    case ".":
+    case "/":
+    case "'":
+    case "[":
+    case "]":
+    case "=":
+    case "-":
+      return key;
+    default:
+      return null;
+  }
+}
+
+/// 按键直接捕获的快捷键设置（替代手填录入框）：
+/// 点按钮进入捕获态 → 按下组合键/单键即写入；Esc 取消；捕获期间后端挂起
+/// 录音键与全局快捷键，避免旧快捷键被误触发。
+function HotkeyCaptureInput({
+  value,
+  onChange,
+  allowSingle = false,
+  optional = false,
+  presets = [],
+}: {
+  value: string | null | undefined;
+  onChange: (v: string | null) => void;
+  allowSingle?: boolean;
+  optional?: boolean;
+  presets?: string[];
+}) {
+  const { t } = useTranslation();
+  const [capturing, setCapturing] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!capturing) return;
+    ipc.setCaptureSuspend(true).catch(() => {});
+    const onKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Esc = 取消（值不变）。
+      if (e.key === "Escape") {
+        setCapturing(false);
+        setPreview(null);
+        ipc.setCaptureSuspend(false).catch(() => {});
+        return;
+      }
+      const mods: string[] = [];
+      if (e.ctrlKey) mods.push("Ctrl");
+      if (e.altKey) mods.push("Alt");
+      if (e.shiftKey) mods.push("Shift");
+      if (e.metaKey) mods.push("Cmd");
+      // 只按了修饰键：显示半成品，等主键。
+      if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) {
+        setPreview(mods.length ? `${mods.join("+")}+…` : null);
+        return;
+      }
+      if (e.key === "CapsLock") {
+        if (allowSingle) {
+          onChange("CapsLock");
+          setCapturing(false);
+          setPreview(null);
+          ipc.setCaptureSuspend(false).catch(() => {});
+        }
+        return; // 组合键字段不允许单键：忽略。
+      }
+      const label = shortcutKeyLabel(e.key);
+      if (label === null) return;
+      onChange([...mods, label].join("+"));
+      setCapturing(false);
+      setPreview(null);
+      ipc.setCaptureSuspend(false).catch(() => {});
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      ipc.setCaptureSuspend(false).catch(() => {});
+    };
+  }, [capturing, allowSingle, onChange]);
+
+  const current = value?.trim() ?? "";
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <button
+        type="button"
+        className="btn btn-sm"
+        onClick={() => {
+          setPreview(null);
+          setCapturing(true);
+        }}
+      >
+        {capturing
+          ? (preview ?? t("settings.hotkey.capturing"))
+          : current || t("settings.hotkey.unset")}
+      </button>
+      {presets.map((p) => (
+        <button
+          key={p}
+          type="button"
+          className="btn btn-sm btn-ghost"
+          title={t("settings.hotkey.presetTitle", { key: p })}
+          onClick={() => {
+            setCapturing(false);
+            setPreview(null);
+            onChange(p);
+          }}
+        >
+          {p}
+        </button>
+      ))}
+      {optional && current && (
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          title={t("settings.hotkey.clear")}
+          onClick={() => onChange(null)}
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
 }
 
 export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) {
@@ -89,8 +236,10 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
   const [devices, setDevices] = useState<string[]>([]);
   const [micTest, setMicTest] = useState<{ ok: boolean; warn: boolean; text: string } | null>(null);
   const [testingMic, setTestingMic] = useState(false);
-  // 二期润色
-  const [polishStatus, setPolishStatus] = useState<PolishModelStatus | null>(null);
+  // 二期润色 / 本地三件套
+  const [polishModels, setPolishModels] = useState<LlmModelEntry[]>([]);
+  const [translateModels, setTranslateModels] = useState<LlmModelEntry[]>([]);
+  const [suiteInfo, setSuiteInfo] = useState<ModelSuiteInfo | null>(null);
   const [stylePacks, setStylePacks] = useState<StylePack[]>([]);
   // D3 文件转录
   const [transcribing, setTranscribing] = useState(false);
@@ -179,8 +328,14 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
       fetchWithRetry(() => ipc.getLocalModelStatus()).then((s) => {
         if (!cancelled) setModelStatus(s);
       }).catch(() => {});
-      fetchWithRetry(() => ipc.getPolishModelStatus()).then((s) => {
-        if (!cancelled) setPolishStatus(s);
+      fetchWithRetry(() => ipc.listLocalPolishModels()).then((l) => {
+        if (!cancelled) setPolishModels(Array.isArray(l) ? l : []);
+      }).catch(() => {});
+      fetchWithRetry(() => ipc.listLocalTranslateModels()).then((l) => {
+        if (!cancelled) setTranslateModels(Array.isArray(l) ? l : []);
+      }).catch(() => {});
+      fetchWithRetry(() => ipc.getModelSuiteInfo()).then((s) => {
+        if (!cancelled) setSuiteInfo(s);
       }).catch(() => {});
       ipc.listStylePacks().then((p) => {
         if (!cancelled) setStylePacks(Array.isArray(p) ? p : []);
@@ -217,7 +372,8 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
       setDlTargetId(null);
       ipc.listLocalAsrModels().then(setAsrModels).catch(() => {});
       ipc.getLocalModelStatus().then(setModelStatus).catch(() => {});
-      ipc.getPolishModelStatus().then(setPolishStatus).catch(() => {});
+      ipc.listLocalPolishModels().then((l) => setPolishModels(Array.isArray(l) ? l : [])).catch(() => {});
+      ipc.listLocalTranslateModels().then((l) => setTranslateModels(Array.isArray(l) ? l : [])).catch(() => {});
     }).then((u) => unlisteners.push(u));
     listen<string>("model://download-error", (e) => {
       setDl(null);
@@ -225,7 +381,8 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
       setDlError(e.payload);
       ipc.listLocalAsrModels().then(setAsrModels).catch(() => {});
       ipc.getLocalModelStatus().then(setModelStatus).catch(() => {});
-      ipc.getPolishModelStatus().then(setPolishStatus).catch(() => {});
+      ipc.listLocalPolishModels().then((l) => setPolishModels(Array.isArray(l) ? l : [])).catch(() => {});
+      ipc.listLocalTranslateModels().then((l) => setTranslateModels(Array.isArray(l) ? l : [])).catch(() => {});
     }).then((u) => unlisteners.push(u));
 
     // Fn 键事件（功能测试模块）。
@@ -330,6 +487,8 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
   const isFnHotkey = hotkeyNorm === "fn" || hotkeyNorm === "globe";
   const isCapsHotkey = hotkeyNorm === "capslock" || hotkeyNorm === "caps";
   const singleKeyLabel = isCapsHotkey ? "Caps" : "Fn";
+  // 键位文案插值：提示文案里的键名跟随用户当前录音键（改键位后文案不误导）。
+  const hotkeyDisplay = isFnHotkey ? "Fn" : isCapsHotkey ? "CapsLock" : (config.hotkey ?? "Fn");
 
   const active = config.providers[config.active_provider] ?? config.providers[0];
   const setActive = (patch: Partial<ProviderConfig>) =>
@@ -379,6 +538,22 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
     </span>
   );
 
+  // 模型卡片排序：按机器性能的推荐档第一，其次 适合 → 可用 → 不推荐，保持目录原序。
+  const perfRank = (m: LlmModelEntry) =>
+    m.perf_tag?.kind === "suitable"
+      ? 0
+      : m.perf_tag?.kind === "usable"
+        ? 1
+        : m.perf_tag?.kind === "unknown"
+          ? 2
+          : 3;
+  const sortedPolishModels = [...polishModels].sort(
+    (a, b) => Number(b.recommended) - Number(a.recommended) || perfRank(a) - perfRank(b),
+  );
+  const sortedTranslateModels = [...translateModels].sort(
+    (a, b) => Number(b.recommended) - Number(a.recommended) || perfRank(a) - perfRank(b),
+  );
+
   return (
     <div>
       <h1 className="page-title">{t("settings.title")}</h1>
@@ -388,7 +563,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
       {view === "voice" && (
       <div className="card">
         <h2 className="card-title">{t("settings.hotkey.title")}</h2>
-        <div className="field" style={{ margin: 0 }}>
+        <div className="field">
           <label className="field-label">{t("settings.hotkey.modeLabel")}</label>
           <select
             value={config.hotkey_mode ?? "hold"}
@@ -402,102 +577,107 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
             <option value="hold">{t("settings.hotkey.mode_hold")}</option>
             <option value="toggle">{t("settings.hotkey.mode_toggle")}</option>
           </select>
-          <div style={{ marginTop: 10 }}>
-            <label className="field-label">{t("settings.hotkey.recordLabel")}</label>
-            <input
-              value={config.hotkey}
-              onChange={(e) => setConfig({ ...config, hotkey: e.target.value })}
-            />
-            <span className="field-hint">
-              {t(IS_WIN ? "settings.hotkey.recordHintWin" : "settings.hotkey.recordHint")}
-            </span>
-          </div>
-          <div style={{ marginTop: 10 }}>
-            <label className="field-label">{t("settings.hotkey.shortPressLabel")}</label>
-            <input
-              type="number"
-              min={100}
-              max={800}
-              value={config.short_press_ms ?? 300}
-              onChange={(e) =>
-                setConfig({ ...config, short_press_ms: Number(e.target.value) })
-              }
-            />
-            <span className="field-hint">{t("settings.hotkey.shortPressHint")}</span>
-          </div>
-          {(IS_MAC || isCapsHotkey) && (
-            <div className="set-row" style={{ marginTop: 12 }}>
-              <div>
-                <div className="set-name">
-                  {t(IS_WIN ? "settings.hotkey.fnRepostNameWin" : "settings.hotkey.fnRepostName")}
-                </div>
-                <div className="set-desc">
-                  {t(IS_WIN ? "settings.hotkey.fnRepostDescWin" : "settings.hotkey.fnRepostDesc")}
-                </div>
-              </div>
-              <label className="switch">
-                <input
-                  type="checkbox"
-                  checked={config.fn_repost_enabled ?? true}
-                  onChange={(e) =>
-                    setConfig({ ...config, fn_repost_enabled: e.target.checked })
-                  }
-                />
-                <span className="slider" />
-              </label>
-            </div>
-          )}
-          <div style={{ marginTop: 10 }}>
-            <label className="field-label">{t("settings.hotkey.styleSwitchLabel")}</label>
-            <input
-              value={config.style_switch_hotkey ?? ""}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  style_switch_hotkey: e.target.value || null,
-                })
-              }
-              placeholder={t("settings.hotkey.styleSwitchPh")}
-            />
-          </div>
-          <div style={{ marginTop: 10 }}>
-            <label className="field-label">{t("settings.hotkey.translateLabel")}</label>
-            <input
-              value={config.translate_hotkey ?? ""}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  translate_hotkey: e.target.value || null,
-                })
-              }
-              placeholder={t("settings.hotkey.translatePh")}
-            />
-            <span className="field-hint">{t("settings.hotkey.translateHint")}</span>
-          </div>
-          <div style={{ marginTop: 10 }}>
-            <label className="field-label">{t("settings.hotkey.qaLabel")}</label>
-            <input
-              value={config.qa_hotkey ?? ""}
-              onChange={(e) =>
-                setConfig({
-                  ...config,
-                  qa_hotkey: e.target.value || null,
-                })
-              }
-              placeholder={t("settings.hotkey.qaPh")}
-            />
-            <span className="field-hint">{t("settings.hotkey.qaHint")}</span>
-          </div>
-          {isFnHotkey && (
-            <span
-              className="field-hint"
-              style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4, color: "var(--warning)" }}
-            >
-              <StatusIcon warn />
-              {t(IS_WIN ? "settings.hotkey.fnWarningWin" : "settings.hotkey.fnWarning")}
-            </span>
-          )}
         </div>
+        <div className="field">
+          <label className="field-label">{t("settings.hotkey.recordLabel")}</label>
+          <HotkeyCaptureInput
+            value={config.hotkey}
+            onChange={(v) => v && setConfig({ ...config, hotkey: v })}
+            allowSingle
+            presets={IS_MAC ? ["Fn"] : IS_WIN ? ["CapsLock"] : []}
+          />
+          <span className="field-hint">
+            {t(IS_WIN ? "settings.hotkey.recordHintWin" : "settings.hotkey.recordHint")}
+          </span>
+        </div>
+        <div className="field">
+          <label className="field-label">{t("settings.hotkey.shortPressLabel")}</label>
+          <input
+            type="number"
+            min={100}
+            max={800}
+            value={config.short_press_ms ?? 300}
+            onChange={(e) =>
+              setConfig({ ...config, short_press_ms: Number(e.target.value) })
+            }
+          />
+          <span className="field-hint">
+            {t("settings.hotkey.shortPressHint", { key: hotkeyDisplay })}
+          </span>
+        </div>
+        {(IS_MAC || isCapsHotkey) && (
+          <div className="set-row">
+            <div>
+              <div className="set-name">
+                {t(IS_WIN ? "settings.hotkey.fnRepostNameWin" : "settings.hotkey.fnRepostName", { key: hotkeyDisplay })}
+              </div>
+              <div className="set-desc">
+                {t(IS_WIN ? "settings.hotkey.fnRepostDescWin" : "settings.hotkey.fnRepostDesc", { key: hotkeyDisplay })}
+              </div>
+            </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={config.fn_repost_enabled ?? true}
+                onChange={(e) =>
+                  setConfig({ ...config, fn_repost_enabled: e.target.checked })
+                }
+              />
+              <span className="slider" />
+            </label>
+          </div>
+        )}
+        <div className="field">
+          <label className="field-label">{t("settings.hotkey.styleSwitchLabel")}</label>
+          <HotkeyCaptureInput
+            value={config.style_switch_hotkey}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                style_switch_hotkey: v || null,
+              })
+            }
+            optional
+          />
+          <span className="field-hint">{t("settings.hotkey.styleSwitchPh")}</span>
+        </div>
+        <div className="field">
+          <label className="field-label">{t("settings.hotkey.translateLabel")}</label>
+          <HotkeyCaptureInput
+            value={config.translate_hotkey}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                translate_hotkey: v || null,
+              })
+            }
+            optional
+          />
+          <span className="field-hint">{t("settings.hotkey.translateHint")}</span>
+        </div>
+        <div className="field">
+          <label className="field-label">{t("settings.hotkey.qaLabel")}</label>
+          <HotkeyCaptureInput
+            value={config.qa_hotkey}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                qa_hotkey: v || null,
+              })
+            }
+            optional
+          />
+          <span className="field-hint">{t("settings.hotkey.qaHint")}</span>
+        </div>
+        {isFnHotkey && (
+          <span
+            className="field-hint"
+            style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4, color: "var(--warning)" }}
+          >
+            <StatusIcon warn />
+            {t(IS_WIN ? "settings.hotkey.fnWarningWin" : "settings.hotkey.fnWarning")}
+          </span>
+        )}
       </div>
       )}
 
@@ -765,82 +945,502 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
               </button>
             </div>
 
-            <div className="row-between" style={{ marginTop: 8, alignItems: "flex-start" }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
-                  {t("settings.polish.localPolishModelTitle")}
-                </div>
-                {polishStatus ? (
-                  <span className="field-hint">
-                    {polishStatus.installed
-                      ? t("settings.polish.installedSize", { size: fmtSize(polishStatus.total_size) })
-                      : t("settings.polish.notInstalledSize", { size: fmtSize(polishStatus.total_size) })}
-                    {!polishStatus.llm_feature && t("settings.polish.llmFeatureOff")}
+            <div className="field" style={{ marginTop: 8 }}>
+              <span className="field-hint">
+                {t("settings.polish.localModelMovedHint")}
+                {!suiteInfo?.llm_feature && t("settings.polish.llmFeatureOff")}
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 本地三件套：打开目录 / 预算条 / 润色三档 / 翻译两档 */}
+      <div className="card">
+        <h2 className="card-title">{t("settings.localLlm.title")}</h2>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            marginBottom: 12,
+            padding: "8px 10px",
+            borderRadius: 10,
+            background: "var(--accent-soft)",
+            fontSize: 11,
+            color: "var(--text-secondary)",
+          }}
+        >
+          <button
+            className="btn btn-sm btn-ghost"
+            style={{ fontSize: 11, flexShrink: 0 }}
+            onClick={async () => {
+              try {
+                const p = await ipc.openModelDirectory();
+                setMsg({ ok: true, text: t("settings.localLlm.openDirOk", { path: p }) });
+              } catch (e) {
+                setMsg({ ok: false, text: String(e) });
+              }
+            }}
+          >
+            {t("settings.localLlm.openDir")}
+          </button>
+          {suiteInfo && (
+            <span style={{ flexShrink: 0 }}>
+              {t("settings.localLlm.budgetBar", {
+                used: fmtSize(suiteInfo.used_bytes),
+                budget: fmtSize(suiteInfo.budget_bytes),
+              })}
+            </span>
+          )}
+          {suiteInfo && (
+            <span className="field-hint" style={{ flex: 1, minWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t("settings.localLlm.pathTitle")}>
+              {suiteInfo.model_root}
+            </span>
+          )}
+          {!suiteInfo?.llm_feature && (
+            <span style={{ color: "var(--warning)", flexShrink: 0 }}>
+              {t("settings.polish.llmFeatureOff")}
+            </span>
+          )}
+        </div>
+
+        {/* 润色三档 */}
+        <div className="field-label" style={{ marginBottom: 6 }}>
+          {t("settings.localLlm.polishTitle")}
+        </div>
+        {polishModels.length === 0 ? (
+          <span className="field-hint">{t("settings.polish.statusLoading")}</span>
+        ) : (
+          sortedPolishModels.map((m) => {
+            const selected = m.active && m.installed;
+            const isDownloadingThis = (dlTargetId === m.id || dl?.target_id === m.id) && !!dl;
+            return (
+              <div
+                key={m.id}
+                data-model-id={m.id}
+                className={`local-model-card${selected ? " local-model-card--active" : ""}`}
+              >
+                <div className="row-between" style={{ marginBottom: 6, alignItems: "flex-start" }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      {m.title}
+                      {m.recommended && (
+                        <span className="badge badge-success" style={{ fontSize: 11 }}>
+                          {t("settings.localAsr.recommended")}
+                        </span>
+                      )}
+                      {selected && (
+                        <span className="badge badge-success" style={{ fontSize: 11 }}>
+                          {t("settings.localAsr.inUse")}
+                        </span>
+                      )}
+                      {m.perf_tag && (
+                        <span
+                          className="badge"
+                          style={{
+                            fontSize: 11,
+                            background:
+                              m.perf_tag.kind === "suitable"
+                                ? "rgba(52, 199, 89, 0.14)"
+                                : m.perf_tag.kind === "usable"
+                                  ? "rgba(255, 149, 0, 0.14)"
+                                  : m.perf_tag.kind === "unknown"
+                                    ? "var(--card-hover)"
+                                    : "rgba(255, 59, 48, 0.12)",
+                            color:
+                              m.perf_tag.kind === "suitable"
+                                ? "var(--success)"
+                                : m.perf_tag.kind === "usable"
+                                  ? "var(--warning)"
+                                  : m.perf_tag.kind === "unknown"
+                                    ? "var(--text-tertiary)"
+                                    : "var(--danger)",
+                          }}
+                          title={m.perf_tag.reason}
+                        >
+                          {m.perf_tag.tag}
+                        </span>
+                      )}
+                    </div>
+                    <div className="field-hint" style={{ marginBottom: 0 }}>
+                      {m.description}
+                    </div>
+                  </div>
+                  <span className={`badge ${m.installed ? "badge-success" : "badge-warning"}`} style={{ flexShrink: 0 }}>
+                    <span className="badge-dot" />
+                    {m.installed
+                      ? t("settings.localAsr.installedBadge")
+                      : t("settings.localAsr.notInstalledBadge")}
                   </span>
-                ) : (
-                  <span className="field-hint">{t("settings.polish.statusLoading")}</span>
+                </div>
+
+                {isDownloadingThis && dl && dl.phase !== "done" && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div className="row-between" style={{ marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                        {dl.message || dl.file_name} · {fmtSize(dl.total_downloaded)} / {fmtSize(dl.total_size)}
+                      </span>
+                      <span style={{ fontSize: 12, color: "var(--text-secondary)", flexShrink: 0 }}>
+                        {dl.total_size > 0
+                          ? `${Math.min(100, Math.round((dl.total_downloaded / dl.total_size) * 100))}%`
+                          : ""}
+                        {dl.speed_bps > 0 ? ` · ${fmtSize(dl.speed_bps)}/s` : ""}
+                      </span>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 3, background: "var(--border)", overflow: "hidden" }}>
+                      <div
+                        style={{
+                          height: "100%",
+                          borderRadius: 3,
+                          background: "var(--accent)",
+                          width: `${dl.total_size > 0 ? Math.min(100, (dl.total_downloaded / dl.total_size) * 100) : 0}%`,
+                          transition: "width 0.2s",
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="row-between" style={{ marginTop: 6, gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                    {m.installed
+                      ? t("settings.localAsr.approxSize", { size: fmtSize(m.approx_size) })
+                      : t("settings.localAsr.needDownloadSize", { size: fmtSize(m.missing_size || m.approx_size) })}
+                  </span>
+                  <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
+                    {!m.installed && (
+                      <button
+                        className="btn btn-sm"
+                        disabled={!!dl}
+                        onClick={async () => {
+                          setDlError(null);
+                          setDlTargetId(m.id);
+                          try {
+                            await ipc.installLlmModel(m.id);
+                          } catch (e) {
+                            setDlError(String(e));
+                            setDlTargetId(null);
+                          }
+                        }}
+                      >
+                        {isDownloadingThis ? t("common.downloading") : t("settings.localAsr.downloadBtn")}
+                      </button>
+                    )}
+                    <button
+                      className="btn btn-sm"
+                      disabled={!m.installed || selected || !!dl}
+                      title={
+                        !m.installed
+                          ? t("settings.localAsr.enableTipInstallFirst")
+                          : selected
+                            ? t("settings.localAsr.enableTipCurrent")
+                            : t("settings.localAsr.enableTipAction")
+                      }
+                      onClick={async () => {
+                        try {
+                          await ipc.setActivePolishModel(m.id);
+                          ipc.listLocalPolishModels().then((l) => setPolishModels(l)).catch(() => {});
+                          ipc.getModelSuiteInfo().then(setSuiteInfo).catch(() => {});
+                        } catch (e) {
+                          setMsg({ ok: false, text: String(e) });
+                        }
+                      }}
+                    >
+                      {selected ? t("settings.localAsr.enabled") : t("settings.localAsr.enable")}
+                    </button>
+                    {m.installed && (
+                      <button
+                        className="btn btn-sm btn-icon"
+                        title={t("settings.localAsr.deleteModelTitle")}
+                        onClick={async () => {
+                          if (!window.confirm(t("settings.localAsr.confirmDeleteModel", { title: m.title }))) return;
+                          try {
+                            await ipc.deleteLlmModel(m.id);
+                            ipc.listLocalPolishModels().then((l) => setPolishModels(l)).catch(() => {});
+                            ipc.getModelSuiteInfo().then(setSuiteInfo).catch(() => {});
+                          } catch (e) {
+                            alert(t("settings.localAsr.deleteFailed", { error: e }));
+                          }
+                        }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        )}
+
+        {/* 翻译两档 + 策略 + 兼译 */}
+        <div className="field-label" style={{ margin: "16px 0 10px" }}>
+          {t("settings.localLlm.translateTitle")}
+        </div>
+        <div className="field">
+          <label className="field-label">{t("settings.localLlm.translatePolicyLabel")}</label>
+          <select
+            value={config.translate_policy ?? "prefer_cloud"}
+            onChange={(e) =>
+              setConfig({
+                ...config,
+                translate_policy: e.target.value as "prefer_cloud" | "prefer_local",
+              })
+            }
+          >
+            <option value="prefer_cloud">{t("settings.localLlm.policy_cloud")}</option>
+            <option value="prefer_local">{t("settings.localLlm.policy_local")}</option>
+          </select>
+        </div>
+        <div className="set-row">
+          <div style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
+            <div className="set-name">{t("settings.localLlm.fallbackName")}</div>
+            <div className="set-desc">
+              {t("settings.localLlm.fallbackDesc")}
+            </div>
+          </div>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={config.translate_use_llm_fallback ?? false}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  translate_use_llm_fallback: e.target.checked,
+                })
+              }
+            />
+            <span className="slider" />
+          </label>
+        </div>
+        {(config.translate_use_llm_fallback || suiteInfo?.weak_machine) && (
+          <span className="field-hint" style={{ display: "block", marginTop: 8 }}>
+            {t("settings.localLlm.fallbackHint")}
+          </span>
+        )}
+        <div
+          data-model-id="none"
+          className={`local-model-card${(config.translate_local_model ?? "") === "" ? " local-model-card--active" : ""}`}
+        >
+          <div className="row-between" style={{ marginBottom: 6, alignItems: "flex-start" }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontWeight: 600, marginBottom: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {t("settings.localLlm.noDedicated")}
+                {suiteInfo?.weak_machine && (
+                  <span className="badge badge-success" style={{ fontSize: 11 }}>
+                    {t("settings.localAsr.recommended")}
+                  </span>
+                )}
+                {(config.translate_local_model ?? "") === "" && (
+                  <span className="badge badge-success" style={{ fontSize: 11 }}>
+                    {t("settings.localAsr.inUse")}
+                  </span>
                 )}
               </div>
+              <div className="field-hint" style={{ marginBottom: 0 }}>{t("settings.localLlm.noDedicatedDesc")}</div>
+            </div>
+            <span className="badge badge-success" style={{ flexShrink: 0 }}>
+              <span className="badge-dot" />
+              {t("settings.localLlm.noInstall")}
+            </span>
+          </div>
+          <div className="row-between" style={{ marginTop: 6, gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              {t("settings.localLlm.noDedicatedSize")}
+            </span>
+            <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
               <button
                 className="btn btn-sm"
-                disabled={
-                  (!!dl && dlTargetId !== "polish") ||
-                  polishStatus?.installed ||
-                  polishStatus?.downloading
+                disabled={(config.translate_local_model ?? "") === ""}
+                title={
+                  (config.translate_local_model ?? "") === ""
+                    ? t("settings.localAsr.enableTipCurrent")
+                    : t("settings.localLlm.noDedicatedEnableTip")
                 }
                 onClick={async () => {
                   try {
-                    setDlError(null);
-                    setDlTargetId("polish");
-                    await ipc.installPolishModel();
+                    await ipc.setActiveTranslateModel("");
+                    ipc.getConfig().then(setConfig).catch(() => {});
+                    ipc.listLocalTranslateModels().then((l) => setTranslateModels(l)).catch(() => {});
+                    ipc.getModelSuiteInfo().then(setSuiteInfo).catch(() => {});
                   } catch (e) {
-                    setDlError(String(e));
-                    setDlTargetId(null);
+                    setMsg({ ok: false, text: String(e) });
                   }
                 }}
               >
-                {polishStatus?.installed
-                  ? t("common.ready")
-                  : polishStatus?.downloading || (dl && dlTargetId === "polish")
-                    ? t("common.downloading")
-                    : t("settings.polish.downloadModel")}
+                {(config.translate_local_model ?? "") === ""
+                  ? t("settings.localAsr.enabled")
+                  : t("settings.localAsr.enable")}
               </button>
             </div>
-            {dl && dlTargetId === "polish" && (
-              <div style={{ marginTop: 10 }}>
-                <div className="field-hint" style={{ marginBottom: 4 }}>
-                  {dl.message || dl.file_name} · {fmtSize(dl.total_downloaded)} /{" "}
-                  {fmtSize(dl.total_size)}
+          </div>
+        </div>
+        {translateModels.length === 0 ? (
+          <span className="field-hint">{t("settings.polish.statusLoading")}</span>
+        ) : (
+          sortedTranslateModels.map((m) => {
+            const selected = m.active && m.installed;
+            const isDownloadingThis = (dlTargetId === m.id || dl?.target_id === m.id) && !!dl;
+            return (
+              <div
+                key={m.id}
+                data-model-id={m.id}
+                className={`local-model-card${selected ? " local-model-card--active" : ""}`}
+              >
+                <div className="row-between" style={{ marginBottom: 6, alignItems: "flex-start" }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      {m.title}
+                      {m.recommended && (
+                        <span className="badge badge-success" style={{ fontSize: 11 }}>
+                          {t("settings.localAsr.recommended")}
+                        </span>
+                      )}
+                      {selected && (
+                        <span className="badge badge-success" style={{ fontSize: 11 }}>
+                          {t("settings.localAsr.inUse")}
+                        </span>
+                      )}
+                      {m.perf_tag && (
+                        <span
+                          className="badge"
+                          style={{
+                            fontSize: 11,
+                            background:
+                              m.perf_tag.kind === "suitable"
+                                ? "rgba(52, 199, 89, 0.14)"
+                                : m.perf_tag.kind === "usable"
+                                  ? "rgba(255, 149, 0, 0.14)"
+                                  : "rgba(255, 59, 48, 0.12)",
+                            color:
+                              m.perf_tag.kind === "suitable"
+                                ? "var(--success)"
+                                : m.perf_tag.kind === "usable"
+                                  ? "var(--warning)"
+                                  : "var(--danger)",
+                          }}
+                          title={m.perf_tag.reason}
+                        >
+                          {m.perf_tag.tag}
+                        </span>
+                      )}
+                    </div>
+                    <div className="field-hint" style={{ marginBottom: 0 }}>
+                      {m.description}
+                    </div>
+                  </div>
+                  <span className={`badge ${m.installed ? "badge-success" : "badge-warning"}`} style={{ flexShrink: 0 }}>
+                    <span className="badge-dot" />
+                    {m.installed
+                      ? t("settings.localAsr.installedBadge")
+                      : t("settings.localAsr.notInstalledBadge")}
+                  </span>
                 </div>
-                <div
-                  style={{
-                    height: 6,
-                    borderRadius: 3,
-                    background: "var(--border)",
-                    overflow: "hidden",
-                  }}
-                >
-                  <div
-                    style={{
-                      height: "100%",
-                      width: `${
-                        dl.total_size
-                          ? Math.min(100, (100 * dl.total_downloaded) / dl.total_size)
-                          : 0
-                      }%`,
-                      background: "var(--accent)",
-                      transition: "width 0.2s",
-                    }}
-                  />
+
+                {isDownloadingThis && dl && dl.phase !== "done" && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div className="row-between" style={{ marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                        {dl.message || dl.file_name} · {fmtSize(dl.total_downloaded)} / {fmtSize(dl.total_size)}
+                      </span>
+                      <span style={{ fontSize: 12, color: "var(--text-secondary)", flexShrink: 0 }}>
+                        {dl.total_size > 0
+                          ? `${Math.min(100, Math.round((dl.total_downloaded / dl.total_size) * 100))}%`
+                          : ""}
+                        {dl.speed_bps > 0 ? ` · ${fmtSize(dl.speed_bps)}/s` : ""}
+                      </span>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 3, background: "var(--border)", overflow: "hidden" }}>
+                      <div
+                        style={{
+                          height: "100%",
+                          borderRadius: 3,
+                          background: "var(--accent)",
+                          width: `${dl.total_size > 0 ? Math.min(100, (dl.total_downloaded / dl.total_size) * 100) : 0}%`,
+                          transition: "width 0.2s",
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="row-between" style={{ marginTop: 6, gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                    {m.installed
+                      ? t("settings.localAsr.approxSize", { size: fmtSize(m.approx_size) })
+                      : t("settings.localAsr.needDownloadSize", { size: fmtSize(m.missing_size || m.approx_size) })}
+                  </span>
+                  <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
+                    {!m.installed && (
+                      <button
+                        className="btn btn-sm"
+                        disabled={!!dl}
+                        onClick={async () => {
+                          setDlError(null);
+                          setDlTargetId(m.id);
+                          try {
+                            await ipc.installLlmModel(m.id);
+                          } catch (e) {
+                            setDlError(String(e));
+                            setDlTargetId(null);
+                          }
+                        }}
+                      >
+                        {isDownloadingThis ? t("common.downloading") : t("settings.localAsr.downloadBtn")}
+                      </button>
+                    )}
+                    <button
+                      className="btn btn-sm"
+                      disabled={!m.installed || selected || !!dl}
+                      title={
+                        !m.installed
+                          ? t("settings.localAsr.enableTipInstallFirst")
+                          : selected
+                            ? t("settings.localAsr.enableTipCurrent")
+                            : t("settings.localAsr.enableTipAction")
+                      }
+                      onClick={async () => {
+                        try {
+                          await ipc.setActiveTranslateModel(m.id);
+                          ipc.listLocalTranslateModels().then((l) => setTranslateModels(l)).catch(() => {});
+                          ipc.getModelSuiteInfo().then(setSuiteInfo).catch(() => {});
+                        } catch (e) {
+                          setMsg({ ok: false, text: String(e) });
+                        }
+                      }}
+                    >
+                      {selected ? t("settings.localAsr.enabled") : t("settings.localAsr.enable")}
+                    </button>
+                    {m.installed && (
+                      <button
+                        className="btn btn-sm btn-icon"
+                        title={t("settings.localAsr.deleteModelTitle")}
+                        onClick={async () => {
+                          if (!window.confirm(t("settings.localAsr.confirmDeleteModel", { title: m.title }))) return;
+                          try {
+                            await ipc.deleteLlmModel(m.id);
+                            ipc.listLocalTranslateModels().then((l) => setTranslateModels(l)).catch(() => {});
+                            ipc.getModelSuiteInfo().then(setSuiteInfo).catch(() => {});
+                          } catch (e) {
+                            alert(t("settings.localAsr.deleteFailed", { error: e }));
+                          }
+                        }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
-            )}
-            {dlError && dlTargetId === "polish" && (
-              <span className="field-hint" style={{ color: "var(--danger)", display: "block", marginTop: 6 }}>
-                {dlError}
-              </span>
-            )}
-          </>
+            );
+          })
+        )}
+        {dlError && dlTargetId && dlTargetId !== "sensevoice" && !asrModels.some((m) => m.id === dlTargetId) && (
+          <span className="field-hint" style={{ color: "var(--danger)", display: "block", marginTop: 6 }}>
+            {dlError}
+          </span>
         )}
       </div>
 
@@ -863,9 +1463,32 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
             <span className="slider" />
           </label>
         </div>
-        <span className="field-hint" style={{ display: "block", marginTop: 6 }}>
-          {t("settings.roles.hint")}
-        </span>
+        <div className="set-row" style={{ marginTop: 4 }}>
+          <div>
+            <div className="set-name">{t("settings.roles.assistantNameLabel")}</div>
+            <div className="set-desc">{t("settings.roles.assistantNameDesc")}</div>
+          </div>
+          <input
+            className="assistant-name-input"
+            defaultValue={config.assistant_name ?? "小友"}
+            onChange={(e) => {
+              // IME 组合中不更新（避免把拼音中间态存进配置并同步进词典）。
+              if ((e.nativeEvent as InputEvent).isComposing) return;
+              const v = e.target.value.trim();
+              if (v !== (config.assistant_name ?? "小友")) {
+                setConfig({ ...config, assistant_name: v });
+              }
+            }}
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v !== (config.assistant_name ?? "小友")) {
+                setConfig({ ...config, assistant_name: v });
+              }
+            }}
+            placeholder={t("settings.roles.assistantNamePh")}
+            style={{ width: 120, height: 30, fontSize: 13, textAlign: "center" }}
+          />
+        </div>
         <div className="roles-layout">
           {/* 左：角色 / 风格包列表 */}
           <div className="roles-list">
@@ -1003,9 +1626,10 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                     <label className="field-label">{t("settings.roles.providerLabel")}</label>
                     <select
                       key={`${selectedPack.id}-provider`}
-                      defaultValue={selectedPack.provider ?? "cloud"}
+                      defaultValue={selectedPack.provider ?? ""}
                       onChange={(e) => savePack(selectedPack, { provider: e.target.value || null })}
                     >
+                      <option value="">{t("settings.roles.providerFollow")}</option>
                       <option value="cloud">{t("settings.roles.providerCloud")}</option>
                       <option value="local">{t("settings.roles.providerLocal")}</option>
                     </select>
@@ -1290,10 +1914,29 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                     disk: fmtSize(systemInfo.disk_free),
                     silicon: systemInfo.is_apple_silicon ? t("settings.localAsr.appleSilicon") : "",
                   })}
+                  {suiteInfo &&
+                    t("settings.localLlm.budgetBar", {
+                      used: fmtSize(suiteInfo.used_bytes),
+                      budget: fmtSize(suiteInfo.budget_bytes),
+                    })}
                 </span>
               ) : (
                 <span style={{ flex: 1 }}>{t("settings.localAsr.collecting")}</span>
               )}
+              <button
+                className="btn btn-sm btn-ghost"
+                style={{ fontSize: 11, flexShrink: 0 }}
+                onClick={async () => {
+                  try {
+                    const p = await ipc.openModelDirectory();
+                    setMsg({ ok: true, text: t("settings.localLlm.openDirOk", { path: p }) });
+                  } catch (e) {
+                    setMsg({ ok: false, text: String(e) });
+                  }
+                }}
+              >
+                {t("settings.localLlm.openDir")}
+              </button>
               <button
                 className="btn btn-sm btn-ghost"
                 style={{ fontSize: 11, flexShrink: 0 }}
@@ -1322,39 +1965,6 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                 ? asrModels
                 : [
                     {
-                      id: "firered-large",
-                      title: t("settings.localAsr.models.firered_large.title"),
-                      description: t("settings.localAsr.models.firered_large.desc"),
-                      backend: "offline_fire_red",
-                      recommended: true,
-                      approx_size: 1_739_000_000,
-                      installed: false,
-                      active: false,
-                      missing_size: 1_739_000_000,
-                    },
-                    {
-                      id: "zipformer-zh-xlarge",
-                      title: t("settings.localAsr.models.zipformer_zh_xlarge.title"),
-                      description: t("settings.localAsr.models.zipformer_zh_xlarge.desc"),
-                      backend: "streaming_zipformer",
-                      recommended: false,
-                      approx_size: 771_000_000,
-                      installed: false,
-                      active: false,
-                      missing_size: 771_000_000,
-                    },
-                    {
-                      id: "zipformer-zh-2025",
-                      title: t("settings.localAsr.models.zipformer_zh_2025.title"),
-                      description: t("settings.localAsr.models.zipformer_zh_2025.desc"),
-                      backend: "streaming_zipformer",
-                      recommended: false,
-                      approx_size: 167_000_000,
-                      installed: false,
-                      active: false,
-                      missing_size: 167_000_000,
-                    },
-                    {
                       id: "sensevoice",
                       title: t("settings.localAsr.models.sensevoice.title"),
                       description: t("settings.localAsr.models.sensevoice.desc"),
@@ -1364,6 +1974,28 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                       installed: false,
                       active: false,
                       missing_size: 240_000_000,
+                    },
+                    {
+                      id: "funasr-nano-int8",
+                      title: t("settings.localAsr.models.funasr_nano_int8.title"),
+                      description: t("settings.localAsr.models.funasr_nano_int8.desc"),
+                      backend: "offline_funasr_nano",
+                      recommended: false,
+                      approx_size: 993_000_000,
+                      installed: false,
+                      active: false,
+                      missing_size: 993_000_000,
+                    },
+                    {
+                      id: "funasr-nano-fp16",
+                      title: t("settings.localAsr.models.funasr_nano_fp16.title"),
+                      description: t("settings.localAsr.models.funasr_nano_fp16.desc"),
+                      backend: "offline_funasr_nano",
+                      recommended: false,
+                      approx_size: 1_586_000_000,
+                      installed: false,
+                      active: false,
+                      missing_size: 1_586_000_000,
                     },
                   ];
 
@@ -1984,7 +2616,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
       <div className="card">
         <h2 className="card-title">{t("settings.fnTest.title")}</h2>
         <span className="field-hint" style={{ display: "block", marginBottom: 12 }}>
-          {t(IS_WIN ? "settings.fnTest.hintWin" : "settings.fnTest.hint")}
+          {t(IS_WIN ? "settings.fnTest.hintWin" : "settings.fnTest.hint", { key: hotkeyDisplay })}
         </span>
 
         {/* 状态指示 */}

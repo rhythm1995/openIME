@@ -303,8 +303,11 @@ impl HistoryStore for SqliteStore {
 
 // ──────────────────────── 热词词典 ────────────────────────
 
-/// 一条热词。Fun-ASR/Sherpa 通过热词加权提升特定术语识别率；
-/// 百炼通过 vocabulary_id 引用服务端词表。
+/// 一条热词。生效路径：L0 拼音同音纠错（`correct_l0`：与热词同音的片段替换为热词）
+/// 与润色 LLM 提示词（专有名词保留写法）。
+/// 注意：本地 sherpa ASR（SenseVoice / FunASR Nano）不支持热词偏置——sherpa-onnx
+/// 仅 transducer 系模型支持热词（且需 modified_beam_search 解码），故热词不影响
+/// ASR 解码本身，只作用于识别之后的文本纠错。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Hotword {
     pub id: String,
@@ -594,82 +597,47 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// 内置风格包种子（仅空表时）：正式 / 口语 / commit message。
-    pub fn seed_builtin_style_packs_if_empty(&self) -> Result<()> {
-        if !self.list_style_packs()?.is_empty() {
-            return Ok(());
+    /// 已下架的内置纯风格包 id（正式 / 口语 / commit message）。
+    /// 本地三件套方案后不再引导「风格包」概念，内置只保留前缀角色包。
+    pub const LEGACY_BUILTIN_STYLE_PACK_IDS: [&str; 3] =
+        ["builtin-formal", "builtin-casual", "builtin-commit"];
+
+    /// 一次性清理已下架的内置风格包（幂等，每次启动跑）。
+    ///
+    /// 内置包不受 `delete_style_pack` 的 is_builtin=0 限制，直接 SQL 删。
+    /// 返回被删的 id 列表（调用方据此清 `active_style_pack_id` 悬空引用）。
+    pub fn remove_legacy_builtin_style_packs(&self) -> Result<Vec<String>> {
+        let conn = self.conn()?;
+        let mut removed = Vec::new();
+        for id in Self::LEGACY_BUILTIN_STYLE_PACK_IDS {
+            let n = conn
+                .execute("DELETE FROM style_packs WHERE id=? AND is_builtin=1", [id])
+                .map_err(|e| {
+                    Error::Store(format!("remove_legacy_builtin_style_packs 失败: {e}"))
+                })?;
+            if n > 0 {
+                removed.push(id.to_string());
+            }
         }
-        let builtins = [
-            (
-                "builtin-formal",
-                "正式",
-                "请用正式、简洁的书面语输出，适合工作消息。",
-                0,
-            ),
-            (
-                "builtin-casual",
-                "口语",
-                "请保持口语自然，略作通顺即可，不要过于书面。",
-                1,
-            ),
-            (
-                "builtin-commit",
-                "commit message",
-                "请把内容整理成简洁的 git commit message（动词开头、祈使句、不超 50 字）。",
-                2,
-            ),
-        ];
-        for (id, name, prompt, ord) in builtins {
-            self.upsert_style_pack(&StylePack {
-                id: id.into(),
-                name: name.into(),
-                system_prompt: prompt.into(),
-                is_builtin: true,
-                ord,
-                match_prefix: None,
-                provider: None,
-                model: None,
-                role_kind: RoleKind::Default,
-                output_mode: OutputMode::Insert,
-            })?;
-        }
-        Ok(())
+        Ok(removed)
     }
 
     /// R5：内置前缀包种子——按 id 补缺失项（不清空用户对内置包的修改，
     /// 只插入不存在的 id；用户厌恶种子时把 match_prefix 清空即可，不被重新种回）。
+    /// 已存在的内置包会同步 `ord`（内置排序非用户改动，保证「翻译」排第一）。
     pub fn seed_builtin_prefix_packs_if_missing(&self) -> Result<()> {
         let existing: Vec<String> = self.list_style_packs()?.into_iter().map(|p| p.id).collect();
-        let builtins: [(&str, &str, &str, RoleKind, &str, i32); 3] = [
-            (
-                "builtin-role-mail",
-                "邮件",
-                "邮件|mail|写邮件",
-                RoleKind::Default,
-                "你是中文语音输入助手。请把语音内容改写为正式得体的邮件正文，\
-                 只输出邮件正文本身（含称呼与落款），不要解释、不要加引号。",
-                10,
-            ),
-            (
-                "builtin-role-translate",
-                "翻译",
-                "翻译|translate|译",
-                RoleKind::Translate,
-                // fallback prompt：命中 translate 角色实际走 translate_text；本 prompt 仅兜底。
-                "把语音内容翻译成目标语言，只输出译文。",
-                11,
-            ),
-            (
-                "builtin-role-cmd",
-                "命令",
-                "命令|command|指令",
-                RoleKind::Default,
-                "你是命令行助手。把语音内容转换为一条可直接粘贴执行的命令，\
-                 只输出命令本身，不要解释、不要代码块标记。",
-                12,
-            ),
-        ];
-        for (id, name, prefix, kind, prompt, ord) in builtins {
+        {
+            let conn = self.conn()?;
+            for (id, _, _, _, _, ord) in BUILTIN_PREFIX_PACKS {
+                conn.execute(
+                    "UPDATE style_packs SET ord=? WHERE id=? AND is_builtin=1",
+                    params![ord, id],
+                )
+                .map_err(|e| Error::Store(format!("内置角色 ord 同步失败: {e}")))?;
+            }
+        }
+        for (id, name, prefix, kind, prompt, ord) in BUILTIN_PREFIX_PACKS {
             if existing.iter().any(|e| e == id) {
                 continue;
             }
@@ -688,7 +656,120 @@ impl SqliteStore {
         }
         Ok(())
     }
+
+    /// 同步「助手名+角色别名」组合热词（每次启动执行，幂等）。
+    ///
+    /// 组合词（小友翻译 / 小友邮件 / 小友命令 …）写入热词表后，L0 拼音纠错把
+    /// ASR 错写的同音组合（小又翻忆 等）精准纠回——前缀角色的触发锚定在自定义
+    /// 非常见词上，不再依赖 ASR 标点输出。
+    ///
+    /// - settings 记录上次同步的助手名；**改名时删除旧组合词、写入新组合**
+    ///   （仅限本机制写入的组合词，用户手动加的词不动）。
+    /// - 助手名为空：删旧组合、不写入（功能关闭）。
+    /// - 一次性清理旧设计的裸别名热词（翻译/邮件/写邮件/命令/指令），
+    ///   避免残留误纠（「明令」→「命令」）。
+    ///
+    /// 热词生效路径说明：本地 ASR（SenseVoice / FunASR Nano）不支持 sherpa 原生
+    /// 热词偏置（仅 transducer 系模型支持），热词走 L0 拼音同音纠错。
+    pub fn sync_assistant_combo_hotwords(&self, assistant_name: &str) -> Result<()> {
+        const LAST_NAME_KEY: &str = "assistant_hotwords_synced_name";
+        const LEGACY_FLAG: &str = "builtin_prefix_alias_hotwords_seeded";
+        let name = assistant_name.trim().to_string();
+        if self.get_setting(LAST_NAME_KEY)?.as_deref() == Some(name.as_str()) {
+            return Ok(()); // 助手名未变：组合词已在库。
+        }
+        // 改名（或迁移）：删掉旧助手名的组合词（只删本机制写入的组合）。
+        let renamed_from = self.get_setting(LAST_NAME_KEY)?;
+        if let Some(old) = renamed_from.as_deref() {
+            self.remove_combo_hotwords(old)?;
+        }
+        // 一次性清理旧设计的裸别名热词。
+        if self.get_setting(LEGACY_FLAG)?.is_some() {
+            for word in ["翻译", "邮件", "写邮件", "命令", "指令"] {
+                self.delete_hotword_by_word(word)?;
+            }
+            self.set_setting(LEGACY_FLAG, "cleaned")?;
+        }
+        // 写入新组合词（仅纯汉字组合；英文组合无拼音不参与纠错）。
+        let packs = self.list_style_packs()?;
+        let combos: Vec<String> = crate::polish::assistant_combo_words(&name, &packs)
+            .into_iter()
+            .filter(|w| is_all_hanzi(w))
+            .collect();
+        if !combos.is_empty() {
+            self.add_hotwords_batch(&combos)?;
+        }
+        self.set_setting(LAST_NAME_KEY, &name)?;
+        tracing::info!(
+            "助手组合热词已同步：{}（新增 {} 词；原名 {:?} 的组合词已删除）",
+            if name.is_empty() {
+                "（空，功能关闭）"
+            } else {
+                &name
+            },
+            combos.len(),
+            renamed_from.as_deref().unwrap_or("")
+        );
+        Ok(())
+    }
+
+    /// 删除某助手名下的全部组合热词（按词精确匹配，找不到则跳过）。
+    fn remove_combo_hotwords(&self, assistant_name: &str) -> Result<()> {
+        let packs = self.list_style_packs()?;
+        let words = crate::polish::assistant_combo_words(assistant_name, &packs);
+        for w in words {
+            self.delete_hotword_by_word(&w)?;
+        }
+        Ok(())
+    }
+
+    /// 按词删除一条热词（词表 UI 之外的程序化清理用；不存在则静默）。
+    fn delete_hotword_by_word(&self, word: &str) -> Result<()> {
+        if let Some(h) = self.list_hotwords()?.into_iter().find(|h| h.word == word) {
+            self.delete_hotword(&h.id)?;
+        }
+        Ok(())
+    }
 }
+
+/// 全汉字判定（拼音非空且覆盖全部字符）。
+fn is_all_hanzi(s: &str) -> bool {
+    use pinyin::ToPinyin;
+    let n = s.chars().count();
+    n > 0 && s.to_pinyin().flatten().count() == n
+}
+
+/// 内置前缀角色包清单（与 [`SqliteStore::seed_builtin_prefix_packs_if_missing`] 共享）。
+/// ord 即列表排序：翻译排第一（最高频角色），邮件、命令随后。
+const BUILTIN_PREFIX_PACKS: [(&str, &str, &str, RoleKind, &str, i32); 3] = [
+    (
+        "builtin-role-translate",
+        "翻译",
+        "翻译|translate|译",
+        RoleKind::Translate,
+        // fallback prompt：命中 translate 角色实际走 translate_text；本 prompt 仅兜底。
+        "把语音内容翻译成目标语言，只输出译文。",
+        10,
+    ),
+    (
+        "builtin-role-mail",
+        "邮件",
+        "邮件|mail|写邮件",
+        RoleKind::Default,
+        "你是中文语音输入助手。请把语音内容改写为正式得体的邮件正文，\
+         只输出邮件正文本身（含称呼与落款），不要解释、不要加引号。",
+        11,
+    ),
+    (
+        "builtin-role-cmd",
+        "命令",
+        "命令|command|指令",
+        RoleKind::Default,
+        "你是命令行助手。把语音内容转换为一条可直接粘贴执行的命令，\
+         只输出命令本身，不要解释、不要代码块标记。",
+        12,
+    ),
+];
 
 fn role_kind_str(k: RoleKind) -> String {
     match k {
@@ -883,13 +964,27 @@ mod tests {
     #[test]
     fn style_packs_crud_and_seed() {
         let store = SqliteStore::open_in_memory().unwrap();
-        store.seed_builtin_style_packs_if_empty().unwrap();
+        // 内置纯风格包（正式/口语/commit）已下架，不再种子；手动 upsert 三个做 CRUD 验证。
+        let mut seed = 0;
+        for id in ["builtin-formal", "builtin-casual", "builtin-commit"] {
+            store
+                .upsert_style_pack(&StylePack {
+                    id: id.into(),
+                    name: format!("包{id}"),
+                    system_prompt: "test".into(),
+                    is_builtin: true,
+                    ord: seed,
+                    match_prefix: None,
+                    provider: None,
+                    model: None,
+                    role_kind: RoleKind::Default,
+                    output_mode: OutputMode::Insert,
+                })
+                .unwrap();
+            seed += 1;
+        }
         let packs = store.list_style_packs().unwrap();
         assert_eq!(packs.len(), 3);
-        assert!(packs.iter().any(|p| p.name == "正式"));
-        // 再 seed 不重复
-        store.seed_builtin_style_packs_if_empty().unwrap();
-        assert_eq!(store.list_style_packs().unwrap().len(), 3);
         // upsert 自定义
         store
             .upsert_style_pack(&StylePack {
@@ -906,11 +1001,84 @@ mod tests {
             })
             .unwrap();
         assert_eq!(store.list_style_packs().unwrap().len(), 4);
-        // 删自定义 OK，删内置无效
+        // 删自定义 OK，删内置无效（常规删除通道）
         store.delete_style_pack("my").unwrap();
         assert_eq!(store.list_style_packs().unwrap().len(), 3);
         store.delete_style_pack("builtin-formal").unwrap();
-        assert_eq!(store.list_style_packs().unwrap().len(), 3); // 内置删不掉
+        assert_eq!(store.list_style_packs().unwrap().len(), 3); // 常规通道删不掉内置
+    }
+
+    #[test]
+    fn legacy_builtin_style_packs_removed_and_idempotent() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        // 造一个已下架内置包 + 一个自建包。
+        for (id, builtin) in [("builtin-formal", true), ("my-own", false)] {
+            store
+                .upsert_style_pack(&StylePack {
+                    id: id.into(),
+                    name: id.into(),
+                    system_prompt: "p".into(),
+                    is_builtin: builtin,
+                    ord: 0,
+                    match_prefix: None,
+                    provider: None,
+                    model: None,
+                    role_kind: RoleKind::Default,
+                    output_mode: OutputMode::Insert,
+                })
+                .unwrap();
+        }
+        let removed = store.remove_legacy_builtin_style_packs().unwrap();
+        assert_eq!(removed, vec!["builtin-formal".to_string()]);
+        // 只删内置下架包，自建包不受影响。
+        let ids: Vec<String> = store
+            .list_style_packs()
+            .unwrap()
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(ids, vec!["my-own".to_string()]);
+        // 幂等：再跑一遍无返回。
+        assert!(store
+            .remove_legacy_builtin_style_packs()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn prefix_pack_seed_syncs_builtin_ord_translate_first() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.seed_builtin_prefix_packs_if_missing().unwrap();
+        let packs = store.list_style_packs().unwrap();
+        // 翻译排第一（ord 10），邮件 11、命令 12。
+        assert_eq!(packs[0].id, "builtin-role-translate");
+        assert_eq!(packs[0].ord, 10);
+        assert_eq!(packs[1].id, "builtin-role-mail");
+        assert_eq!(packs[2].id, "builtin-role-cmd");
+
+        // 已有库（旧 ord：mail=10 在前）→ seed 后内置排序被同步为翻译第一，
+        // 但用户改过的 match_prefix 不被覆盖。
+        let store2 = SqliteStore::open_in_memory().unwrap();
+        store2
+            .upsert_style_pack(&StylePack {
+                id: "builtin-role-mail".into(),
+                name: "邮件".into(),
+                system_prompt: "p".into(),
+                is_builtin: true,
+                ord: 10,
+                match_prefix: None, // 用户清空（禁用该角色）
+                provider: None,
+                model: None,
+                role_kind: RoleKind::Default,
+                output_mode: OutputMode::Insert,
+            })
+            .unwrap();
+        store2.seed_builtin_prefix_packs_if_missing().unwrap();
+        let packs = store2.list_style_packs().unwrap();
+        assert_eq!(packs[0].id, "builtin-role-translate", "翻译应排第一");
+        let mail = packs.iter().find(|p| p.id == "builtin-role-mail").unwrap();
+        assert_eq!(mail.ord, 11, "内置 ord 应被同步");
+        assert_eq!(mail.match_prefix, None, "用户清空的前缀不得被种回");
     }
 
     #[test]
@@ -1024,6 +1192,93 @@ mod tests {
         let mail = packs.iter().find(|p| p.id == "builtin-role-mail").unwrap();
         assert_eq!(mail.match_prefix, None, "种子不得覆盖用户清空的前缀");
         assert_eq!(mail.system_prompt, "自定义");
+    }
+
+    #[test]
+    fn assistant_combo_hotwords_synced_and_renamed() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.seed_builtin_prefix_packs_if_missing().unwrap();
+        // 首次同步：组合词入库（纯汉字组合；英文组合过滤）。
+        store.sync_assistant_combo_hotwords("小友").unwrap();
+        let words: Vec<String> = store
+            .list_hotwords()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.word)
+            .collect();
+        for w in [
+            "小友翻译",
+            "小友译",
+            "小友邮件",
+            "小友写邮件",
+            "小友命令",
+            "小友指令",
+        ] {
+            assert!(words.contains(&w.to_string()), "缺少组合热词 {w}");
+        }
+        for w in ["小友translate", "小友mail", "小友command"] {
+            assert!(!words.contains(&w.to_string()), "{w} 不应入热词（无拼音）");
+        }
+        // 同名再跑：幂等不重复。
+        store.sync_assistant_combo_hotwords("小友").unwrap();
+        assert_eq!(store.list_hotwords().unwrap().len(), 6);
+
+        // 改名：旧组合删除、新组合写入；用户手动加的词不受影响。
+        store.add_hotword("我的自定义词", 1).unwrap();
+        store.sync_assistant_combo_hotwords("阿法").unwrap();
+        let words: Vec<String> = store
+            .list_hotwords()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.word)
+            .collect();
+        assert!(!words.contains(&"小友翻译".to_string()), "旧组合应删除");
+        assert!(words.contains(&"阿法翻译".to_string()), "新组合应写入");
+        assert!(words.contains(&"我的自定义词".to_string()), "用户词不动");
+
+        // 助手名改空：删组合不写入（功能关闭）。
+        store.sync_assistant_combo_hotwords("").unwrap();
+        let words: Vec<String> = store
+            .list_hotwords()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.word)
+            .collect();
+        assert!(!words.contains(&"阿法翻译".to_string()), "空名应删组合");
+        assert!(words.contains(&"我的自定义词".to_string()));
+    }
+
+    #[test]
+    fn legacy_bare_alias_hotwords_cleaned_once() {
+        // 旧设计种的裸别名热词（含 flag）→ 首次同步时清理，防「明令→命令」类误纠残留。
+        let store = SqliteStore::open_in_memory().unwrap();
+        store.seed_builtin_prefix_packs_if_missing().unwrap();
+        store
+            .set_setting("builtin_prefix_alias_hotwords_seeded", "1")
+            .unwrap();
+        for w in ["翻译", "邮件", "写邮件", "命令", "指令"] {
+            store.add_hotword(w, 1).unwrap();
+        }
+        store.sync_assistant_combo_hotwords("小友").unwrap();
+        let words: Vec<String> = store
+            .list_hotwords()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.word)
+            .collect();
+        assert!(!words.contains(&"翻译".to_string()), "裸别名应被清理");
+        assert!(!words.contains(&"命令".to_string()), "裸别名应被清理");
+        assert!(words.contains(&"小友翻译".to_string()), "组合词正常写入");
+        // 用户后来手动加回的裸别名不再被清（flag 已消费）。
+        store.add_hotword("翻译", 1).unwrap();
+        store.sync_assistant_combo_hotwords("小友").unwrap();
+        let words: Vec<String> = store
+            .list_hotwords()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.word)
+            .collect();
+        assert!(words.contains(&"翻译".to_string()), "用户手动加回的词不动");
     }
 
     #[test]

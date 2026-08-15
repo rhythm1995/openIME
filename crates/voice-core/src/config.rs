@@ -157,6 +157,19 @@ pub enum PolishPolicy {
     Off,
 }
 
+/// 翻译路由策略（本地三件套方案）：与润色相反，默认云端优先。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TranslatePolicy {
+    /// 云 → 专翻 → 兼译 → 原文（有网默认走云）。
+    #[default]
+    #[serde(rename = "prefer_cloud")]
+    PreferCloud,
+    /// 专翻 → 兼译 → 云 → 原文（隐私/离线优先）。
+    #[serde(rename = "prefer_local")]
+    PreferLocal,
+}
+
 /// 应用级配置。持久化到 settings 表 / 配置文件。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -242,14 +255,28 @@ pub struct AppConfig {
     /// 翻译目标语言（BCP-47 短码，固定下拉闭集）。默认 "en"。
     #[serde(default = "default_translate_target_lang")]
     pub translate_target_lang: String,
-    /// 「先润色再翻译」一次调用（哨兵合成）。
+    /// 「先润色再翻译」：云端仍哨兵合成；本地 = Light 源语纠错再译（两步，禁哨兵）。
     #[serde(default)]
     pub translate_with_polish: bool,
+    // ── 本地三件套：本地翻译 ──
+    /// 本地专翻模型 id：`milmmt-1b` | `hy-mt-1.8b` | ""（未选）。
+    #[serde(default = "default_translate_local_model")]
+    pub translate_local_model: String,
+    /// 弱机兼译：专翻装不下/未装时用润色模型兼做翻译（同一颗 Qwen3.5，两步）。
+    #[serde(default)]
+    pub translate_use_llm_fallback: bool,
+    /// 翻译路由策略：PreferCloud（默认）/ PreferLocal。
+    #[serde(default)]
+    pub translate_policy: TranslatePolicy,
 
     // ── P1：R5 前缀角色 ──
     /// 识别结果前缀分流到角色（风格包）。开启时听写强制整段插入（关流式上屏）。
     #[serde(default = "default_true")]
     pub prefix_roles_enabled: bool,
+    /// R5：助手名称——「助手名+角色别名」组合触发前缀角色（如「小友翻译…」「小友邮件…」）。
+    /// 组合词写入热词精准纠错。空串 = 前缀角色不触发。
+    #[serde(default = "default_assistant_name")]
+    pub assistant_name: String,
 
     // ── P1：R6 划词问答 ──
     /// QA 快捷键（None = 不注册；P1 仅 Toggle）。
@@ -321,6 +348,12 @@ fn default_local_language() -> String {
 fn default_translate_target_lang() -> String {
     "en".into()
 }
+fn default_translate_local_model() -> String {
+    "milmmt-1b".into()
+}
+fn default_assistant_name() -> String {
+    "小友".into()
+}
 fn default_true() -> bool {
     true
 }
@@ -358,8 +391,9 @@ fn default_file_seg_overlap_secs() -> u32 {
     4
 }
 
-/// 默认本地润色模型（Qwen2.5-1.5B-Instruct GGUF Q4_K_M）。
-pub const POLISH_DEFAULT_LOCAL_MODEL: &str = "qwen2.5-1.5b-instruct-q4_k_m";
+/// 默认本地润色模型（本地三件套冻结目录：配置缺省时先落 2B 均衡档，
+/// 推荐器在设置页首次打开后按机型改写为 0.8/2/4）。
+pub const POLISH_DEFAULT_LOCAL_MODEL: &str = "qwen3.5-2b";
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -398,7 +432,11 @@ impl Default for AppConfig {
             translate_hotkey: None,
             translate_target_lang: default_translate_target_lang(),
             translate_with_polish: false,
+            translate_local_model: default_translate_local_model(),
+            translate_use_llm_fallback: false,
+            translate_policy: TranslatePolicy::PreferCloud,
             prefix_roles_enabled: true,
+            assistant_name: default_assistant_name(),
             qa_hotkey: None,
             qa_save_history: false,
             insert_strategy: InsertStrategy::Auto,
@@ -438,6 +476,21 @@ impl AppConfig {
             self.local_asr_model.as_str()
         };
         crate::model_download::normalize_asr_model_id(raw).to_string()
+    }
+
+    /// 当前启用的本地润色模型 id（规范化；旧 1.5B 配置映射到 2B 档）。
+    pub fn resolved_polish_local_model(&self) -> String {
+        crate::llm_catalog::normalize_polish_model_id(&self.polish_local_model).to_string()
+    }
+
+    /// 当前启用的本地专翻模型 id（规范化；空 = 未选专翻）。
+    pub fn resolved_translate_local_model(&self) -> String {
+        let t = self.translate_local_model.trim();
+        if t.is_empty() {
+            String::new()
+        } else {
+            t.to_lowercase()
+        }
     }
 
     /// 规范化 local_asr_model，并同步 local_mode / sherpa provider.model。
@@ -628,6 +681,39 @@ mod tests {
     }
 
     #[test]
+    fn llm_suite_fields_have_defaults() {
+        // 本地三件套新字段全部 #[serde(default)]：旧 JSON 可反序列化。
+        let c = AppConfig::default();
+        assert_eq!(c.translate_local_model, "milmmt-1b");
+        assert!(!c.translate_use_llm_fallback);
+        assert_eq!(c.translate_policy, TranslatePolicy::PreferCloud);
+        assert_eq!(c.polish_local_model, "qwen3.5-2b");
+    }
+
+    #[test]
+    fn translate_policy_serde_snake_case() {
+        let p: TranslatePolicy = serde_json::from_str("\"prefer_cloud\"").unwrap();
+        assert_eq!(p, TranslatePolicy::PreferCloud);
+        let p: TranslatePolicy = serde_json::from_str("\"prefer_local\"").unwrap();
+        assert_eq!(p, TranslatePolicy::PreferLocal);
+        assert_eq!(
+            serde_json::to_string(&TranslatePolicy::PreferCloud).unwrap(),
+            "\"prefer_cloud\""
+        );
+    }
+
+    #[test]
+    fn legacy_polish_model_resolves_to_2b() {
+        // T11：旧 polish_local_model=qwen2.5-1.5b-… 读配置时映射到 qwen3.5-2b，不读旧文件。
+        let mut c = AppConfig::default();
+        c.polish_local_model = "qwen2.5-1.5b-instruct-q4_k_m".into();
+        assert_eq!(c.resolved_polish_local_model(), "qwen3.5-2b");
+        // 空 translate_local_model = 未选专翻。
+        c.translate_local_model = "".into();
+        assert_eq!(c.resolved_translate_local_model(), "");
+    }
+
+    #[test]
     fn p2_fields_have_defaults() {
         let c = AppConfig::default();
         assert_eq!(c.short_press_ms, 300);
@@ -676,6 +762,36 @@ mod tests {
         assert!(c.fn_repost_enabled);
         assert_eq!(c.file_seg_duration_secs, 60);
         assert_eq!(c.file_seg_overlap_secs, 4);
+    }
+
+    #[test]
+    fn legacy_config_without_llm_suite_fields_deserializes() {
+        // 三件套新字段（translate_local_model / fallback / policy）缺失的旧 JSON
+        // 仍可反序列化，且默认值与 Default::default() 一致（llm_suite_fields_have_defaults
+        // 只测 Default 路径，这里钉住 serde default 路径）。
+        let json = r#"{
+            "active_provider": 0,
+            "providers": [],
+            "hotkey": "Fn",
+            "mute_other_audio": false
+        }"#;
+        let c: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.translate_local_model, "milmmt-1b");
+        assert!(!c.translate_use_llm_fallback);
+        assert_eq!(c.translate_policy, TranslatePolicy::PreferCloud);
+        assert_eq!(c.polish_local_model, "qwen3.5-2b");
+    }
+
+    #[test]
+    fn resolved_translate_local_model_normalizes_input() {
+        // trim + 小写归一；未知 id 原样（小写化后）透传，不强制目录内。
+        let mut c = AppConfig {
+            translate_local_model: " MiLMMT-1B ".into(),
+            ..Default::default()
+        };
+        assert_eq!(c.resolved_translate_local_model(), "milmmt-1b");
+        c.translate_local_model = "Hy-MT-1.8B".into();
+        assert_eq!(c.resolved_translate_local_model(), "hy-mt-1.8b");
     }
 
     #[test]

@@ -16,6 +16,50 @@ use crate::Error;
 
 pub const TARGET: AudioFormat = AudioFormat::PCM_16K_MONO_S16LE;
 
+/// 定窗样本缓冲：跨批累积 f32 样本，按固定窗口（如 silero VAD 的 512）切片输出。
+///
+/// sherpa 流式引擎的驱动线程用它把不定长的音频批次拼成 VAD 要求的定长窗口；
+/// 不足一窗的尾部保留在缓冲里，等下一批到齐再切（不丢样本、不提前喂窗）。
+/// 尾部残余不在此 flush——录音结束时由 VAD flush + 尾部零填充兜底。
+#[derive(Debug)]
+pub struct WindowBuffer {
+    window: usize,
+    buf: Vec<f32>,
+}
+
+impl WindowBuffer {
+    /// `window` 须 ≥1，否则返回 [`Error::Audio`]。
+    pub fn new(window: usize) -> crate::Result<Self> {
+        if window < 1 {
+            return Err(Error::Audio("窗口大小须 ≥1".into()));
+        }
+        Ok(Self {
+            window,
+            buf: Vec::new(),
+        })
+    }
+
+    /// 追加一批样本（可空）。
+    pub fn push(&mut self, samples: &[f32]) {
+        self.buf.extend_from_slice(samples);
+    }
+
+    /// 弹出下一个完整窗口（按输入顺序）；不足一窗返回 `None`，残余保留。
+    pub fn next_window(&mut self) -> Option<Vec<f32>> {
+        if self.buf.len() < self.window {
+            return None;
+        }
+        let rest = self.buf.split_off(self.window);
+        let window = std::mem::replace(&mut self.buf, rest);
+        Some(window)
+    }
+
+    /// 当前不足一窗的残余样本数。
+    pub fn pending(&self) -> usize {
+        self.buf.len()
+    }
+}
+
 /// 把 mono f32 样本（范围 [-1,1]，任意采样率）重采样为目标采样率的 LE-i16 PCM。
 ///
 /// `input_sr` 是输入采样率；`chunk` 是一帧的 mono f32 样本。
@@ -296,6 +340,94 @@ impl AudioSource for CpalAudioSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── WindowBuffer：定窗样本缓冲（sherpa 流式引擎 VAD 喂数用）──────────
+
+    /// 构造 [v, v+1, ...] 的样本序列，便于断言窗口内容与顺序。
+    fn seq(start: usize, n: usize) -> Vec<f32> {
+        (start..start + n).map(|i| i as f32).collect()
+    }
+
+    #[test]
+    fn window_buffer_rejects_zero_window() {
+        let err = WindowBuffer::new(0).unwrap_err();
+        assert!(err.to_string().contains("窗口大小"), "got: {err}");
+    }
+
+    #[test]
+    fn window_buffer_empty_push_yields_nothing() {
+        let mut wb = WindowBuffer::new(512).unwrap();
+        wb.push(&[]);
+        assert!(wb.next_window().is_none());
+        assert_eq!(wb.pending(), 0);
+    }
+
+    #[test]
+    fn window_buffer_below_window_keeps_pending() {
+        let mut wb = WindowBuffer::new(512).unwrap();
+        wb.push(&seq(0, 100));
+        assert!(wb.next_window().is_none());
+        assert_eq!(wb.pending(), 100);
+    }
+
+    #[test]
+    fn window_buffer_exact_window_yields_one_and_drains() {
+        let mut wb = WindowBuffer::new(512).unwrap();
+        wb.push(&seq(0, 512));
+        let w = wb.next_window().unwrap();
+        assert_eq!(w, seq(0, 512));
+        assert!(wb.next_window().is_none());
+        assert_eq!(wb.pending(), 0);
+    }
+
+    #[test]
+    fn window_buffer_leftover_carries_across_batches() {
+        // 600 → 1 窗（0..512）余 88；再 push 424 → 余 88 + 新 424 = 512 恰好一窗，
+        // 且内容与原始流严格连续（512..1024）。
+        let mut wb = WindowBuffer::new(512).unwrap();
+        wb.push(&seq(0, 600));
+        assert_eq!(wb.next_window().unwrap(), seq(0, 512));
+        assert_eq!(wb.pending(), 88);
+        wb.push(&seq(600, 424));
+        assert_eq!(wb.next_window().unwrap(), seq(512, 512));
+        assert!(wb.next_window().is_none());
+        assert_eq!(wb.pending(), 0);
+    }
+
+    #[test]
+    fn window_buffer_large_batch_slices_contiguously() {
+        // 2000 = 3×512 + 464：三次取窗内容连续，最后余 464。
+        let mut wb = WindowBuffer::new(512).unwrap();
+        wb.push(&seq(0, 2000));
+        assert_eq!(wb.next_window().unwrap(), seq(0, 512));
+        assert_eq!(wb.next_window().unwrap(), seq(512, 512));
+        assert_eq!(wb.next_window().unwrap(), seq(1024, 512));
+        assert!(wb.next_window().is_none());
+        assert_eq!(wb.pending(), 464);
+    }
+
+    #[test]
+    fn window_buffer_preserves_order_and_values() {
+        // 非顺序值：确认缓冲不重排、不改值。
+        let mut wb = WindowBuffer::new(4).unwrap();
+        wb.push(&[0.5, -0.25, 0.125, -1.0, 0.75]);
+        assert_eq!(wb.next_window().unwrap(), vec![0.5, -0.25, 0.125, -1.0]);
+        assert_eq!(wb.pending(), 1);
+        wb.push(&[0.9, 0.1, -0.7]);
+        assert_eq!(wb.next_window().unwrap(), vec![0.75, 0.9, 0.1, -0.7]);
+        assert_eq!(wb.pending(), 0);
+    }
+
+    #[test]
+    fn window_buffer_window_one_emits_every_sample() {
+        // 边界：窗口=1 时每个样本各成一窗（不吞样本）。
+        let mut wb = WindowBuffer::new(1).unwrap();
+        wb.push(&[1.0, 2.0, 3.0]);
+        assert_eq!(wb.next_window().unwrap(), vec![1.0]);
+        assert_eq!(wb.next_window().unwrap(), vec![2.0]);
+        assert_eq!(wb.next_window().unwrap(), vec![3.0]);
+        assert!(wb.next_window().is_none());
+    }
 
     #[test]
     fn f32_to_s16le_clamps_and_converts() {

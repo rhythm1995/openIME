@@ -6,12 +6,22 @@ const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
+// 捕获每个事件的 handler，供测试手动触发（下载进度等）。
+const listenHandlers = new Map<string, (e: { payload: unknown }) => void>();
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+  listen: vi.fn((event: string, handler: (e: { payload: unknown }) => void) => {
+    listenHandlers.set(event, handler);
+    return Promise.resolve(() => {});
+  }),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn().mockResolvedValue(null),
 }));
+
+/** 触发一次后端事件（如 model://download-progress）。 */
+function emitBackend(event: string, payload: unknown) {
+  listenHandlers.get(event)?.({ payload });
+}
 
 // 与 Rust AppConfig::default + p1-design「AppConfig 默认值」表对齐。
 const defaultConfig = {
@@ -25,6 +35,7 @@ const defaultConfig = {
   polish_enabled: false,
   polish_mode: "off",
   polish_policy: "prefer_local",
+  polish_local_model: "qwen3.5-2b",
   polish_cloud_model: "qwen-turbo",
   polish_cloud_protocol: "openai_chat",
   polish_cloud_endpoint: "",
@@ -34,6 +45,10 @@ const defaultConfig = {
   translate_hotkey: null,
   translate_target_lang: "en",
   translate_with_polish: false,
+  // 本地三件套新字段。
+  translate_local_model: "milmmt-1b",
+  translate_use_llm_fallback: false,
+  translate_policy: "prefer_cloud",
   prefix_roles_enabled: true,
   qa_hotkey: null,
   qa_save_history: false,
@@ -72,6 +87,7 @@ function engineSelect(container: HTMLElement): HTMLSelectElement {
 describe("Settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    listenHandlers.clear();
   });
 
   it("渲染 4 种识别引擎选项", async () => {
@@ -155,6 +171,361 @@ describe("Settings", () => {
     }
   });
 
+  // ── 本地三件套 ──
+
+  it("AI 视图渲染本地模型卡片：打开目录 / 预算条 / 兼译开关 / 策略下拉", async () => {
+    mockInvoke({
+      get_config: defaultConfig,
+      list_local_polish_models: [
+        {
+          id: "qwen3.5-2b",
+          kind: "polish",
+          title: "均衡 · Qwen3.5-2B",
+          description: "离线润色 · 约 1.4GB · 16GB 默认。",
+          approx_size: 1_396_198_496,
+          installed: false,
+          active: true,
+          missing_size: 1_396_198_496,
+          perf_tag: { tag: "适合", kind: "suitable", reason: "ok", color: "var(--success)" },
+          recommended: true,
+          arch: "qwen35",
+        },
+      ],
+      list_local_translate_models: [],
+      get_model_suite_info: {
+        model_root: "/tmp/models",
+        budget_bytes: 10 * 1024 * 1024 * 1024,
+        used_bytes: 3 * 1024 * 1024 * 1024,
+        has_cloud: false,
+        weak_machine: false,
+        llm_feature: true,
+      },
+    });
+    render(<Settings view="ai" />);
+    expect(await screen.findByText("本地模型")).toBeTruthy();
+    expect(screen.getByText("打开模型目录")).toBeTruthy();
+    expect(await screen.findByText("用润色模型兼做翻译")).toBeTruthy();
+    expect(screen.getByText("翻译路由策略")).toBeTruthy();
+    expect(await screen.findByText(/均衡 · Qwen3\.5-2B/)).toBeTruthy();
+    expect(await screen.findByText(/预算/)).toBeTruthy();
+  });
+
+  it("打开模型目录按钮调用 open_model_directory", async () => {
+    mockInvoke({
+      get_config: defaultConfig,
+      open_model_directory: "/tmp/models",
+    });
+    render(<Settings view="ai" />);
+    const btn = await screen.findByRole("button", { name: /打开模型目录/ });
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("open_model_directory"),
+    );
+  });
+
+  // ── 快捷键捕获 ──
+
+  it("录音快捷键：点击后按键直接捕获并写入配置（挂起真实快捷键）", async () => {
+    mockInvoke({ get_config: defaultConfig });
+    render(<Settings />);
+    await screen.findByText("录音快捷键");
+    const btn = screen.getByRole("button", { name: "Fn" });
+    fireEvent.click(btn);
+    // 捕获态：后端挂起真实快捷键。
+    expect(invokeMock).toHaveBeenCalledWith("set_capture_suspend", { suspend: true });
+    // 按下 Ctrl+Alt+T。
+    fireEvent.keyDown(window, { key: "Control", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "t", ctrlKey: true, altKey: true });
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("save_app_config", expect.objectContaining({
+        config: expect.objectContaining({ hotkey: "Ctrl+Alt+T" }),
+      })),
+      { timeout: 2500 },
+    );
+    // 捕获结束：恢复快捷键。
+    expect(invokeMock).toHaveBeenCalledWith("set_capture_suspend", { suspend: false });
+  });
+
+  it("翻译/QA 快捷键为可选：清除按钮置空", async () => {
+    mockInvoke({
+      get_config: {
+        ...defaultConfig,
+        translate_hotkey: "Alt+Shift+T",
+      },
+    });
+    render(<Settings />);
+    await screen.findByText("翻译快捷键（可选）");
+    const clear = screen.getByTitle("清除");
+    fireEvent.click(clear);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("save_app_config", expect.objectContaining({
+        config: expect.objectContaining({ translate_hotkey: null }),
+      })),
+      { timeout: 2500 },
+    );
+  });
+
+  it("快捷键捕获：Esc 取消，值不变且不保存", async () => {
+    mockInvoke({ get_config: defaultConfig });
+    render(<Settings />);
+    await screen.findByText("录音快捷键");
+    fireEvent.click(screen.getByRole("button", { name: "Fn" }));
+    expect(invokeMock).toHaveBeenCalledWith("set_capture_suspend", { suspend: true });
+    fireEvent.keyDown(window, { key: "Escape" });
+    // Esc 退出捕获并恢复挂起；不产生任何保存。
+    expect(invokeMock).toHaveBeenCalledWith("set_capture_suspend", { suspend: false });
+    const saves = invokeMock.mock.calls.filter((c) => c[0] === "save_app_config");
+    expect(saves).toHaveLength(0);
+  });
+
+  it("快捷键捕获：录音键允许 CapsLock 单键；组合键字段忽略", async () => {
+    mockInvoke({ get_config: defaultConfig });
+    render(<Settings />);
+    await screen.findByText("录音快捷键");
+    // 录音键 allowSingle=true → CapsLock 直接生效。
+    fireEvent.click(screen.getByRole("button", { name: "Fn" }));
+    fireEvent.keyDown(window, { key: "CapsLock" });
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("save_app_config", expect.objectContaining({
+        config: expect.objectContaining({ hotkey: "CapsLock" }),
+      })),
+      { timeout: 2500 },
+    );
+  });
+
+  it("快捷键捕获：组合键字段对 CapsLock 不保存；仅修饰键显示半成品预览", async () => {
+    mockInvoke({ get_config: defaultConfig });
+    render(<Settings />);
+    await screen.findByText("翻译快捷键（可选）");
+    // 翻译/QA 两个可选快捷键都未设置：取第一个（翻译）。
+    const captureBtn = screen.getAllByRole("button", { name: /未设置/ })[0];
+    fireEvent.click(captureBtn);
+    // CapsLock 在组合键字段被忽略（不保存、仍处捕获态）。
+    fireEvent.keyDown(window, { key: "CapsLock" });
+    // 只按 Ctrl：按钮显示 "Ctrl+…" 半成品，不保存。
+    fireEvent.keyDown(window, { key: "Control", ctrlKey: true });
+    expect(screen.getByRole("button", { name: "Ctrl+…" })).toBeTruthy();
+    const saves = invokeMock.mock.calls.filter((c) => c[0] === "save_app_config");
+    expect(saves).toHaveLength(0);
+    fireEvent.keyDown(window, { key: "Escape" });
+  });
+
+  // ── LLM 卡片操作：下载 / 启用 / 删除 ──
+
+  const polishEntry = (over: Partial<Record<string, unknown>>): Record<string, unknown> => ({
+    id: "qwen3.5-2b",
+    kind: "polish",
+    title: "均衡 · Qwen3.5-2B",
+    description: "d",
+    approx_size: 1_396_198_496,
+    installed: false,
+    active: false,
+    missing_size: 1_396_198_496,
+    perf_tag: { tag: "适合", kind: "suitable", reason: "", color: "var(--success)" },
+    recommended: false,
+    arch: "qwen35",
+    ...over,
+  });
+
+  it("未安装卡片：点下载调用 install_llm_model", async () => {
+    mockInvoke({
+      get_config: defaultConfig,
+      list_local_polish_models: [polishEntry({})],
+    });
+    render(<Settings view="ai" />);
+    const btn = await screen.findByRole("button", { name: "下载" });
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("install_llm_model", { id: "qwen3.5-2b" }),
+    );
+  });
+
+  it("已安装卡片：点启用调用 set_active_polish_model", async () => {
+    mockInvoke({
+      get_config: defaultConfig,
+      list_local_polish_models: [polishEntry({ installed: true })],
+    });
+    const { container } = render(<Settings view="ai" />);
+    await screen.findByText(/均衡 · Qwen3\.5-2B/);
+    // 「启用」按钮在润色卡与翻译 none 卡各有一个：限定本卡范围。
+    const card = container.querySelector('[data-model-id="qwen3.5-2b"]')!;
+    const enable = Array.from(card.querySelectorAll("button")).find(
+      (b) => b.textContent === "启用",
+    ) as HTMLButtonElement;
+    fireEvent.click(enable);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_active_polish_model", { modelId: "qwen3.5-2b" }),
+    );
+  });
+
+  it("删除模型：confirm 取消不调用；确认后调用 delete_llm_model", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    mockInvoke({
+      get_config: defaultConfig,
+      list_local_polish_models: [polishEntry({ installed: true })],
+    });
+    render(<Settings view="ai" />);
+    await screen.findByText(/均衡 · Qwen3\.5-2B/);
+    const del = screen.getByTitle("删除该模型（释放磁盘）");
+    fireEvent.click(del);
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "delete_llm_model",
+      expect.anything(),
+    );
+    confirmSpy.mockReturnValue(true);
+    fireEvent.click(del);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("delete_llm_model", { id: "qwen3.5-2b" }),
+    );
+    confirmSpy.mockRestore();
+  });
+
+  it("下载进度事件挂到对应卡片：按钮变下载中", async () => {
+    mockInvoke({
+      get_config: defaultConfig,
+      list_local_polish_models: [polishEntry({})],
+    });
+    render(<Settings view="ai" />);
+    await screen.findByRole("button", { name: "下载" });
+    // 后端推进度（target_id 指向该卡）→ 按钮进入「下载中…」态。
+    emitBackend("model://download-progress", {
+      phase: "downloading",
+      target_id: "qwen3.5-2b",
+      total_downloaded: 500,
+      total_size: 1000,
+      speed_bps: 1024,
+    });
+    expect(await screen.findByRole("button", { name: "下载中…" })).toBeTruthy();
+  });
+
+  // ── 策略 / 兼译变更保存 ──
+
+  it("翻译策略下拉变更后防抖保存 prefer_local", async () => {
+    mockInvoke({ get_config: defaultConfig, list_style_packs: [] });
+    render(<Settings view="ai" />);
+    await screen.findByText("翻译路由策略");
+    const policy = screen
+      .getByText("翻译路由策略")
+      .closest(".field")!
+      .querySelector("select") as HTMLSelectElement;
+    fireEvent.change(policy, { target: { value: "prefer_local" } });
+    await waitFor(
+      () =>
+        expect(invokeMock).toHaveBeenCalledWith(
+          "save_app_config",
+          expect.objectContaining({
+            config: expect.objectContaining({ translate_policy: "prefer_local" }),
+          }),
+        ),
+      { timeout: 2500 },
+    );
+  });
+
+  it("兼译开关打开后防抖保存 translate_use_llm_fallback", async () => {
+    mockInvoke({ get_config: defaultConfig, list_style_packs: [] });
+    render(<Settings view="ai" />);
+    await screen.findByText("用润色模型兼做翻译");
+    const toggle = screen
+      .getByText("用润色模型兼做翻译")
+      .closest(".set-row")!
+      .querySelector('input[type="checkbox"]') as HTMLInputElement;
+    fireEvent.click(toggle);
+    await waitFor(
+      () =>
+        expect(invokeMock).toHaveBeenCalledWith(
+          "save_app_config",
+          expect.objectContaining({
+            config: expect.objectContaining({ translate_use_llm_fallback: true }),
+          }),
+        ),
+      { timeout: 2500 },
+    );
+  });
+
+  // ── 模型排序与「不使用本地专翻」卡片 ──
+
+  it("润色模型列表：机器推荐的档排第一", async () => {
+    mockInvoke({
+      get_config: defaultConfig,
+      list_local_polish_models: [
+        {
+          id: "qwen3.5-0.8b",
+          kind: "polish",
+          title: "极速 · Qwen3.5-0.8B",
+          description: "d",
+          approx_size: 532_517_120,
+          installed: false,
+          active: false,
+          missing_size: 532_517_120,
+          perf_tag: { tag: "适合", kind: "suitable", reason: "", color: "var(--success)" },
+          recommended: false,
+          arch: "qwen35",
+        },
+        {
+          id: "qwen3.5-2b",
+          kind: "polish",
+          title: "均衡 · Qwen3.5-2B",
+          description: "d",
+          approx_size: 1_396_198_496,
+          installed: false,
+          active: true,
+          missing_size: 1_396_198_496,
+          perf_tag: { tag: "适合", kind: "suitable", reason: "", color: "var(--success)" },
+          recommended: true,
+          arch: "qwen35",
+        },
+      ],
+    });
+    const { container } = render(<Settings view="ai" />);
+    // 等列表真正渲染出来（静态标签不等待数据）。
+    await screen.findByText(/均衡 · Qwen3\.5-2B/);
+    const ids = Array.from(container.querySelectorAll("[data-model-id]")).map(
+      (el) => el.getAttribute("data-model-id"),
+    );
+    // 推荐档（2B）排第一；「不使用本地专翻」卡片（none）在翻译区、随其后。
+    expect(ids.indexOf("qwen3.5-2b")).toBeLessThan(ids.indexOf("qwen3.5-0.8b"));
+  });
+
+  it("不使用本地专翻：启用后绿色「无需安装」+ 已启用；弱机加推荐标", async () => {
+    mockInvoke({
+      get_config: { ...defaultConfig, translate_local_model: "" },
+      get_model_suite_info: {
+        model_root: "/tmp/models",
+        budget_bytes: 10 * 1024 * 1024 * 1024,
+        used_bytes: 2 * 1024 * 1024 * 1024,
+        has_cloud: true,
+        weak_machine: true,
+        llm_feature: true,
+      },
+    });
+    render(<Settings view="ai" />);
+    expect(await screen.findByText("无需安装")).toBeTruthy();
+    expect(screen.getByText("已启用")).toBeTruthy();
+    // 弱机 → 该选项是推荐模型，带「推荐」徽标。
+    expect(await screen.findByText("推荐")).toBeTruthy();
+  });
+
+  it("键位文案跟随当前录音键（改键位不误导）", async () => {
+    // 默认 Fn：短按阈值提示按 Fn 表述。
+    mockInvoke({ get_config: defaultConfig });
+    render(<Settings />);
+    await screen.findByText("录音快捷键");
+    expect(screen.getByText(/按住 Fn 超过该时长才开录/)).toBeTruthy();
+    // 功能测试卡提示也含 Fn。
+    expect(screen.getByText(/按 Fn 开始录音/)).toBeTruthy();
+  });
+
+  it("改录音键后键位文案跟随新键", async () => {
+    mockInvoke({ get_config: { ...defaultConfig, hotkey: "Ctrl+Alt+T" } });
+    render(<Settings />);
+    await screen.findByText("录音快捷键");
+    expect(screen.getByText(/按住 Ctrl\+Alt\+T 超过该时长才开录/)).toBeTruthy();
+    expect(screen.getByText(/按 Ctrl\+Alt\+T 开始录音/)).toBeTruthy();
+    // 不再出现写死的 Fn 表述。
+    expect(screen.queryByText(/按住 Fn 超过该时长才开录/)).toBeNull();
+  });
+
   it("渲染插入策略与剪贴板恢复开关", async () => {
     mockInvoke({ get_config: defaultConfig });
     const { container } = render(<Settings />);
@@ -171,6 +542,44 @@ describe("Settings", () => {
     render(<Settings view="ai" />);
     expect(await screen.findByText("角色 / 风格包")).toBeTruthy();
     expect(screen.getByText("启用前缀角色")).toBeTruthy();
+    // 组合触发说明与「跟随 AI 润色」。
+    expect(screen.getByText(/小友翻译我想要走了/)).toBeTruthy();
+    expect(screen.getByText(/与 AI 润色相同的模型/)).toBeTruthy();
+    // 助手名称输入框默认值。
+    expect(await screen.findByDisplayValue("小友")).toBeTruthy();
+  });
+
+  it("助手名称修改后防抖保存", async () => {
+    mockInvoke({ get_config: defaultConfig, list_style_packs: [] });
+    render(<Settings view="ai" />);
+    const input = await screen.findByDisplayValue("小友");
+    fireEvent.blur(input, { target: { value: "阿法" } });
+    await waitFor(
+      () =>
+        expect(invokeMock).toHaveBeenCalledWith(
+          "save_app_config",
+          expect.objectContaining({
+            config: expect.objectContaining({ assistant_name: "阿法" }),
+          }),
+        ),
+      { timeout: 2500 },
+    );
+  });
+
+  it("角色提供商下拉默认「跟随 AI 润色」", async () => {
+    mockInvoke({
+      get_config: defaultConfig,
+      list_style_packs: [
+        { id: "b-mail", name: "邮件助手", system_prompt: "写一封正式邮件", is_builtin: true, ord: 0, match_prefix: "邮件|mail", provider: null, model: null, role_kind: "default", output_mode: "insert" },
+      ],
+    });
+    render(<Settings view="ai" />);
+    expect(await screen.findByText(/邮件助手/)).toBeTruthy();
+    const provider = await screen.findByDisplayValue("跟随 AI 润色（默认）");
+    expect(provider).toBeTruthy();
+    // 三选项：跟随 / 云端 / 本地。
+    expect(screen.getByRole("option", { name: "云端" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "本地 GGUF" })).toBeTruthy();
   });
 
   it("渲染划词问答设置", async () => {
