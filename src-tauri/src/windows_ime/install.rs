@@ -323,4 +323,26 @@ mod tests {
             ImeInstallStatus::RegistrationBroken { .. }
         ));
     }
+
+    /// guid_bytes：CLSID 字面量 → 16 字节（data1 前 4 字节大端）。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn guid_bytes_matches_clsid_literal() {
+        let b = guid_bytes(super::super::protocol::OPENIME_TEXT_SERVICE_CLSID);
+        // data1 = 0x3F8A1C2E → 前 4 字节 3F 8A 1C 2E。
+        assert_eq!(&b[..4], &[0x3F, 0x8A, 0x1C, 0x2E]);
+    }
+
+    /// 候选路径必须包含 dev 构建产物目录（build.rs 输出）。
+    #[test]
+    fn dll_candidates_include_manifest_ime_dir() {
+        let cands = dll_candidate_paths(None);
+        assert!(
+            cands.iter().any(|p| {
+                p.to_string_lossy().contains("ime")
+                    && p.file_name().map(|f| f == "OpenImeTsf.dll").unwrap_or(false)
+            }),
+            "候选应含 ime/OpenImeTsf.dll 形态：{cands:?}"
+        );
+    }
 }

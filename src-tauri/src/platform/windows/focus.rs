@@ -317,4 +317,25 @@ mod tests {
         destroy_test_window(w_iconic);
         destroy_test_window(w_hidden);
     }
+
+    /// R11：frontmost_process_info 应返回与 GetWindowThreadProcessId 一致的 pid/tid，
+    /// 且本机（x64 原生进程前台）machine 为 AMD64。
+    #[test]
+    fn frontmost_process_info_matches_window_thread() {
+        let _guard = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let info = frontmost_process_info().expect("交互会话应有前台窗口");
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            assert!(!hwnd.0.is_null());
+            let mut pid = 0u32;
+            let tid = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            assert_eq!(info.pid, pid, "pid 应与前台窗口一致");
+            assert_eq!(info.tid, tid, "tid 应与前台窗口线程一致");
+        }
+        assert_eq!(
+            info.machine,
+            crate::windows_ime::protocol::IMAGE_FILE_MACHINE_AMD64,
+            "本机前台进程应为 AMD64"
+        );
+    }
 }

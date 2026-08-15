@@ -209,6 +209,181 @@ pub fn submit_text_frame(session_id: &str, text: &str) -> ImeProtocolMessage {
 mod tests {
     use super::*;
 
+    /// 功能回路（真机，Stage B 宿主侧）：本进程内起一个 mock TIP 管道 server，
+    /// 验证 IpcClient 全链路——WaitNamedPipe/CreateFile 连接、server pid 校验、
+    /// clientReady 读取、SubmitText 写入、SubmitResult 匹配。
+    /// mock server 与 client 同进程 → GetNamedPipeServerProcessId == 本 pid ✓。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn ipc_client_loopback_with_mock_pipe_server() {
+        // 管道读写走 Win32 API，无需 std::io trait。
+
+        let server_tid_holder = std::sync::Arc::new(std::sync::Mutex::new(0u32));
+        let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server = {
+            let tid_holder = server_tid_holder.clone();
+            let ready = ready.clone();
+            std::thread::Builder::new()
+                .name("mock-ime-pipe".into())
+                .spawn(move || {
+                    use windows::Win32::Storage::FileSystem::ReadFile;
+                    use windows::Win32::Storage::FileSystem::WriteFile;
+                    use windows::Win32::System::Pipes::CreateNamedPipeW;
+
+                    let tid = unsafe {
+                        windows::Win32::System::Threading::GetCurrentThreadId()
+                    };
+                    *tid_holder.lock().unwrap() = tid;
+                    let name = ime_pipe_name_for_target(std::process::id(), tid);
+                    let name16: Vec<u16> = name
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect();
+                    let pipe = unsafe {
+                        CreateNamedPipeW(
+                            windows::core::PCWSTR(name16.as_ptr()),
+                            windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX,
+                            windows::Win32::System::Pipes::PIPE_TYPE_BYTE
+                                | windows::Win32::System::Pipes::PIPE_READMODE_BYTE,
+                            1,
+                            64 * 1024,
+                            64 * 1024,
+                            0,
+                            None,
+                        )
+                    }
+                    ;  // HANDLE（INVALID 由后续调用失败暴露）
+                    ready.store(true, std::sync::atomic::Ordering::SeqCst);
+                    // 等宿主连接（同步 ConnectNamedPipe）。
+                    unsafe {
+                        use windows::Win32::System::Pipes::ConnectNamedPipe;
+                        let _ = ConnectNamedPipe(pipe, None);
+                    }
+                    let write_line = |line: &str| unsafe {
+                        let mut written = 0u32;
+                        WriteFile(pipe, Some(line.as_bytes()), Some(&mut written), None)
+                            .is_ok()
+                            && written as usize == line.len()
+                    };
+                    // 1) 连接即宣告 clientReady（processId = 本 pid）。
+                    let ready_line = format!(
+                        "{{\"type\":\"clientReady\",\"protocolVersion\":1,\"processId\":{},\"threadId\":{}}}\n",
+                        std::process::id(),
+                        tid
+                    );
+                    assert!(write_line(&ready_line), "clientReady 写入失败");
+                    // 2) 读 SubmitText（同步 8KiB 一轮，找换行）。
+                    let mut buf = [0u8; 8192];
+                    let mut pending = Vec::new();
+                    let submit_text = loop {
+                        let mut got = 0u32;
+                        assert!(
+                            unsafe {
+                                ReadFile(pipe, Some(&mut buf), Some(&mut got), None)
+                            }
+                            .is_ok()
+                        );
+                        pending.extend_from_slice(&buf[..got as usize]);
+                        if let Some(pos) = pending.iter().position(|&b| b == b'\n') {
+                            let line: Vec<u8> = pending.drain(..pos).collect();
+                            let line = String::from_utf8_lossy(&line).into_owned();
+                            let msg: ImeProtocolMessage =
+                                serde_json::from_str(&line).expect("宿主帧应可解析");
+                            if matches!(msg, ImeProtocolMessage::SubmitText { .. }) {
+                                break msg;
+                            }
+                        }
+                    };
+                    // 3) 回 committed（原 sessionId 透传）。
+                    let ImeProtocolMessage::SubmitText { session_id, text, .. } =
+                        submit_text
+                    else {
+                        unreachable!()
+                    };
+                    let result = ImeProtocolMessage::SubmitResult {
+                        protocol_version: 1,
+                        session_id,
+                        status: ImeSubmitStatus::Committed,
+                        error_code: None,
+                    };
+                    let mut line = serde_json::to_string(&result).unwrap();
+                    line.push('\n');
+                    assert!(write_line(&line), "submitResult 写入失败");
+                    let _ = text; // mock 不消费文本
+                    unsafe {
+                        let _ = windows::Win32::Storage::FileSystem::FlushFileBuffers(pipe);
+                        let _ =
+                            windows::Win32::System::Pipes::DisconnectNamedPipe(pipe);
+                        let _ = windows::Win32::Foundation::CloseHandle(pipe);
+                    }
+                })
+                .expect("mock server 线程启动失败")
+        };
+
+        // 等 mock server 建管并记录 tid。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !ready.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(std::time::Instant::now() < deadline, "mock server 未就绪");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let server_tid = *server_tid_holder.lock().unwrap();
+
+        // 宿主侧：连接 + clientReady（pid=本 pid → 校验通过）。
+        let client = connect_and_wait_ready(std::process::id(), server_tid, 2000)
+            .expect("连接与 clientReady 应成功");
+        // SubmitText → 读回 Committed。
+        let sid = uuid::Uuid::new_v4().to_string();
+        assert!(client.write_message(&submit_text_frame(&sid, "回路测试你好")));
+        let mut got = None;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while got.is_none() && std::time::Instant::now() < deadline {
+            if let Some(frame) = client.read_message(200) {
+                got = Some(frame);
+            }
+        }
+        let frame = got.expect("应读到 submitResult");
+        assert_eq!(
+            interpret_result(Some(frame), &sid),
+            Ok(ImeSubmitStatus::Committed)
+        );
+        server.join().unwrap();
+    }
+
+    /// 错误 pid（server=本进程，谎报目标 pid）→ 连上后必须被 pid 校验拒绝。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn ipc_client_rejects_server_pid_mismatch() {
+        use windows::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeW};
+
+        // 场景：仿冒者在「目标进程的管道名」下建管（fake_pid），但 server 实际是
+        // 另一个进程（本测试进程）。宿主连上后 GetNamedPipeServerProcessId 不符 → 拒绝。
+        let fake_pid = std::process::id().wrapping_add(1);
+        let name = ime_pipe_name_for_target(fake_pid, 0xdead);
+        let name16: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        let pipe = unsafe {
+            CreateNamedPipeW(
+                windows::core::PCWSTR(name16.as_ptr()),
+                windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX,
+                windows::Win32::System::Pipes::PIPE_TYPE_BYTE,
+                1,
+                4096,
+                4096,
+                0,
+                None,
+            )
+        };
+        // HANDLE 非 Send：按 usize 桥接进线程。
+        let pipe_as_usize = pipe.0 as usize;
+        let acceptor = std::thread::spawn(move || unsafe {
+            let pipe = windows::Win32::Foundation::HANDLE(pipe_as_usize as *mut _);
+            let _ = ConnectNamedPipe(pipe, None);
+            let _ = windows::Win32::Foundation::CloseHandle(pipe);
+        });
+        let r = connect_and_wait_ready(fake_pid, 0xdead, 1500);
+        assert!(matches!(r, Err(IpcConnectError::ServerPidMismatch)));
+        acceptor.join().unwrap();
+    }
+
     #[test]
     fn committed_result_maps_ok() {
         let ok = ImeProtocolMessage::SubmitResult {

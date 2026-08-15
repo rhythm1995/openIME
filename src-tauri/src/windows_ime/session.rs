@@ -407,11 +407,58 @@ mod tests {
     #[test]
     fn guid_literal_roundtrip() {
         for lit in [
-            super::super::protocol::OPENIME_TEXT_SERVICE_CLSID,
-            super::super::protocol::OPENIME_PROFILE_GUID,
+            crate::windows_ime::protocol::OPENIME_TEXT_SERVICE_CLSID,
+            crate::windows_ime::protocol::OPENIME_PROFILE_GUID,
         ] {
             let g = guid_from_literal(lit);
             assert_eq!(guid_to_literal(&g), lit.to_ascii_uppercase());
         }
+    }
+
+    /// snapshot_from：KeyboardLayout / TextService 两种 profile 的映射。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn snapshot_maps_both_profile_kinds() {
+        use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
+        use windows::Win32::UI::TextServices::{
+            TF_INPUTPROCESSORPROFILE, TF_PROFILETYPE_INPUTPROCESSOR,
+            TF_PROFILETYPE_KEYBOARDLAYOUT,
+        };
+        let kb = TF_INPUTPROCESSORPROFILE {
+            dwProfileType: TF_PROFILETYPE_KEYBOARDLAYOUT,
+            langid: 0x0809,
+            hkl: HKL(0x0809 as *mut _),
+            ..Default::default()
+        };
+        assert_eq!(
+            snapshot_from(&kb),
+            Some(ImeProfileSnapshot::KeyboardLayout {
+                lang: 0x0809,
+                hkl: 0x809,
+            })
+        );
+
+        let ts = TF_INPUTPROCESSORPROFILE {
+            dwProfileType: TF_PROFILETYPE_INPUTPROCESSOR,
+            langid: 0x0804,
+            clsid: guid_from_literal(crate::windows_ime::protocol::OPENIME_TEXT_SERVICE_CLSID),
+            guidProfile: guid_from_literal(crate::windows_ime::protocol::OPENIME_PROFILE_GUID),
+            ..Default::default()
+        };
+        match snapshot_from(&ts) {
+            Some(ImeProfileSnapshot::TextService { lang, clsid, profile_guid }) => {
+                assert_eq!(lang, 0x0804);
+                assert_eq!(clsid, crate::windows_ime::protocol::OPENIME_TEXT_SERVICE_CLSID);
+                assert_eq!(profile_guid, crate::windows_ime::protocol::OPENIME_PROFILE_GUID);
+            }
+            other => panic!("应映射为 TextService：{other:?}"),
+        }
+        // active_profile_is_openime：我们的 CLSID → true；微软拼音 → false。
+        assert!(active_profile_is_openime(&ts));
+        let ms = TF_INPUTPROCESSORPROFILE {
+            clsid: guid_from_literal("{81D4E9C9-1D3B-41BC-9E6C-4B40BF79E35E}"),
+            ..Default::default()
+        };
+        assert!(!active_profile_is_openime(&ms));
     }
 }

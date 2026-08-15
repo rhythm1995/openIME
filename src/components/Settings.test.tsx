@@ -263,4 +263,37 @@ describe("Settings", () => {
     const saveCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "save_app_config");
     expect(saveCalls.length).toBe(1);
   });
+
+  // R11：Windows UA 下显示 TSF 输入法状态卡（注册异常 → broken 文案 + 恢复按钮）。
+  it("Windows 下渲染 TSF 状态卡与恢复按钮", async () => {
+    // IS_WIN 是模块加载时常量 → 先 mock UA 再 resetModules 动态导入。
+    const originalUA = navigator.userAgent;
+    Object.defineProperty(navigator, "userAgent", {
+      value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) jsdom",
+      configurable: true,
+    });
+    try {
+      mockInvoke({
+        get_config: defaultConfig,
+        windows_ime_status: {
+          status: "registrationBroken",
+          dllPath: null,
+          usingTsf: true,
+        },
+      });
+      vi.resetModules();
+      const { default: SettingsWin } = await import("./Settings");
+      render(<SettingsWin />);
+      expect(await screen.findByText("TSF 输入法上屏（实验）")).toBeTruthy();
+      // 状态异步加载：等 broken 文案出现。
+      expect(await screen.findByText(/已注册但系统未收录/)).toBeTruthy();
+      expect(screen.getByText("恢复系统输入法")).toBeTruthy();
+    } finally {
+      Object.defineProperty(navigator, "userAgent", {
+        value: originalUA,
+        configurable: true,
+      });
+      vi.resetModules();
+    }
+  });
 });
