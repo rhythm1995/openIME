@@ -379,13 +379,26 @@ mod tests {
     fn from_config_tsf_disabled_on_non_windows_and_streaming() {
         // A11.8b：非 Windows 平台 tsf_enabled 恒 false；streaming=true 也 false。
         let cfg = AppConfig::default();
-        // R11：TSF FFI 落地前 windows_tsf_enabled 默认 false，因此 Windows 默认也不启用；
-        // FFI 落地、默认值改回 true 后，此断言需恢复为 #[cfg(not(windows))] 门控。
+        // R11 FFI 已落地但 Win11 per-user TIP 不被收录（需管理员 HKLM 注册），
+        // 默认 false 保持关闭；两平台非流式均不启用。
         assert!(!InsertOpts::from_config(&cfg, None, false).tsf_enabled);
+        // 流式增量恒不走 TSF（KC-8：chunk 禁止 Committed）。
         assert!(!InsertOpts::from_config(&cfg, None, true).tsf_enabled);
         // Default 漏填 = 静默降级。
         let d = InsertOpts::default();
         assert!(!d.tsf_enabled);
         assert!(!d.tsf_fallback);
+    }
+
+    /// KC-8：显式开启后（管理员注册 TSF 的用户），Windows 非流式 tsf_enabled=true。
+    #[cfg(windows)]
+    #[test]
+    fn from_config_tsf_respects_explicit_enable_on_windows() {
+        let cfg = AppConfig {
+            windows_tsf_enabled: true,
+            ..Default::default()
+        };
+        assert!(InsertOpts::from_config(&cfg, None, false).tsf_enabled);
+        assert!(!InsertOpts::from_config(&cfg, None, true).tsf_enabled);
     }
 }

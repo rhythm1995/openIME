@@ -22,3 +22,6 @@ dist/
 
 # 本机代码签名指纹（机器特定，不入库）
 scripts/signing-identity.fingerprint
+# TSF DLL 构建产物（build.rs 输出，不入库）
+src-tauri/ime/
+src-tauri/windows-ime/*.obj

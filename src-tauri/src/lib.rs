@@ -131,6 +131,18 @@ pub fn run() {
             // Fn 键监听供原生回调取用（块无捕获，只能走全局句柄）。
             let _ = APP_HANDLE.set(app.handle().clone());
 
+            // R11 阶段 A：TSF TIP 自检自注册（后台线程，不阻塞启动；仅 Windows 有实际动作）。
+            {
+                let app_handle = app.handle().clone();
+                std::thread::Builder::new()
+                    .name("tsf-self-register".into())
+                    .spawn(move || {
+                        let status = crate::windows_ime::install::ensure_registered(Some(&app_handle));
+                        log_info!("TSF TIP 状态：{status:?}");
+                    })
+                    .ok();
+            }
+
             // 托盘菜单（失败不阻塞启动：菜单栏 App 至少要能跑）。
             let open_main = MenuItem::with_id(app, "open_main", "打开主窗口", true, None::<&str>)?;
             let history = MenuItem::with_id(app, "history", "历史记录", true, None::<&str>)?;
@@ -353,6 +365,8 @@ pub fn run() {
             commands::qa_insert_last,
             commands::qa_clear,
             commands::qa_copy_last,
+            commands::windows_ime_status,
+            commands::windows_ime_restore_profile,
         ])
         .build(tauri::generate_context!())
         .expect("构建 Tauri 应用失败");

@@ -326,6 +326,14 @@
       "copy": "Copy answer",
       "insert": "Insert at caret"
     },
+    "tsf": {
+      "name": "TSF IME insertion (experimental)",
+      "installed": "Registered ({{path}}). Text will be committed via the IME — no focus stealing, no clipboard.",
+      "broken": "Registered but not listed by the system: Windows 11 requires one elevated regsvr32 (HKLM). Falling back to simulated typing.",
+      "notInstalled": "Not installed (DLL missing). Using simulated typing.",
+      "restoreBtn": "Restore system IME",
+      "restoreDone": "System default IME restored"
+    },
     "autoSaved": "Auto-saved"
   },
   "history": {

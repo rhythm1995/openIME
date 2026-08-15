@@ -326,6 +326,14 @@
       "copy": "复制回答",
       "insert": "插入光标"
     },
+    "tsf": {
+      "name": "TSF 输入法上屏（实验）",
+      "installed": "已注册（{{path}}）。语音文字将经输入法直接上屏，不抢焦点、不碰剪贴板。",
+      "broken": "已注册但系统未收录：Windows 11 需以管理员运行一次 regsvr32 注册（HKLM）。当前自动回退模拟按键。",
+      "notInstalled": "未安装（DLL 缺失）。当前使用模拟按键上屏。",
+      "restoreBtn": "恢复系统输入法",
+      "restoreDone": "已恢复系统默认输入法"
+    },
     "autoSaved": "已自动保存"
   },
   "history": {

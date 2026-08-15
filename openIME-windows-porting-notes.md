@@ -291,3 +291,40 @@ Hold 模式 delay-start 计时器在 tokio worker 上直接调 `on_record_hotkey
 - 修复：`fn_key::hide_window_raw(hwnd)`——`ShowWindow(SW_HIDE)` 直调（线程安全，零调度零超时）；`hide_overlay_only` 与 `trigger_toggle` 错误路径的 Windows 分支全部改走它（hwnd 获取失败才降级 `win.hide()`）。
 - 测试：`show_without_activating_keeps_foreground` 补「隐藏对称性」断言（show→可见→raw hide→不可见）；全量 310 绿 / clippy 0。
 - 真机验证：错误触发后 2s `visible=False`；连续快速触发后 `visible=False`；含一次完整成功录音（开录→停止→插入→还焦）后同样收起。
+
+---
+
+## 12. R11 TSF 输入法完整落地（2026-08-15）：代码全量交付 + Win11 per-user 注册限制
+
+### 12.1 已交付（全部编译进主构建）
+
+**C++ TIP DLL（`src-tauri/windows-ime/`，~950 行，cl.exe /MT /W4 /EHsc /std:c++17）**：
+- `ITfTextInputProcessorEx`：Activate 建隐藏消息窗口（激活线程收 WM_APP 提交）+ 管道 server；Deactivate 反向清理
+- `ITfEditSession`：GetSelection → SetText → 光标折叠（目标进程内 CommitText）
+- `ipc_server.cpp`：`\.\pipe\OpenImeCommit-{pid}-{tid}`（DACL 仅当前用户、FILE_FLAG_FIRST_PIPE_INSTANCE、OVERLAPPED 可中断）、手写最小 JSON parser、clientReady/SubmitText/SubmitResult/Ping
+- `registry.cpp`：注册写 HKLM（管理员时）或 HKCU——CLSID InprocServer32 + TIP LanguageProfile（Description+Enable）+ Category\Category\{catid}\{clsid}（Keyboard 类别是枚举硬前提）+ SortOrder\AssemblyItem\0x00000804 装配项（**语言键是 0x%08X 八位十六进制**，%04X 会写到平行错误键）
+- `dllmain/class_factory/guids`：COM 导出四件套，GUID 与 Rust 侧 protocol.rs 常量互为镜像
+- build.rs 用 `cc::windows_registry` 定位 cl.exe 一次编译+链接（`/DEF` 必须放 `/link` 之后）
+
+**Rust 宿主（`src-tauri/src/windows_ime/`）**：
+- `install.rs`：DLL 路径解析（resource/manifest/exe）、`classify_ime_status` 纯决策 + **`system_lists_tip()` 枚举验证**（EnumProfiles 含我们才算 Installed）、`ensure_registered` 自注册
+- `ipc.rs`：管道 client——800ms WaitNamedPipe+CreateFile 重试、**GetNamedPipeServerProcessId==目标 pid 校验**（防仿冒）、JSONL 读写 + sessionId 匹配
+- `session.rs`：`prepare_session`（快照→Enable→ActivateProfile(FORSESSION)→WM_INPUTLANGCHANGEREQUEST→clientReady）→ `submit`（≤64KiB）→ `restore_session`（`profile::restore_decision`，Drop 幂等兜底）；`tsf_gate` 纯门控
+- `insert_fallback.rs::insert_ex`：TSF 分支最前（Committed 即返回；失败按 `tsf_fallback` 回退 R7；Type 策略保持只打字）
+- `commands.rs`：`windows_ime_status` / `windows_ime_restore_profile`；设置页「App 行为」卡新增 TSF 状态行 + 开关 + 恢复按钮（i18n zh/en）
+- `focus.rs::frontmost_process_info`：pid/tid/machine（IsWow64Process2）
+
+### 12.2 ⚠️ Win11 per-user TIP 限制（真机实测结论）
+
+**枚举（EnumProfiles）与激活（ActivateProfile）只认 HKLM\SOFTWARE\Microsoft\CTF 下的 TIP 注册**。per-user（HKCU）四件套（LanguageProfile/Category/SortOrder/CLSID）全部写齐、重启 ctfmon 后仍不被收录（ActivateProfile 恒 E_FAIL）。msctf 的 `AddLanguageProfile` 即使在提升进程也只写 HKCU——HKLM 路径必须手写注册表（DLL 已实现：管理员 regsvr32 → PickRegistrationRoot 选 HKLM）。
+
+**因此**：
+- `windows_tsf_enabled` 默认 false（探测 RegistrationBroken → 零成本回退 R7，每次插入不多等 1ms）
+- **激活方式**：以管理员运行一次 `regsvr32 /s "<安装目录>\resources\ime\OpenImeTsf.dll"`（写 HKLM），然后在设置页打开 TSF 开关
+- 设计文档 FR-11.2 的「per-user HKCU 无 UAC」假设在 Win11 不成立（OpenLess 旧系统经验的偏差）；NSIS perUser 安装器如需自动启用，需加提升步骤或引导用户手动执行上述命令
+
+### 12.3 验证记录
+
+- 322 Rust 测试全绿（协议黄金 fixtures/门控/状态决策/GUID 往返/ipc 帧语义/insert.rs KC-8）+ clippy 0 + 前端 18 绿
+- 真机：注册键全量落盘验证 ✓；canary `real_tsf_commit_into_foreground_app` 双模式断言 ✓（Installed→Committed 上屏 / Broken→NotInstalled 零等待回退）
+- 插入链路保护：探测不过 → 走原 enigo/粘贴路径，无回归（现有插入测试全绿）

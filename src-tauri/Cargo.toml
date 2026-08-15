@@ -45,17 +45,24 @@ uuid = { workspace = true }
 # R7：Win32 前台 exe 捕获 / 还焦（GetForegroundWindow / SetForegroundWindow）。
 # R7/Win：UI Automation 读焦点选区（UIA_TextPattern）+ COM 初始化。
 # Gdi/LibraryLoader：真机行为测试创建真实窗口（RegisterClassW / CreateWindowExW）用。
+# R11：TSF profile 激活/还原（ITfInputProcessorProfileMgr）、命名管道 client、
+# CreateFileW/WM_INPUTLANGCHANGEREQUEST、IsWow64Process2。
 windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Accessibility",
+  "Win32_UI_TextServices",
   "Win32_System_Threading",
   "Win32_System_ProcessStatus",
+  "Win32_System_SystemInformation",
   "Win32_System_Com",
+  "Win32_System_Pipes",
+  "Win32_System_IO",
   "Win32_Security",
   "Win32_Graphics_Gdi",
   "Win32_System_LibraryLoader",
+  "Win32_Storage_FileSystem",
 ] }
 # R7：Ctrl+V 粘贴兜底（insert_fallback::windows_ctrl_v 直接 `use enigo::`，
 # 需作为本 crate 直属依赖；enigo 0.5 在 Windows 自动启用 Win32 后端）。
