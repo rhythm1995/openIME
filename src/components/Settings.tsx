@@ -1081,12 +1081,12 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                             fontSize: 11,
                             background:
                               m.perf_tag.kind === "suitable"
-                                ? "rgba(52, 199, 89, 0.14)"
+                                ? "rgba(89, 212, 153, 0.14)"
                                 : m.perf_tag.kind === "usable"
                                   ? "rgba(255, 149, 0, 0.14)"
                                   : m.perf_tag.kind === "unknown"
                                     ? "var(--card-hover)"
-                                    : "rgba(255, 59, 48, 0.12)",
+                                    : "rgba(255, 69, 58, 0.12)",
                             color:
                               m.perf_tag.kind === "suitable"
                                 ? "var(--success)"
@@ -1361,10 +1361,10 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                             fontSize: 11,
                             background:
                               m.perf_tag.kind === "suitable"
-                                ? "rgba(52, 199, 89, 0.14)"
+                                ? "rgba(89, 212, 153, 0.14)"
                                 : m.perf_tag.kind === "usable"
                                   ? "rgba(255, 149, 0, 0.14)"
-                                  : "rgba(255, 59, 48, 0.12)",
+                                  : "rgba(255, 69, 58, 0.12)",
                             color:
                               m.perf_tag.kind === "suitable"
                                 ? "var(--success)"
@@ -2115,12 +2115,12 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                                 fontSize: 11,
                                 background:
                                   m.perf_tag.kind === "suitable"
-                                    ? "rgba(52, 199, 89, 0.14)"
+                                    ? "rgba(89, 212, 153, 0.14)"
                                     : m.perf_tag.kind === "usable"
                                       ? "rgba(255, 149, 0, 0.14)"
                                       : m.perf_tag.kind === "unknown"
                                         ? "var(--card-hover)"
-                                        : "rgba(255, 59, 48, 0.12)",
+                                        : "rgba(255, 69, 58, 0.12)",
                                 color:
                                   m.perf_tag.kind === "suitable"
                                     ? "var(--success)"

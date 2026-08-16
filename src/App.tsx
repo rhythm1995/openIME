@@ -108,7 +108,7 @@ export default function App() {
         >
           <div className="brand-logo" aria-label="openIME" data-tauri-drag-region>
             <svg viewBox="0 0 1024 1024" width="34" height="34" aria-hidden="true">
-              <rect width="1024" height="1024" rx="226" fill="#3B4FE0" />
+              <rect width="1024" height="1024" rx="226" fill="#5C6AFF" />
               <g fill="#FFFFFF">
                 <rect x="300" y="422" width="56" height="180" rx="28" />
                 <rect x="392" y="362" width="56" height="300" rx="28" />

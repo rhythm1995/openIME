@@ -23,7 +23,8 @@
         "resizable": true,
         "visible": false,
         "hiddenTitle": true,
-        "titleBarStyle": "Overlay"
+        "titleBarStyle": "Overlay",
+        "theme": "Dark"
       },
       {
         "label": "overlay",
@@ -50,6 +51,7 @@
         "height": 520,
         "resizable": true,
         "decorations": true,
+        "theme": "Dark",
         "alwaysOnTop": true,
         "skipTaskbar": false,
         "shadow": true,
