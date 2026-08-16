@@ -66,6 +66,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
+      # 与 ci.yml voice-core Linux job 同款系统依赖（cpal → alsa-sys 需要）。
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
       - name: Clippy + test voice-core（默认 feature）
