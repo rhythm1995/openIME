@@ -23,7 +23,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
@@ -94,6 +94,12 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build frontend
         run: pnpm build
+      # TSF DLL 是本地构建产物（src-tauri/ime/ 已 gitignore），
+      # tauri-build 只验证资源路径存在；check/clippy 不消费其内容，放置占位即可。
+      - name: Stub git-ignored TSF resource
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/ime | Out-Null
+          Set-Content -Path src-tauri/ime/OpenImeTsf.dll -Value "stub"
       # 门禁与 macOS job 对齐：clippy -D warnings（2026-08-14 全 workspace clippy 清零后启用）。
       - name: Clippy src-tauri
         run: cargo clippy -p openime -- -D warnings
