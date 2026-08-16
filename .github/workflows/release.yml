@@ -177,7 +177,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          pnpm tauri build --features custom-protocol,sherpa,llm
+          # 不带 llm：llama.cpp(cmake 默认 /MD) 与 sherpa-onnx 预编译库(静态 /MT)
+          # CRT 混链报 LNK2038（无 feature 级开关，待在 Windows 上专项修复）。
+          # Windows 润色走云端；此组合与 build-windows.ps1 无 cmake 回退一致。
+          pnpm tauri build --features custom-protocol,sherpa
       - name: 收集安装包与更新签名
         shell: bash
         run: |
