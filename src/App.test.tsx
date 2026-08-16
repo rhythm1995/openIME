@@ -99,7 +99,7 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(screen.getByText("意见反馈"));
     await waitFor(() =>
-      expect(openUrlMock).toHaveBeenCalledWith("https://github.com/rhythm1995/openIME/issues")
+      expect(openUrlMock).toHaveBeenCalledWith("https://github.com/rhythm1995/openIME/issues/new")
     );
   });
 

@@ -15,8 +15,8 @@ type Page = "settings-voice" | "settings-ai" | "history" | "dictionary";
 /** 两个设置入口共享同一个 Settings 挂载实例（各自实例会各持一份 config 状态，保存互相覆盖）。 */
 const isSettingsPage = (p: Page) => p === "settings-voice" || p === "settings-ai";
 
-/** 意见反馈入口：GitHub Issues，用系统默认浏览器打开（沿用浏览器里的 GitHub 登录态）。 */
-const FEEDBACK_URL = "https://github.com/rhythm1995/openIME/issues";
+/** 意见反馈入口：GitHub Issues 新建页（意图对齐：点反馈就是要提交），系统默认浏览器打开。 */
+const FEEDBACK_URL = "https://github.com/rhythm1995/openIME/issues/new";
 
 /** Overlay 标题栏拖拽：data-tauri-drag-region + startDragging 双保险 */
 function onDragRegionMouseDown(e: ReactMouseEvent) {
