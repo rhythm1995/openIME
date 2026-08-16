@@ -1,17 +1,17 @@
 import { useTranslation } from "react-i18next";
-import GithubIcon from "./GithubIcon";
+import { Download } from "lucide-react";
 import WaveMark from "./WaveMark";
-import { DOCS_URL, REPO_URL } from "../links";
+import { DOCS_URL, RELEASES_URL, REPO_URL } from "../links";
 
 export default function Nav() {
   const { t, i18n } = useTranslation();
   const next = i18n.language === "en" ? "zh" : "en";
 
   return (
-    <header className="nav">
-      <div className="container nav-inner">
+    <div className="nav-wrap">
+      <header className="nav">
         <a className="brand" href="#top" aria-label="openIME">
-          <WaveMark size={24} />
+          <WaveMark size={22} />
           <span className="brand-word">openIME</span>
         </a>
         <nav className="nav-links" aria-label="site">
@@ -20,6 +20,9 @@ export default function Nav() {
           <a href="#download">{t("nav.download")}</a>
           <a href={DOCS_URL} target="_blank" rel="noreferrer">
             {t("nav.docs")}
+          </a>
+          <a href={REPO_URL} target="_blank" rel="noreferrer">
+            GitHub
           </a>
         </nav>
         <div className="nav-actions">
@@ -31,16 +34,16 @@ export default function Nav() {
             {next === "en" ? "EN" : "中"}
           </button>
           <a
-            className="icon-btn"
-            href={REPO_URL}
+            className="btn-mini"
+            href={RELEASES_URL}
             target="_blank"
             rel="noreferrer"
-            aria-label={t("nav.githubAria")}
           >
-            <GithubIcon size={17} />
+            <Download size={13} />
+            <span>{t("hero.ctaPrimary")}</span>
           </a>
         </div>
-      </div>
-    </header>
+      </header>
+    </div>
   );
 }

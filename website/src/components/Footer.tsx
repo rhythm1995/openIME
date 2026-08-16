@@ -4,6 +4,8 @@ import { DOCS_URL, ISSUES_URL, REPO_URL } from "../links";
 
 export default function Footer() {
   const { t } = useTranslation();
+  const meta = t("footer.metaItems", { returnObjects: true }) as string[];
+
   return (
     <footer className="footer">
       <div className="container footer-inner">
@@ -21,14 +23,21 @@ export default function Footer() {
             {t("footer.docs")}
           </a>
           <a href={REPO_URL} target="_blank" rel="noreferrer">
-            {t("footer.github")}
+            GitHub
           </a>
           <a href={ISSUES_URL} target="_blank" rel="noreferrer">
             {t("footer.issues")}
           </a>
         </nav>
       </div>
-      <div className="container footer-license">{t("footer.license")}</div>
+      <div className="container footer-license meta-mono">
+        {meta.map((item, i) => (
+          <span key={i}>
+            {i > 0 && <span className="sep">|</span>}
+            {item}
+          </span>
+        ))}
+      </div>
     </footer>
   );
 }

@@ -11,20 +11,18 @@
     "langAria": "切换语言"
   },
   "hero": {
+    "eyebrow": "开源 · 本地优先 · 完全离线的语音输入",
     "title": "说话，即输入。",
     "subtitle": "本地优先的开源语音输入法。按住快捷键、开口说话，文字就落在光标处 —— 音频永不出本机。",
-    "ctaPrimary": "下载 macOS",
+    "ctaPrimary": "下载",
     "ctaSecondary": "GitHub",
-    "platformNote": "macOS 稳定 · Windows beta",
+    "metaItems": ["v0.1.0", "macOS 12+ · Windows beta", "MIT 开源", "完全离线"],
     "demoHint": "按住下方面板说话试试 —— 或聚焦后按住空格键",
     "demoRecording": "聆听中，松开完成上屏",
     "demoText": "今天下午三点开会，记得带上设计方案。",
     "demoAriaLabel": "按住说话演示",
     "micToggle": "麦克风真实波形",
     "micDenied": "麦克风不可用，已回退模拟波形"
-  },
-  "trust": {
-    "items": ["MIT 开源", "完全离线", "音频不出本机", "macOS + Windows"]
   },
   "how": {
     "eyebrow": "工作原理",
@@ -57,27 +55,32 @@
       {
         "num": "01",
         "title": "本地 ASR",
-        "desc": "进程内 sherpa-onnx 离线识别。模型一键下载：SHA256 校验、断点续传、HF → 国内镜像自动切换。"
+        "desc": "进程内 sherpa-onnx 离线识别。模型一键下载：SHA256 校验、断点续传、HF → 国内镜像自动切换。",
+        "meta": "sherpa-onnx · in-process · offline"
       },
       {
         "num": "02",
         "title": "三级润色",
-        "desc": "L0 规则纠错（热词、模糊音、数字 ITN、繁简转换）+ L2 本地 LLM 润色，Qwen 0.8B / 2B / 4B 按机型分档，失败优雅直通原文。"
+        "desc": "L0 规则纠错（热词、模糊音、数字 ITN、繁简转换）+ L2 本地 LLM 润色，失败优雅直通原文。",
+        "meta": "L0 rules + L2 Qwen 0.8B / 2B / 4B"
       },
       {
         "num": "03",
         "title": "语音翻译",
-        "desc": "说中文，直接输出外语。基础 7 语，可扩展 MiLMMT-46 本地翻译模型。"
+        "desc": "说中文，直接输出外语。基础 7 语，可扩展 MiLMMT-46 本地翻译模型。",
+        "meta": "7 base langs · MiLMMT-46 ext"
       },
       {
         "num": "04",
         "title": "热词与风格",
-        "desc": "个人热词词典优先纠错；风格包自定义语气；「邮件:」「翻译:」前缀直达场景。"
+        "desc": "个人热词词典优先纠错；风格包自定义语气；「邮件:」「翻译:」前缀直达场景。",
+        "meta": "hotwords · style packs · prefixes"
       },
       {
         "num": "05",
         "title": "文件转写",
-        "desc": "长音频自动分段转写，导出带时间轴的 SRT 字幕。"
+        "desc": "长音频自动分段转写，导出带时间轴的 SRT 字幕。",
+        "meta": "long-audio → SRT"
       }
     ]
   },
@@ -139,7 +142,7 @@
     "title": "从 Releases 获取安装包",
     "mac": "下载 macOS · .dmg",
     "win": "Windows · .exe（beta）",
-    "note": "安装后首次使用，在 设置 → 识别引擎 中一键下载本地模型。",
+    "metaItems": ["GitHub Releases", "安装后一键下载本地模型"],
     "go": "前往 GitHub Releases"
   },
   "faq": {
@@ -166,8 +169,7 @@
   "footer": {
     "tagline": "本地优先 · 开源 · 可测试",
     "docs": "文档",
-    "github": "GitHub",
     "issues": "反馈问题",
-    "license": "MIT License · © 2026 openIME contributors"
+    "metaItems": ["MIT License", "© 2026 openIME contributors", "github.com/rhythm1995/openIME"]
   }
 }

@@ -1,6 +1,5 @@
 import Nav from "./components/Nav";
 import Hero from "./components/Hero";
-import TrustStrip from "./components/TrustStrip";
 import HowItWorks from "./components/HowItWorks";
 import Features from "./components/Features";
 import Privacy from "./components/Privacy";
@@ -15,7 +14,6 @@ export default function App() {
       <Nav />
       <main>
         <Hero />
-        <TrustStrip />
         <HowItWorks />
         <Features />
         <Privacy />

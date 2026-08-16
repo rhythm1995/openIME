@@ -28,9 +28,6 @@
 
 <br />
 
-> [!NOTE]
-> Inspired by AutoGLM. Rebuilt with **Tauri v2 + Rust + React 18** as an **open-source, localizable, testable** implementation — 476 automated tests covering core logic and platform layers.
-
 ---
 
 ## Screenshots

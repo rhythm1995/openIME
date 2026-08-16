@@ -11,20 +11,18 @@
     "langAria": "Switch language"
   },
   "hero": {
+    "eyebrow": "Open source · Local-first · Fully offline voice input",
     "title": "Speak. It types.",
     "subtitle": "A local-first, open-source voice input method. Hold the shortcut, speak, and watch the words land at your cursor — audio never leaves your machine.",
-    "ctaPrimary": "Download for macOS",
+    "ctaPrimary": "Download",
     "ctaSecondary": "GitHub",
-    "platformNote": "macOS stable · Windows beta",
+    "metaItems": ["v0.1.0", "macOS 12+ · Windows beta", "MIT open source", "Fully offline"],
     "demoHint": "Press and hold the panel below — or focus it and hold Space",
     "demoRecording": "Listening… release to insert",
     "demoText": "Meeting at 3 this afternoon. Bring the design proposal.",
     "demoAriaLabel": "Hold-to-talk demo",
     "micToggle": "Live mic waveform",
     "micDenied": "Microphone unavailable — using simulated waveform"
-  },
-  "trust": {
-    "items": ["MIT open source", "Fully offline", "Audio never leaves your Mac", "macOS + Windows"]
   },
   "how": {
     "eyebrow": "How it works",
@@ -57,27 +55,32 @@
       {
         "num": "01",
         "title": "Local ASR",
-        "desc": "In-process sherpa-onnx offline recognition. One-click model download with SHA256 verification, resumable transfer, and HF-to-mirror failover."
+        "desc": "In-process sherpa-onnx offline recognition. One-click model download with SHA256 verification, resumable transfer, and HF-to-mirror failover.",
+        "meta": "sherpa-onnx · in-process · offline"
       },
       {
         "num": "02",
         "title": "Three-tier polish",
-        "desc": "L0 rule-based correction (hotwords, fuzzy pinyin, numeral ITN, S/T Chinese) plus L2 local LLM polish — Qwen 0.8B/2B/4B tiered by hardware, with graceful passthrough on failure."
+        "desc": "L0 rule-based correction (hotwords, fuzzy pinyin, numeral ITN, S/T Chinese) plus L2 local LLM polish, with graceful passthrough on failure.",
+        "meta": "L0 rules + L2 Qwen 0.8B / 2B / 4B"
       },
       {
         "num": "03",
         "title": "Speech translation",
-        "desc": "Speak Chinese, type another language. Seven base languages, extensible with the MiLMMT-46 local model."
+        "desc": "Speak Chinese, type another language. Seven base languages, extensible with the MiLMMT-46 local model.",
+        "meta": "7 base langs · MiLMMT-46 ext"
       },
       {
         "num": "04",
         "title": "Hotwords & styles",
-        "desc": "A personal hotword dictionary corrects first; style packs set the tone; \"mail:\" and \"translate:\" prefixes jump straight to the task."
+        "desc": "A personal hotword dictionary corrects first; style packs set the tone; \"mail:\" and \"translate:\" prefixes jump straight to the task.",
+        "meta": "hotwords · style packs · prefixes"
       },
       {
         "num": "05",
         "title": "File transcription",
-        "desc": "Long audio auto-segmented and transcribed, exported as timed SRT subtitles."
+        "desc": "Long audio auto-segmented and transcribed, exported as timed SRT subtitles.",
+        "meta": "long-audio → SRT"
       }
     ]
   },
@@ -139,7 +142,7 @@
     "title": "Get the installer from Releases",
     "mac": "Download macOS · .dmg",
     "win": "Windows · .exe (beta)",
-    "note": "After installing, download the local model in one click: Settings → Recognition engine.",
+    "metaItems": ["GitHub Releases", "One-click local model download after install"],
     "go": "Go to GitHub Releases"
   },
   "faq": {
@@ -166,8 +169,7 @@
   "footer": {
     "tagline": "Local-first · Open source · Testable",
     "docs": "Docs",
-    "github": "GitHub",
     "issues": "Feedback",
-    "license": "MIT License · © 2026 openIME contributors"
+    "metaItems": ["MIT License", "© 2026 openIME contributors", "github.com/rhythm1995/openIME"]
   }
 }

@@ -4,21 +4,32 @@ import { RELEASES_URL } from "../links";
 
 export default function DownloadSection() {
   const { t } = useTranslation();
+  const meta = t("download.metaItems", { returnObjects: true }) as string[];
+
   return (
     <section className="section" id="download">
       <div className="container download-inner">
-        <p className="eyebrow">{t("download.eyebrow")}</p>
-        <h2 className="section-title">{t("download.title")}</h2>
+        <div className="section-head center">
+          <p className="eyebrow">{t("download.eyebrow")}</p>
+          <h2 className="section-title">{t("download.title")}</h2>
+        </div>
         <div className="hero-cta">
-          <a className="btn btn-primary" href={RELEASES_URL} target="_blank" rel="noreferrer">
-            <Download size={16} />
+          <a className="btn btn-filled" href={RELEASES_URL} target="_blank" rel="noreferrer">
+            <Download size={15} />
             {t("download.mac")}
           </a>
           <a className="btn btn-ghost" href={RELEASES_URL} target="_blank" rel="noreferrer">
             {t("download.win")}
           </a>
         </div>
-        <p className="download-note">{t("download.note")}</p>
+        <p className="download-meta meta-mono">
+          {meta.map((item, i) => (
+            <span key={i}>
+              {i > 0 && <span className="sep">|</span>}
+              {item}
+            </span>
+          ))}
+        </p>
         <p>
           <a className="text-link" href={RELEASES_URL} target="_blank" rel="noreferrer">
             {t("download.go")}
