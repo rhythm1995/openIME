@@ -1,8 +1,8 @@
 # 本地三件套：需求方案 + 技术方案
 
-> 状态：✅ 已实现（`f43012f`）；本文件为设计存档。原「需求已拍板；技术方案按现有 `voice-core` / Tauri 薄壳落地」。落地记录见 [`progress.md`](./progress.md)「本地三件套实现进度」。  
-> 日期：2026-08-15  
-> 调研底稿：[`local-polish-model-catalog.md`](local-polish-model-catalog.md)、[`local-translate-model-research.md`](local-translate-model-research.md)。
+> **状态：✅ 已实现（`f43012f`）**。本文是本地三件套（ASR + 润色 + 翻译）的**当前**需求方案与技术方案的唯一正本，已被 [roadmap.md](./roadmap.md) 的 R14 引用。
+> 历史选型调研：[`phase2-local-llm-research.md`](./phase2-local-llm-research.md)（一期 LLM 选型）、[`local-polish-model-catalog.md`](./local-polish-model-catalog.md)（润色目录调研）、[`local-translate-model-research.md`](./local-translate-model-research.md)（翻译选型调研）均已归档。
+> 日期：2026-08-15
 
 ---
 

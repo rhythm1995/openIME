@@ -1,4 +1,12 @@
-# openIME Windows 兼容性审查报告
+# ⚠️ 已归档：openIME Windows 兼容性审查报告
+
+> **本文已被 [`openIME-windows-porting-notes.md`](./openIME-windows-porting-notes.md) 取代。**
+>
+> 审查日期 2026-08-14 时列出的问题绝大多数已在后续开发中修复（单实例、TSF 默认值、快捷键路由、QA 选区、Overlay 焦点、麦克风 HKLM、磁盘空间、CI 测试、Clippy 债务等）。
+> TSF FFI 也已落地（见 porting notes §12）。当前 Windows 状态与最新问题请以 [`openIME-windows-porting-notes.md`](./openIME-windows-porting-notes.md) 为准。
+>
+> 本文保留作历史审查记录。
+
 
 > **审查日期**：2026-08-14
 > **审查范围**：全项目源码、CI 配置、构建脚本

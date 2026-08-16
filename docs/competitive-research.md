@@ -1,4 +1,8 @@
-# openIME 竞品调研：OpenLess 与 CapsWriter-Offline
+# ⚠️ 已归档：openIME 竞品调研
+
+> **本文是 2026-08-12 对 OpenLess / CapsWriter-Offline 的竞品调研，保留作历史参考。**
+> 落地状态已在文首注明（14 项已实现），当前需求状态请以 [roadmap.md](./roadmap.md) 为准。
+
 
 > 调研对象
 > - [Open-Less/openless](https://github.com/Open-Less/openless)（下称 **OpenLess**，v1.3.6）

@@ -2,6 +2,8 @@
 
 openIME 的开发、测试、打包、发布与签名细节。**普通用户上手请看 [README](../README.md)。**
 
+文档导航见 [docs/README.md](./README.md)。
+
 ## 技术栈
 
 - **后端核心**：Rust 工作区。`crates/voice-core` 是零 Tauri 依赖的纯库（全部逻辑 + trait），`src-tauri` 是 Tauri 薄壳（commands / state / 平台权限）。
@@ -76,7 +78,7 @@ cargo test -p voice-core --features sherpa
 # 仅云端：WITH_SHERPA=0 ./scripts/build.sh
 ```
 
-Windows 打包（对应 macOS 的 build.sh）：`pnpm app:build:win`（= `scripts/build-windows.ps1`，自动检测 CMake 决定是否带 `llm` feature，产出 NSIS 安装包）。Windows 移植细节见 [openIME-windows-porting-notes.md](../openIME-windows-porting-notes.md)。
+Windows 打包（对应 macOS 的 build.sh）：`pnpm app:build:win`（= `scripts/build-windows.ps1`，自动检测 CMake 决定是否带 `llm` feature，产出 NSIS 安装包）。Windows 移植全记录（编译问题、TSF FFI、运行期修复、验证）见 [openIME-windows-porting-notes.md](./openIME-windows-porting-notes.md)。
 
 ## 测试覆盖（TDD）
 

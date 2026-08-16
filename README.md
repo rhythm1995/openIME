@@ -1,13 +1,28 @@
 [English](./README.en.md) | **简体中文**
 
-# openIME
+<p align="center">
+  <img src="branding/app-icon.svg" width="100" height="100" alt="openIME logo" />
+</p>
+<h1 align="center">openIME</h1>
+<p align="center">开源、本地优先的跨平台<strong>语音输入法</strong>——按一下快捷键说话，识别文字直接输入到光标。</p>
 
-开源、本地优先的跨平台**语音输入法**——按一下快捷键说话，识别文字直接输入到光标。
+<p align="center">
+  <a href="https://github.com/rhythm1995/openIME/releases">下载</a> ·
+  <a href="#快速上手">快速上手</a> ·
+  <a href="docs/user-guide.md">用户指南</a> ·
+  <a href="docs/development.md">开发文档</a> ·
+  <a href="docs/troubleshooting.md">排障</a> ·
+  <a href="docs/roadmap.md">路线图</a>
+</p>
 
-[下载](./releases) · [快速上手](#快速上手) · [用户指南](docs/user-guide.md) · [开发文档](docs/development.md) · [排障](docs/troubleshooting.md) · [路线图](docs/roadmap.md)
+<br />
+
+<p align="center">
+  <img src="docs/screenshots/main.png" alt="openIME 主界面" width="760" />
+</p>
 
 > [!NOTE]
-> 常驻菜单栏，按全局快捷键（默认 **Fn / 🌐 键**）录音 → 实时流式转写 → 文字逐字输入到当前光标 → 按会话保存历史。
+> 常驻菜单栏，按全局快捷键（默认 **Fn / 🌐 键**）录音 → 实时流式转写 → 文字逐字输入到当前光标 → 按会话保存历史。参考 AutoGLM（小凹）的产品形态，用 Tauri + Rust 重写为**开源、可本地化、可测试**的实现。
 
 ## 特性
 
@@ -22,13 +37,11 @@
 - 🧲 **插入兜底** —— 逐字模拟被目标 App 吞掉时自动改粘贴（Cmd+V）并恢复原剪贴板；Hold 模式短按 Fn 自动补发 🌐 原功能。
 - 🍎 **macOS** 完整支持；🪟 **Windows** 公测（CapsLock 单键录音、插入兜底真机可用，TSF 原生上屏待落地）。
 
-
-
 ## 快速上手
 
 > 普通用户视角。开发者请看 [开发文档](docs/development.md)。
 
-1. **下载安装**：从 [Releases](./releases) 下载 macOS `.dmg`，拖入 `/Applications`。内测包未公证，首次打开需 **右键 → 打开**。
+1. **下载安装**：从 [Releases](https://github.com/rhythm1995/openIME/releases) 下载 macOS `.dmg`，拖入 `/Applications`。内测包未公证，首次打开需 **右键 → 打开**。
 2. **授权权限**：打开 openIME → 设置 → 系统权限 → 授权 **麦克风** 与 **辅助功能**。
 3. **选择引擎**：默认推荐本地 sherpa-onnx（设置 → 识别引擎 → 下载模型）；也可填云端凭据。
 4. **说话即打字**：按 **Fn（🌐）** 开始录音，再按一次停止，识别文字输入到当前光标。
@@ -36,10 +49,7 @@
 > [!TIP]
 > 想用英文界面？点左下角 🌐 按钮即可在中 / 英间切换。界面语言**不影响**语音识别语言——识别语言在「识别引擎 → 默认语言」单独设置。
 
-
-
 ## 识别引擎
-
 
 | 引擎                  | 说明                                                   | 状态  |
 | ------------------- | ---------------------------------------------------- | --- |
@@ -47,7 +57,6 @@
 | **百炼 WebSocket 流式** | Protocol A（run-task / result-generated），逐字上屏         | ✅   |
 | **OpenAI 兼容 REST**  | `POST /audio/transcriptions`，兼容 Whisper / OpenRouter | ✅   |
 | **Multimodal REST** | `POST /chat/completions`，兼容百炼 Qwen3 ASR 非流式          | ✅   |
-
 
 云端 LLM 润色支持 3 协议，策略固定为「本地优先，失败 / 未装自动回退云端，双失败原文直出不报错」。
 
@@ -73,7 +82,16 @@ cargo test -p voice-core        # 核心库
 ./scripts/build.sh install      # 打包并安装到 /Applications（固定签名）
 ```
 
-392 个测试本地可跑（voice-core 345 = lib 332 + 集成 13；前端 47）；应用壳 84 项测试在 Windows CI 跑。完整开发流程、测试矩阵、CI、签名与发布见 [docs/development.md](docs/development.md)，日志与排障见 [docs/troubleshooting.md](docs/troubleshooting.md)。
+392 个测试本地可跑（voice-core 345 = lib 332 + 集成 13；前端 47）；应用壳 84 项测试在 Windows CI 跑（合计 476）。完整开发流程、测试矩阵、CI、签名与发布见 [docs/development.md](docs/development.md)，日志与排障见 [docs/troubleshooting.md](docs/troubleshooting.md)。
+
+## 路线图
+
+- ✅ 引擎、悬浮窗、托盘、全局快捷键、引导、历史详情、界面中英双语
+- ✅ AI 润色三档、热词词典、风格包 + 前缀角色、翻译模式、划词问答、文件转录（长音频分段）、繁简转换、选区注入、日记导出、机型画像 → 模型适配打标、本地模型三件套（ASR + 润色 + 翻译，一键分档下载）
+- ✅ 单实例锁、ESC 中断润色、endpoint SSRF 校验、粘贴兜底 + 剪贴板恢复、Fn 短按补发
+- 🔜 Windows（NSIS 打包 + 真机端到端已通；TSF 原生上屏待落地）
+
+> 完整需求清单与实现状态见 [docs/roadmap.md](docs/roadmap.md)。
 
 ## 致谢
 
@@ -83,4 +101,4 @@ cargo test -p voice-core        # 核心库
 
 ---
 
-本地优先 · 开源 · 可测试
+<p align="center"><sub>本地优先 · 开源 · 可测试</sub></p>

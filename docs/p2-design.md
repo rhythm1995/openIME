@@ -1,4 +1,11 @@
-# openIME P2：短按补发 · Windows TSF · 长音频分段重叠
+# ⚠️ 已归档：openIME P2 设计（ADR）
+
+> **本文是 P2 需求的完整设计记录（ADR）。**
+> - R9（短按补发）✅ 已实现
+> - R12（长音频分段）✅ 已实现
+> - R11（Windows TSF）**FFI 已落地**（见 [openIME-windows-porting-notes.md](./openIME-windows-porting-notes.md) §12），但 Win11 per-user TIP 受限需管理员注册 HKLM
+> 当前实现状态与进度请以 [roadmap.md](./roadmap.md) 为准。本文保留作架构决策追溯。
+
 
 | 字段 | 值 |
 |---|---|
@@ -47,7 +54,7 @@ P1 已交付 SSRF 字面校验、翻译 / 前缀角色 / QA 浮窗、以及 Wind
 | 配置 | P1 字段已齐；`types.ts` / `Settings.test.tsx` `defaultConfig` 必须同步增量 | [`config.rs`](crates/voice-core/src/config.rs)；[`types.ts`](src/types.ts) |
 | SQLite | `PRAGMA user_version = 4`（风格包前缀列）。P2 **不**加表 | [`store.rs`](crates/voice-core/src/store.rs) |
 | CI | `voice-core` 三平台；`src-tauri` **仅 macOS** check；Release 打 dmg + NSIS | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) / `release.yml` |
-| P1 进度 | PR1–PR6 全部 ✅ | [`docs/p1-progress.md`](docs/p1-progress.md) |
+| P1 进度 | PR1–PR6 全部 ✅ | [roadmap.md](./roadmap.md) |
 
 ### 痛点
 
@@ -1357,7 +1364,7 @@ pub fn request_abort(&self) { self.abort_flag.store(true); self.stop_flag.store(
 
 - [`docs/roadmap.md`](docs/roadmap.md) R9 / R11 / R12；⚪ 流式合并不做
 - [`docs/p1-design.md`](docs/p1-design.md) SessionIntent、四态、热键中心、R7 平台表
-- [`docs/p1-progress.md`](docs/p1-progress.md) P1 已全部落地
+- [`roadmap.md`](./roadmap.md) P1 已全部落地（见 roadmap R3–R7）
 - [`docs/competitive-research.md`](docs/competitive-research.md) A2 / C3 / E1；附录路径仅启发
 - [`docs/user-guide.md`](docs/user-guide.md) Fn / 🌐 提示、文件转录
 - 本仓库：`fn_monitor.m`、`fn_key.rs`、`lib.rs` `on_fn_edge`/`apply_hotkey`、`commands.rs` `toggle_recording`/`transcribe_file`、`insert.rs`、`insert_fallback.rs`、`transcribe.rs`、`providers/sherpa.rs`、`platform/windows/*`、`qa.rs`、`config.rs`、`tauri.conf.json`

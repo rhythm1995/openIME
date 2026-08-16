@@ -1,4 +1,8 @@
-# 二期调研：本地小模型选型 + 云端/本地双引擎设计草图
+# ⚠️ 已归档：二期本地 LLM 选型 ADR
+
+> **本文是 2026-08-11 的本地 LLM 选型调研 ADR，默认模型 Qwen2.5-1.5B-Instruct Q4_K_M。**
+> 该选型已被后续「本地三件套」升级取代（Qwen3.5 三档 + MiLMMT/HY-MT 专翻），当前方案见 [local-model-suite.md](./local-model-suite.md)。本文保留作架构决策追溯。
+
 
 > 状态：**已落地（2026-08）**，保留作架构决策记录（ADR）——默认模型 Qwen2.5-1.5B-Instruct Q4_K_M、llama.cpp 进程内推理、`PreferLocal` 策略均按本文实施。落地进度见文末 §12。  
 > 范围：AI 润色 / 人设 / 热词增强（非 Windows 平台）  
