@@ -63,8 +63,17 @@ pub fn tsf_gate(
 fn guid_to_literal(g: &windows::core::GUID) -> String {
     format!(
         "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
-        g.data1, g.data2, g.data3, g.data4[0], g.data4[1], g.data4[2], g.data4[3],
-        g.data4[4], g.data4[5], g.data4[6], g.data4[7]
+        g.data1,
+        g.data2,
+        g.data3,
+        g.data4[0],
+        g.data4[1],
+        g.data4[2],
+        g.data4[3],
+        g.data4[4],
+        g.data4[5],
+        g.data4[6],
+        g.data4[7]
     )
 }
 
@@ -126,15 +135,14 @@ pub fn prepare_session(
     let uninit = hr.0 == 0; // S_OK
     let result = (|| -> Result<PreparedWindowsImeSession, PrepareError> {
         unsafe {
-            let mgr: ITfInputProcessorProfileMgr =
-                match CoCreateInstance(
-                    &windows::Win32::UI::TextServices::CLSID_TF_InputProcessorProfiles,
-                    None,
-                    CLSCTX_INPROC_SERVER,
-                ) {
-                    Ok(m) => m,
-                    Err(_) => return Err(PrepareError::NotInstalled),
-                };
+            let mgr: ITfInputProcessorProfileMgr = match CoCreateInstance(
+                &windows::Win32::UI::TextServices::CLSID_TF_InputProcessorProfiles,
+                None,
+                CLSCTX_INPROC_SERVER,
+            ) {
+                Ok(m) => m,
+                Err(_) => return Err(PrepareError::NotInstalled),
+            };
             let profiles: ITfInputProcessorProfiles = match CoCreateInstance(
                 &windows::Win32::UI::TextServices::CLSID_TF_InputProcessorProfiles,
                 None,
@@ -162,7 +170,8 @@ pub fn prepare_session(
                 &clsid,
                 &profile_guid,
                 windows::Win32::UI::Input::KeyboardAndMouse::HKL(std::ptr::null_mut()),
-                TF_IPPMF_FORSESSION | TF_IPPMF_ENABLEPROFILE
+                TF_IPPMF_FORSESSION
+                    | TF_IPPMF_ENABLEPROFILE
                     | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE,
             );
 
@@ -187,7 +196,6 @@ pub fn prepare_session(
                     restored: std::cell::Cell::new(false),
                 }),
                 Err(e) => {
-
                     // 激活失败同样要走 restore（restore_decision：activation_failed=true）。
                     let s = PreparedWindowsImeSession {
                         saved,
@@ -250,7 +258,9 @@ impl PreparedWindowsImeSession {
         }
         #[cfg(target_os = "windows")]
         {
-            let Some(saved) = self.saved.as_ref() else { return };
+            let Some(saved) = self.saved.as_ref() else {
+                return;
+            };
             unsafe {
                 use windows::Win32::System::Com::{
                     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
@@ -313,7 +323,9 @@ impl Drop for PreparedWindowsImeSession {
 }
 
 #[cfg(target_os = "windows")]
-fn snapshot_from(p: &windows::Win32::UI::TextServices::TF_INPUTPROCESSORPROFILE) -> Option<ImeProfileSnapshot> {
+fn snapshot_from(
+    p: &windows::Win32::UI::TextServices::TF_INPUTPROCESSORPROFILE,
+) -> Option<ImeProfileSnapshot> {
     use windows::Win32::UI::TextServices::{
         TF_PROFILETYPE_INPUTPROCESSOR, TF_PROFILETYPE_KEYBOARDLAYOUT,
     };
@@ -352,7 +364,10 @@ mod tests {
             tsf_gate(true, 10, 0x014c, true),
             Err(ImeErrorCode::Rejected)
         );
-        assert_eq!(tsf_gate(true, 10, 0xaa64, true), Err(ImeErrorCode::Rejected));
+        assert_eq!(
+            tsf_gate(true, 10, 0xaa64, true),
+            Err(ImeErrorCode::Rejected)
+        );
         assert_eq!(
             tsf_gate(true, 65537, 0x8664, true),
             Err(ImeErrorCode::TooLarge)
@@ -424,8 +439,7 @@ mod tests {
     fn snapshot_maps_both_profile_kinds() {
         use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
         use windows::Win32::UI::TextServices::{
-            TF_INPUTPROCESSORPROFILE, TF_PROFILETYPE_INPUTPROCESSOR,
-            TF_PROFILETYPE_KEYBOARDLAYOUT,
+            TF_INPUTPROCESSORPROFILE, TF_PROFILETYPE_INPUTPROCESSOR, TF_PROFILETYPE_KEYBOARDLAYOUT,
         };
         let kb = TF_INPUTPROCESSORPROFILE {
             dwProfileType: TF_PROFILETYPE_KEYBOARDLAYOUT,
@@ -449,10 +463,20 @@ mod tests {
             ..Default::default()
         };
         match snapshot_from(&ts) {
-            Some(ImeProfileSnapshot::TextService { lang, clsid, profile_guid }) => {
+            Some(ImeProfileSnapshot::TextService {
+                lang,
+                clsid,
+                profile_guid,
+            }) => {
                 assert_eq!(lang, 0x0804);
-                assert_eq!(clsid, crate::windows_ime::protocol::OPENIME_TEXT_SERVICE_CLSID);
-                assert_eq!(profile_guid, crate::windows_ime::protocol::OPENIME_PROFILE_GUID);
+                assert_eq!(
+                    clsid,
+                    crate::windows_ime::protocol::OPENIME_TEXT_SERVICE_CLSID
+                );
+                assert_eq!(
+                    profile_guid,
+                    crate::windows_ime::protocol::OPENIME_PROFILE_GUID
+                );
             }
             other => panic!("应映射为 TextService：{other:?}"),
         }

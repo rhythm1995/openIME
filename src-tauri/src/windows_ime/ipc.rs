@@ -4,11 +4,11 @@
 //! `GetNamedPipeServerProcessId == 目标 pid`，防仿冒/连错）。连接时序（L756-768）：
 //! 800ms 内 `WaitNamedPipe` + `CreateFile` 重试 → 读 `clientReady` → 提交/收结果。
 
+#[cfg(target_os = "windows")]
+use super::protocol::ime_pipe_name_for_target;
 use super::protocol::{
     ImeErrorCode, ImeProtocolMessage, ImeSubmitStatus, OPENIME_IME_PROTOCOL_VERSION,
 };
-#[cfg(target_os = "windows")]
-use super::protocol::ime_pipe_name_for_target;
 
 /// 连接 + clientReady 阶段的失败分类（映射 ImeErrorCode）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,9 +46,7 @@ pub fn connect_and_wait_ready(
     use std::time::{Duration, Instant};
 
     use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE};
-    use windows::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_OVERLAPPED, OPEN_EXISTING,
-    };
+    use windows::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAG_OVERLAPPED, OPEN_EXISTING};
     use windows::Win32::System::Pipes::{GetNamedPipeServerProcessId, WaitNamedPipeW};
 
     let name: Vec<u16> = ime_pipe_name_for_target(pid, tid)
@@ -75,18 +73,22 @@ pub fn connect_and_wait_ready(
         if let Some(h) = opened {
             let mut server_pid = 0u32;
             if unsafe { GetNamedPipeServerProcessId(h, &mut server_pid) }.is_err() {
-                unsafe { let _ = CloseHandle(h); };
+                unsafe {
+                    let _ = CloseHandle(h);
+                };
                 return Err(IpcConnectError::Protocol);
             }
             if server_pid != pid {
-                unsafe { let _ = CloseHandle(h); };
+                unsafe {
+                    let _ = CloseHandle(h);
+                };
                 return Err(IpcConnectError::ServerPidMismatch);
             }
             let client = IpcClient { handle: h };
             // 等 clientReady（DLL 连接建立后立即写）。
-            match client.read_message(deadline_ms.saturating_sub(
-                started.elapsed().as_millis() as u64,
-            )) {
+            match client
+                .read_message(deadline_ms.saturating_sub(started.elapsed().as_millis() as u64))
+            {
                 Some(ImeProtocolMessage::ClientReady { process_id, .. }) if process_id == pid => {
                     return Ok(client)
                 }
@@ -119,8 +121,8 @@ impl IpcClient {
     pub fn read_message(&self, timeout_ms: u64) -> Option<ImeProtocolMessage> {
         use std::time::{Duration, Instant};
 
-        use windows::Win32::System::Pipes::PeekNamedPipe;
         use windows::Win32::Storage::FileSystem::ReadFile;
+        use windows::Win32::System::Pipes::PeekNamedPipe;
 
         let started = Instant::now();
         let mut pending = Vec::<u8>::new();
@@ -128,10 +130,9 @@ impl IpcClient {
         loop {
             // Peek + Read：Peek 判定「有数据」再 Read，避免永久阻塞。
             let mut avail = 0u32;
-            let peek_ok = unsafe {
-                PeekNamedPipe(self.handle, None, 0, None, Some(&mut avail), None)
-            }
-            .is_ok();
+            let peek_ok =
+                unsafe { PeekNamedPipe(self.handle, None, 0, None, Some(&mut avail), None) }
+                    .is_ok();
             if !peek_ok || avail == 0 {
                 if started.elapsed() >= Duration::from_millis(timeout_ms) {
                     return None;
@@ -164,13 +165,7 @@ impl IpcClient {
         line.push('\n');
         let mut written = 0u32;
         unsafe {
-            WriteFile(
-                self.handle,
-                Some(line.as_bytes()),
-                Some(&mut written),
-                None,
-            )
-            .is_ok()
+            WriteFile(self.handle, Some(line.as_bytes()), Some(&mut written), None).is_ok()
                 && written as usize == line.len()
         }
     }
@@ -421,7 +416,10 @@ mod tests {
             status: ImeSubmitStatus::Committed,
             error_code: None,
         };
-        assert_eq!(interpret_result(Some(ok), "s1"), Ok(ImeSubmitStatus::Committed));
+        assert_eq!(
+            interpret_result(Some(ok), "s1"),
+            Ok(ImeSubmitStatus::Committed)
+        );
     }
 
     #[test]
@@ -432,7 +430,10 @@ mod tests {
             status: ImeSubmitStatus::Failed,
             error_code: Some(ImeErrorCode::TooLarge),
         };
-        assert_eq!(interpret_result(Some(bad), "s1"), Err(ImeErrorCode::TooLarge));
+        assert_eq!(
+            interpret_result(Some(bad), "s1"),
+            Err(ImeErrorCode::TooLarge)
+        );
     }
 
     #[test]
@@ -443,10 +444,18 @@ mod tests {
             status: ImeSubmitStatus::Committed,
             error_code: None,
         };
-        assert_eq!(interpret_result(Some(stale), "s1"), Err(ImeErrorCode::Protocol));
+        assert_eq!(
+            interpret_result(Some(stale), "s1"),
+            Err(ImeErrorCode::Protocol)
+        );
         assert_eq!(interpret_result(None, "s1"), Err(ImeErrorCode::Protocol));
         assert_eq!(
-            interpret_result(Some(ImeProtocolMessage::Ping { protocol_version: 1 }), "s1"),
+            interpret_result(
+                Some(ImeProtocolMessage::Ping {
+                    protocol_version: 1
+                }),
+                "s1"
+            ),
             Err(ImeErrorCode::Protocol)
         );
     }
