@@ -1,8 +1,9 @@
 name: Release
 
 # 多平台打包 + GitHub Release。
-# 触发：push 版本 tag（v0.1.1）→ 构建 macOS dmg + Windows NSIS 安装包并发布。
-# 手动兜底：workflow_dispatch（无 tag 时用 tauri.conf.json 里的版本号）。
+# 触发：push 版本 tag（v0.2.0）→ 先跑测试门禁，全绿后构建 macOS dmg + Windows
+# NSIS 安装包并发布。只有 tag 才打包；失败重试用 run 的 Re-run，不再提供
+# workflow_dispatch 手动触发（无 tag 打包会绕过「tag 才打包」的约定）。
 #
 # 签名策略（内测版）：
 # - macOS：CI 一次性自签（openIME CI Signing），非 Developer ID 公证，
@@ -12,7 +13,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -25,7 +25,7 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       tag_name: ${{ steps.check.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: 校验 tag 与版本一致
         id: check
         env:
@@ -34,31 +34,64 @@ jobs:
         run: |
           CONF_VERSION="$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")"
           echo "tauri.conf version: $CONF_VERSION"
-          if [[ "$TAG" == v* ]]; then
-            TAG_VERSION="${TAG#v}"
-            if [[ "$TAG_VERSION" != "$CONF_VERSION" ]]; then
-              echo "错误：tag $TAG 与 tauri.conf.json version $CONF_VERSION 不一致。" >&2
-              echo "请先同步三处版本（workspace Cargo.toml / src-tauri/tauri.conf.json / package.json）再打 tag。" >&2
-              exit 1
-            fi
-            echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
-            echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=$CONF_VERSION" >> "$GITHUB_OUTPUT"
-            echo "tag_name=v$CONF_VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" != v* ]]; then
+            echo "错误：Release 仅由 v* tag 触发，当前 ref：$TAG" >&2
+            exit 1
           fi
+          TAG_VERSION="${TAG#v}"
+          if [[ "$TAG_VERSION" != "$CONF_VERSION" ]]; then
+            echo "错误：tag $TAG 与 tauri.conf.json version $CONF_VERSION 不一致。" >&2
+            echo "请先同步三处版本（workspace Cargo.toml / src-tauri/tauri.conf.json / package.json）再打 tag。" >&2
+            exit 1
+          fi
+          echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
+
+  # ── 测试门禁：打包前强制全绿（与 ci.yml 同口径的 voice-core + 前端） ──
+  test:
+    needs: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+      - name: Clippy + test voice-core（默认 feature）
+        run: |
+          cargo clippy -p voice-core --all-targets -- -D warnings
+          cargo test -p voice-core --all-targets
+      - name: Clippy + test voice-core（sherpa feature）
+        run: |
+          cargo clippy -p voice-core --features sherpa --all-targets -- -D warnings
+          cargo test -p voice-core --features sherpa --all-targets
+      - name: Frontend vitest + build
+        run: |
+          pnpm test
+          pnpm build
 
   # ── macOS：临时自签 + dmg ──
   build-macos:
-    needs: version-check
+    needs: [version-check, test]
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
-      - uses: actions/setup-node@v4
+          version: 11
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -107,15 +140,15 @@ jobs:
 
   # ── Windows：未签名 + NSIS ──
   build-windows:
-    needs: version-check
+    needs: [version-check, test]
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
-      - uses: actions/setup-node@v4
+          version: 11
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -125,6 +158,13 @@ jobs:
           key: windows-release
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
+      # TSF DLL 是本地构建产物（src-tauri/ime/ 已 gitignore）：tauri-build 的资源
+      # 校验先于 build.rs 编译真 DLL，先放占位通过校验；随后 build.rs 用 cl.exe
+      # 产出的真 DLL 会覆盖占位并打入安装包（与 ci.yml windows job 同套路）。
+      - name: Stub git-ignored TSF resource
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/ime | Out-Null
+          Set-Content -Path src-tauri/ime/OpenImeTsf.dll -Value "stub"
       - name: 构建 Windows NSIS 安装包
         shell: bash
         env:
