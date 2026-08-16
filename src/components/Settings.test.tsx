@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import Settings from "./Settings";
+import i18n from "../i18n";
 
 const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({
@@ -16,6 +17,24 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn().mockResolvedValue(null),
+}));
+
+// ── 自动更新（TDD）：mock updater/process 插件与 app 版本 ──
+const updateMock = {
+  version: "9.9.9",
+  notes: "big release",
+  downloadAndInstall: vi.fn().mockResolvedValue(undefined),
+};
+const checkUpdateMock = vi.fn();
+vi.mock("@tauri-apps/plugin-updater", () => ({
+  check: (...args: unknown[]) => checkUpdateMock(...args),
+}));
+const relaunchMock = vi.fn().mockResolvedValue(undefined);
+vi.mock("@tauri-apps/plugin-process", () => ({
+  relaunch: (...args: unknown[]) => relaunchMock(...args),
+}));
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: vi.fn().mockResolvedValue("0.2.0"),
 }));
 
 /** 触发一次后端事件（如 model://download-progress）。 */
@@ -661,6 +680,33 @@ describe("Settings", () => {
     expect(await screen.findByText("翻译快捷键（可选）")).toBeTruthy();
   });
 
+  // ── 自动更新（App 行为卡） ──
+
+  it("检查更新：发现新版本，可下载安装并自动重启", async () => {
+    checkUpdateMock.mockResolvedValue(updateMock);
+    mockInvoke({ get_config: defaultConfig, list_style_packs: [] });
+    render(<Settings />);
+    await screen.findByText("识别引擎");
+    // 显示当前版本；点检查 → 提示新版本。
+    expect(await screen.findByText(/v0\.2\.0/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
+    expect(await screen.findByText(/发现新版本 v9\.9\.9/)).toBeTruthy();
+    // 点下载并安装 → 插件下载 → 重启。
+    fireEvent.click(screen.getByRole("button", { name: "下载并安装" }));
+    await waitFor(() => expect(updateMock.downloadAndInstall).toHaveBeenCalled());
+    await waitFor(() => expect(relaunchMock).toHaveBeenCalled());
+  });
+
+  it("检查更新：已是最新版本", async () => {
+    checkUpdateMock.mockResolvedValue(null);
+    mockInvoke({ get_config: defaultConfig, list_style_packs: [] });
+    render(<Settings />);
+    await screen.findByText("识别引擎");
+    fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
+    expect(await screen.findByText("已是最新版本")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "下载并安装" })).toBeNull();
+  });
+
   it("触发模式默认按住说话且为第一项；语音视图不含 AI 卡", async () => {
     mockInvoke({ get_config: { ...defaultConfig, hotkey_mode: undefined } });
     render(<Settings />);
@@ -768,5 +814,182 @@ describe("Settings", () => {
       });
       vi.resetModules();
     }
+  });
+});
+
+// ── TDD6：ROLES / STYLE PACKS 双语（en 界面显示 / 编辑 / 新建写 EN 字段） ──
+
+/** v5 内置包（带 EN 字段），与后端 BUILTIN_PREFIX_PACKS 对齐；u-x 无 EN 字段验回退。 */
+const builtinPacksEn = [
+  {
+    id: "builtin-role-translate",
+    name: "翻译",
+    name_en: "Translate",
+    system_prompt: "把内容翻译成目标语言，只输出译文。",
+    system_prompt_en: "Translate the spoken content into the target language. Output only the translation.",
+    is_builtin: true,
+    ord: 0,
+    match_prefix: "翻译|fanyi",
+    match_prefix_en: "translate|t",
+    provider: null,
+    model: null,
+    role_kind: "translate",
+    output_mode: "insert",
+  },
+  {
+    id: "builtin-role-mail",
+    name: "邮件",
+    name_en: "Email",
+    system_prompt: "把内容改写成正式邮件。",
+    system_prompt_en: "Rewrite the spoken content into a formal email body.",
+    is_builtin: true,
+    ord: 1,
+    match_prefix: "邮件|mail",
+    match_prefix_en: "email|mail",
+    provider: null,
+    model: null,
+    role_kind: "default",
+    output_mode: "insert",
+  },
+  {
+    id: "u-x",
+    name: "我的风格",
+    system_prompt: "简洁",
+    is_builtin: false,
+    ord: 100,
+    match_prefix: null,
+    provider: null,
+    model: null,
+    role_kind: "default",
+    output_mode: "insert",
+  },
+];
+
+describe("Settings ROLES 双语（en）", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    listenHandlers.clear();
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+  });
+  afterEach(async () => {
+    await act(async () => {
+      await i18n.changeLanguage("zh");
+    });
+  });
+
+  it("列表显示英文名与英文别名徽标，无 EN 字段回退中文；heavy 下拉用显示名", async () => {
+    mockInvoke({
+      get_config: { ...defaultConfig, polish_mode: "heavy" },
+      list_style_packs: builtinPacksEn,
+    });
+    render(<Settings view="ai" />);
+    const list = await waitFor(() => {
+      const el = document.querySelector(".roles-list");
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    // 列表异步加载（list_style_packs）→ findBy 等待。
+    // 内置角色显示 EN 名 + EN 别名徽标 + translate 角色标。
+    expect(await within(list).findByText(/Translate/)).toBeTruthy();
+    expect(within(list).getByText(/Email/)).toBeTruthy();
+    expect(within(list).getByText("Prefix: translate")).toBeTruthy();
+    expect(within(list).getByText("Prefix: email")).toBeTruthy();
+    expect(within(list).getByText("translate role")).toBeTruthy();
+    // 用户包无 EN 字段 → 回退中文名。
+    expect(within(list).getByText(/我的风格/)).toBeTruthy();
+    // heavy 风格包下拉 option 用显示名（EN）。
+    const packSelect = screen
+      .getByText("Style pack")
+      .closest(".field")!
+      .querySelector("select") as HTMLSelectElement;
+    expect(
+      Array.from(packSelect.options).some((o) => /Translate/.test(o.textContent ?? "")),
+    ).toBe(true);
+  });
+
+  it("编辑面板回填 EN 名称/别名/提示词，失焦保存写 *_en 且不动中文字段", async () => {
+    mockInvoke({
+      get_config: defaultConfig,
+      list_style_packs: builtinPacksEn,
+    });
+    render(<Settings view="ai" />);
+    // 默认选中第一项（Translate）→ 面板回填 EN 字段。
+    expect(await screen.findByDisplayValue("Translate")).toBeTruthy();
+    expect(await screen.findByDisplayValue("translate|t")).toBeTruthy();
+    expect(
+      await screen.findByDisplayValue(/Translate the spoken content/),
+    ).toBeTruthy();
+    // 改名 → 写 name_en，中文名不动。
+    fireEvent.blur(screen.getByDisplayValue("Translate"), {
+      target: { value: "Translator" },
+    });
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "upsert_style_pack",
+        expect.objectContaining({
+          pack: expect.objectContaining({
+            id: "builtin-role-translate",
+            name_en: "Translator",
+            name: "翻译",
+          }),
+        }),
+      ),
+    );
+    // 改别名 → 写 match_prefix_en。
+    fireEvent.blur(screen.getByDisplayValue("translate|t"), {
+      target: { value: "trans" },
+    });
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "upsert_style_pack",
+        expect.objectContaining({
+          pack: expect.objectContaining({ match_prefix_en: "trans" }),
+        }),
+      ),
+    );
+    // 改提示词 → 写 system_prompt_en。
+    fireEvent.blur(screen.getByDisplayValue(/Translate the spoken content/), {
+      target: { value: "Translate everything." },
+    });
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "upsert_style_pack",
+        expect.objectContaining({
+          pack: expect.objectContaining({
+            system_prompt_en: "Translate everything.",
+            system_prompt: "把内容翻译成目标语言，只输出译文。",
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("新建角色双语同值写入（name_en / system_prompt_en）", async () => {
+    mockInvoke({ get_config: defaultConfig, list_style_packs: [] });
+    render(<Settings view="ai" />);
+    fireEvent.click(await screen.findByText("+ New role / style pack"));
+    fireEvent.change(screen.getByPlaceholderText(/Style pack name/), {
+      target: { value: "Summarizer" },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/system prompt instruction/), {
+      target: { value: "Summarize the content." },
+    });
+    // 「Create」与草稿标题同名 → 限定按钮。
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "upsert_style_pack",
+        expect.objectContaining({
+          pack: expect.objectContaining({
+            name: "Summarizer",
+            name_en: "Summarizer",
+            system_prompt: "Summarize the content.",
+            system_prompt_en: "Summarize the content.",
+          }),
+        }),
+      ),
+    );
   });
 });

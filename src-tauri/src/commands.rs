@@ -69,6 +69,27 @@ pub fn default_config() -> AppConfig {
     AppConfig::default()
 }
 
+/// i18n：把 App 界面语言（"zh"/"en"）同步到后端配置。
+/// 前端语言切换时调用；Rust 端（前缀角色别名 / system prompt 等）按它选语言。
+#[tauri::command]
+pub fn set_ui_lang(state: State<'_, AppState>, lang: String) -> Result<(), String> {
+    let mut cfg = state.config.blocking_read().clone();
+    apply_ui_lang(&mut cfg, &lang)?;
+    save_config(&state.store, &cfg).map_err(|e| e.to_string())?;
+    *state.config.blocking_write() = cfg;
+    Ok(())
+}
+
+/// `set_ui_lang` 的纯校验部分（可单测）：只接受 zh/en（大小写、空白容错）。
+fn apply_ui_lang(cfg: &mut AppConfig, lang: &str) -> Result<(), String> {
+    let l = lang.trim().to_lowercase();
+    if l != "zh" && l != "en" {
+        return Err(format!("不支持的界面语言：{lang}"));
+    }
+    cfg.ui_lang = l;
+    Ok(())
+}
+
 // ──────────────── 配置 ────────────────
 
 #[tauri::command]
@@ -1855,6 +1876,22 @@ mod tests {
             translate_hotkey: Some("Alt+Shift+T".into()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn apply_ui_lang_accepts_known_langs_only() {
+        let mut c = base_cfg();
+        assert_eq!(c.ui_lang, "zh");
+        assert!(apply_ui_lang(&mut c, "en").is_ok());
+        assert_eq!(c.ui_lang, "en");
+        assert!(apply_ui_lang(&mut c, "zh").is_ok());
+        assert_eq!(c.ui_lang, "zh");
+        // 大小写与空白容错。
+        assert!(apply_ui_lang(&mut c, "  EN ").is_ok());
+        assert_eq!(c.ui_lang, "en");
+        // 非法语言拒绝且不改原值。
+        assert!(apply_ui_lang(&mut c, "fr").is_err());
+        assert_eq!(c.ui_lang, "en");
     }
 
     #[test]

@@ -360,7 +360,12 @@ impl AppState {
                 self.store
                     .list_style_packs()
                     .ok()
-                    .and_then(|ps| ps.into_iter().find(|p| p.id == id).map(|p| p.system_prompt))
+                    .and_then(|ps| {
+                        ps.into_iter()
+                            .find(|p| p.id == id)
+                            // i18n：英文界面用英文 system prompt（空则回退中文）。
+                            .map(|p| p.system_prompt_for(&cfg.ui_lang).to_string())
+                    })
             })
         };
 
@@ -393,6 +398,11 @@ impl AppState {
                 "auto".into()
             } else {
                 cfg.local_language.trim().to_lowercase()
+            },
+            ui_lang: if cfg.ui_lang.trim().is_empty() {
+                "zh".into()
+            } else {
+                cfg.ui_lang.trim().to_lowercase()
             },
         }
     }

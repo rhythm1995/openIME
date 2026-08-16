@@ -128,7 +128,7 @@ else
     echo "错误：未找到 $APP_PATH" >&2
     exit 1
 fi
-DMG_PATH="$BUNDLE_DIR/dmg/${APP_NAME}_0.1.0_aarch64.dmg"
+DMG_PATH="$BUNDLE_DIR/dmg/${APP_NAME}_$(python3 -c "import json;print(json.load(open('$SRC_TAURI/tauri.conf.json'))['version'])")_aarch64.dmg"
 if [[ -f "$DMG_PATH" ]]; then
     echo "   .dmg : $DMG_PATH"
 fi

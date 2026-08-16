@@ -17,7 +17,7 @@
     "ctaPrimary": "Download",
     "ctaSecondary": "GitHub",
     "metaItems": [
-      "v0.1.0",
+      "v0.2.0",
       "macOS 12+ · Windows beta",
       "MIT open source",
       "Fully offline"
@@ -170,6 +170,10 @@
       {
         "q": "How do I report issues?",
         "a": "Open a GitHub issue or send a PR — the project is MIT licensed."
+      },
+      {
+        "q": "How do I upgrade to a new version?",
+        "a": "Since v0.2.0 the app updates in place: Settings → App behavior → Check for updates, or grab the latest installer from GitHub Releases (your config and data are kept)."
       }
     ]
   },

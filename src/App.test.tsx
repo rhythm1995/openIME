@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import App from "./App";
+import i18n from "./i18n";
 
 const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({
@@ -113,5 +114,102 @@ describe("App", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("系统权限")).toBeInTheDocument());
     expect(screen.queryByText(/需要授权才能完整使用/)).not.toBeInTheDocument();
+  });
+
+  // ── TDD5：语言切换 → 后端 ui_lang 下发 + 默认助手名跟随（小友↔IME） ──
+
+  it("切 en：set_ui_lang 下发，默认助手名 小友→IME 并保存，UI 随之切换", async () => {
+    const saved: { assistant_name?: string }[] = [];
+    invokeMock.mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === "get_config")
+        return Promise.resolve({ ...bailianConfig, assistant_name: "小友" });
+      if (cmd === "save_app_config") {
+        saved.push((args as { config: { assistant_name?: string } }).config);
+        return Promise.resolve(undefined);
+      }
+      return Promise.resolve(undefined);
+    });
+    await act(async () => {
+      await i18n.changeLanguage("zh");
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("语音配置")).toBeInTheDocument());
+    fireEvent.click(screen.getByTitle("切换界面语言"));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_ui_lang", { lang: "en" }),
+    );
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0].assistant_name).toBe("IME");
+    await waitFor(() => expect(screen.getByText("Voice")).toBeInTheDocument());
+  });
+
+  it("切 en：自定义助手名不动，不触发配置保存", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_config")
+        return Promise.resolve({ ...bailianConfig, assistant_name: "小明" });
+      return Promise.resolve(undefined);
+    });
+    await act(async () => {
+      await i18n.changeLanguage("zh");
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("语音配置")).toBeInTheDocument());
+    fireEvent.click(screen.getByTitle("切换界面语言"));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_ui_lang", { lang: "en" }),
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "save_app_config",
+      expect.anything(),
+    );
+  });
+
+  it("切回 zh：默认助手名 IME→小友", async () => {
+    const saved: { assistant_name?: string }[] = [];
+    invokeMock.mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === "get_config")
+        return Promise.resolve({ ...bailianConfig, assistant_name: "IME" });
+      if (cmd === "save_app_config") {
+        saved.push((args as { config: { assistant_name?: string } }).config);
+        return Promise.resolve(undefined);
+      }
+      return Promise.resolve(undefined);
+    });
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Voice")).toBeInTheDocument());
+    fireEvent.click(screen.getByTitle("Switch interface language"));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_ui_lang", { lang: "zh" }),
+    );
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0].assistant_name).toBe("小友");
+    await waitFor(() => expect(screen.getByText("语音配置")).toBeInTheDocument());
+  });
+
+  it("启动即 EN（老版本升级）：自动同步后端 ui_lang 并把默认助手名换为 IME", async () => {
+    // 老配置：无 ui_lang 字段（后端默认 zh）、助手名还是默认 小友。
+    const saved: { assistant_name?: string }[] = [];
+    invokeMock.mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === "get_config")
+        return Promise.resolve({ ...bailianConfig, assistant_name: "小友" });
+      if (cmd === "save_app_config") {
+        saved.push((args as { config: { assistant_name?: string } }).config);
+        return Promise.resolve(undefined);
+      }
+      return Promise.resolve(undefined);
+    });
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
+    render(<App />);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_ui_lang", { lang: "en" }),
+    );
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0].assistant_name).toBe("IME");
+    await waitFor(() => expect(screen.getByText("Voice")).toBeInTheDocument());
   });
 });

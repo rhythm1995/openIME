@@ -19,6 +19,7 @@ import type {
   LocalAsrModelEntry,
   LocalModelStatus,
   ModelDownloadProgress,
+  ModelPerfTag,
   ModelSuiteInfo,
   PolishCloudProtocol,
   ProviderConfig,
@@ -27,6 +28,15 @@ import type {
   TranscribeResult,
   WindowsImeStatus,
 } from "../types";
+import type { TFunction } from "i18next";
+import { i18nBackendError } from "../i18n/backendErrors";
+import {
+  checkUpdate,
+  currentVersion,
+  downloadAndInstall,
+  relaunchApp,
+  type Update,
+} from "../updater";
 import { ipc, permissionLabelKey, type PermissionKind, type PermissionStatus } from "../ipc";
 
 // 默认本地 ASR id（与 voice-core asr_catalog 对齐；未安装时不算「使用中」）。
@@ -58,6 +68,186 @@ function fmtSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${bytes} B`;
+}
+
+// 模型卡片标题/描述前端本地化：目录内 id 走 i18n（en/zh 两侧 key 已对齐），
+// 未知/自定义 id（如回退档、用户手改配置）回退后端原文。
+const LLM_MODEL_I18N_IDS = new Set([
+  "qwen3.5-0.8b",
+  "qwen3.5-2b",
+  "qwen3.5-4b",
+  "milmmt-1b",
+  "hy-mt-1.8b",
+]);
+// 后端 ASR id（如 funasr-nano-int8）→ i18n key 后缀（funasr_nano_int8）。
+const ASR_MODEL_I18N_IDS: Record<string, string> = {
+  sensevoice: "sensevoice",
+  "funasr-nano-int8": "funasr_nano_int8",
+  "funasr-nano-fp16": "funasr_nano_fp16",
+};
+
+function llmModelText(
+  t: TFunction,
+  id: string,
+  kind: "title" | "desc",
+  fallback: string,
+): string {
+  if (!LLM_MODEL_I18N_IDS.has(id)) return fallback;
+  return t(`settings.localLlm.models.${id}.${kind}`);
+}
+
+function asrModelText(
+  t: TFunction,
+  id: string,
+  kind: "title" | "desc",
+  fallback: string,
+): string {
+  const key = ASR_MODEL_I18N_IDS[id];
+  if (!key) return fallback;
+  return t(`settings.localAsr.models.${key}.${kind === "title" ? "title" : "desc"}`);
+}
+
+// 删除确认等插值场景取本地化标题（LLM 走 localLlm.models，ASR 走 localAsr.models）。
+function modelDisplayTitle(
+  t: TFunction,
+  m: { id: string; title: string; kind?: string },
+): string {
+  return m.kind
+    ? llmModelText(t, m.id, "title", m.title)
+    : asrModelText(t, m.id, "title", m.title);
+}
+
+// 下载进度条阶段文案前端本地化（后端 message 为中文，按 phase 渲染本地化动词）。
+function downloadMsgText(t: TFunction, msg: string, file: string, phase: string): string {
+  if (phase === "verifying") return t("settings.localAsr.verifyingFile", { file });
+  if (phase === "downloading") return t("settings.localAsr.downloadingFile", { file });
+  return msg || file;
+}
+
+// perf tag 文案按界面语言取 en；旧持久化数据缺少 en 字段时回退中文（zh）。
+function perfTagText(
+  p: ModelPerfTag,
+  isEn: boolean,
+): { tag: string; reason: string; kind: string } {
+  return isEn
+    ? { tag: p.tag_en || p.tag, reason: p.reason_en || p.reason, kind: p.kind }
+    : { tag: p.tag, reason: p.reason, kind: p.kind };
+}
+
+// 角色 / 风格包双语显示：EN 界面优先 *_en 字段，空回退中文（与后端
+// name_for / aliases_for / system_prompt_for 同语义）。
+function packName(p: StylePack, isEn: boolean): string {
+  return isEn && (p.name_en ?? "").trim() ? p.name_en! : p.name;
+}
+function packAliases(p: StylePack, isEn: boolean): string {
+  if (isEn && (p.match_prefix_en ?? "").trim()) return p.match_prefix_en!;
+  return p.match_prefix ?? "";
+}
+function packPrompt(p: StylePack, isEn: boolean): string {
+  return isEn && (p.system_prompt_en ?? "").trim() ? p.system_prompt_en! : p.system_prompt;
+}
+
+// 应用更新行（App 行为卡）：检查 → 展示新版本 → 下载安装（进度）→ 重启。
+// 独立子组件自持状态，避免给巨型 Settings 组件再加一组 state。
+function UpdateRow({ t }: { t: TFunction }) {
+  const [ver, setVer] = useState("");
+  const [status, setStatus] = useState<
+    "idle" | "checking" | "none" | "available" | "downloading" | "error"
+  >("idle");
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [progress, setProgress] = useState("");
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    void currentVersion().then(setVer);
+  }, []);
+
+  const doCheck = async () => {
+    setStatus("checking");
+    setErr("");
+    const u = await checkUpdate();
+    if (!u) {
+      setStatus("none");
+      return;
+    }
+    setUpdate(u);
+    setStatus("available");
+  };
+
+  const doInstall = async () => {
+    if (!update) return;
+    setStatus("downloading");
+    setErr("");
+    try {
+      await downloadAndInstall(update, (p) => {
+        setProgress(
+          p.contentLength
+            ? `${Math.round((p.downloaded / p.contentLength) * 100)}%`
+            : `${(p.downloaded / 1_048_576).toFixed(1)} MB`,
+        );
+      });
+      await relaunchApp();
+    } catch (e) {
+      setErr(i18nBackendError(e, t));
+      setStatus("error");
+    }
+  };
+
+  return (
+    <div className="set-row">
+      <div>
+        <div className="set-name">{t("settings.update.name")}</div>
+        <div className="set-desc">
+          {ver ? t("settings.update.current", { version: ver }) : t("settings.update.desc")}
+        </div>
+        {status === "available" && update && (
+          <div className="set-desc" style={{ color: "var(--success)" }}>
+            {t("settings.update.available", { version: update.version })}
+          </div>
+        )}
+        {status === "downloading" && (
+          <div className="set-desc">
+            {t("settings.update.downloading", { progress: progress || "0%" })}
+          </div>
+        )}
+        {status === "error" && (
+          <div className="set-desc" style={{ color: "var(--danger)" }}>
+            {t("settings.update.failed", { error: err })}
+          </div>
+        )}
+      </div>
+      {status === "checking" ? (
+        <button className="btn btn-sm" disabled>
+          {t("settings.update.checking")}
+        </button>
+      ) : status === "none" ? (
+        <>
+          <button className="btn btn-sm" onClick={() => void doCheck()}>
+            {t("settings.update.checkBtn")}
+          </button>
+          <span className="set-desc" style={{ alignSelf: "center" }}>
+            {t("settings.update.upToDate")}
+          </span>
+        </>
+      ) : status === "available" ? (
+        <button className="btn btn-sm" onClick={() => void doInstall()}>
+          {t("settings.update.installBtn")}
+        </button>
+      ) : status === "downloading" ? (
+        <button className="btn btn-sm" disabled>
+          {t("settings.update.downloading", { progress: progress || "0%" })}
+        </button>
+      ) : status === "error" ? (
+        <button className="btn btn-sm" onClick={() => void doInstall()}>
+          {t("settings.update.retryBtn")}
+        </button>
+      ) : (
+        <button className="btn btn-sm" onClick={() => void doCheck()}>
+          {t("settings.update.checkBtn")}
+        </button>
+      )}
+    </div>
+  );
 }
 
 // 状态前缀小图标：替代 ✅/❌/⚠️/🔴 emoji，保持文字与图标基线对齐。
@@ -216,7 +406,8 @@ function HotkeyCaptureInput({
 }
 
 export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const isEn = i18n.language === "en";
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [mic, setMic] = useState<PermissionStatus | null>(null);
@@ -294,12 +485,30 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
         } catch (e) {
           // 落盘到后端日志（console.error 被 logger 包装转发），便于排查保存失败。
           console.error("[settings] 自动保存配置失败:", e);
-          setMsg({ ok: false, text: String(e) });
+          setMsg({ ok: false, text: i18nBackendError(e, t) });
         }
       })();
     }, 500);
     return () => clearTimeout(timer);
   }, [config, t]);
+  // 语言切换时 App 侧已更新后端配置（ui_lang / 默认助手名 小友↔IME）：
+  // 重拉配置避免本页旧副本在下次自动保存时覆盖新值；同步刷新基线，
+  // 不触发一次多余的自动保存。
+  useEffect(() => {
+    const refresh = () => {
+      ipc
+        .getConfig()
+        .then((c) => {
+          savedSigRef.current = JSON.stringify(c);
+          setConfig(c);
+        })
+        .catch(() => {});
+    };
+    i18n.on("languageChanged", refresh);
+    return () => {
+      i18n.off("languageChanged", refresh);
+    };
+  }, [i18n]);
   useEffect(() => {
     if (!msg?.ok) return;
     const h = setTimeout(() => setMsg(null), 1800);
@@ -436,7 +645,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
     }).then((u) => unlisteners.push(u));
     listen<string>("recording://error", (e) => {
       setRecording(false);
-      setMsg({ ok: false, text: t("settings.recordingError", { error: e.payload }) });
+      setMsg({ ok: false, text: t("settings.recordingError", { error: i18nBackendError(e.payload, t) }) });
     }).then((u) => unlisteners.push(u));
 
     // 权限轮询：用户可能在系统设置里随时变更，勾选后这里自动更新。
@@ -540,6 +749,9 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
       model: p.model ?? null,
       role_kind: p.role_kind ?? "default",
       output_mode: p.output_mode ?? "insert",
+      name_en: p.name_en ?? "",
+      system_prompt_en: p.system_prompt_en ?? "",
+      match_prefix_en: p.match_prefix_en ?? null,
       ...patch,
     });
     ipc.listStylePacks().then(setStylePacks).catch(() => {});
@@ -802,7 +1014,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                   <option value="">{t("settings.polish.stylePackDefault")}</option>
                   {stylePacks.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.name}
+                      {packName(p, isEn)}
                       {p.is_builtin ? t("settings.polish.builtin") : ""}
                     </option>
                   ))}
@@ -828,7 +1040,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                       }}
                     >
                       <span>
-                        {p.name}
+                        {packName(p, isEn)}
                         {p.is_builtin ? t("settings.polish.builtin") : ""}
                       </span>
                       {!p.is_builtin && (
@@ -878,6 +1090,9 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                         system_prompt: newStylePrompt.trim(),
                         is_builtin: false,
                         ord: 100,
+                        // EN 界面新建：双语同值写入（与 ROLES 新建一致）。
+                        name_en: isEn ? newStyleName.trim() : "",
+                        system_prompt_en: isEn ? newStylePrompt.trim() : "",
                       });
                       setNewStyleName("");
                       setNewStylePrompt("");
@@ -1009,7 +1224,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                 const p = await ipc.openModelDirectory();
                 setMsg({ ok: true, text: t("settings.localLlm.openDirOk", { path: p }) });
               } catch (e) {
-                setMsg({ ok: false, text: String(e) });
+                setMsg({ ok: false, text: i18nBackendError(e, t) });
               }
             }}
           >
@@ -1045,6 +1260,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
           sortedPolishModels.map((m) => {
             const selected = m.active && m.installed;
             const isDownloadingThis = (dlTargetId === m.id || dl?.target_id === m.id) && !!dl;
+            const pt = m.perf_tag ? perfTagText(m.perf_tag, isEn) : null;
             return (
               <div
                 key={m.id}
@@ -1054,7 +1270,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                 <div className="row-between" style={{ marginBottom: 6, alignItems: "flex-start" }}>
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontWeight: 600, marginBottom: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      {m.title}
+                      {llmModelText(t, m.id, "title", m.title)}
                       {m.recommended && (
                         <span className="badge badge-success" style={{ fontSize: 11 }}>
                           {t("settings.localAsr.recommended")}
@@ -1065,36 +1281,36 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                           {t("settings.localAsr.inUse")}
                         </span>
                       )}
-                      {m.perf_tag && (
+                      {pt && (
                         <span
                           className="badge"
                           style={{
                             fontSize: 11,
                             background:
-                              m.perf_tag.kind === "suitable"
+                              pt.kind === "suitable"
                                 ? "rgba(89, 212, 153, 0.14)"
-                                : m.perf_tag.kind === "usable"
+                                : pt.kind === "usable"
                                   ? "rgba(255, 149, 0, 0.14)"
-                                  : m.perf_tag.kind === "unknown"
+                                  : pt.kind === "unknown"
                                     ? "var(--card-hover)"
                                     : "rgba(255, 69, 58, 0.12)",
                             color:
-                              m.perf_tag.kind === "suitable"
+                              pt.kind === "suitable"
                                 ? "var(--success)"
-                                : m.perf_tag.kind === "usable"
+                                : pt.kind === "usable"
                                   ? "var(--warning)"
-                                  : m.perf_tag.kind === "unknown"
+                                  : pt.kind === "unknown"
                                     ? "var(--text-tertiary)"
                                     : "var(--danger)",
                           }}
-                          title={m.perf_tag.reason}
+                          title={pt.reason}
                         >
-                          {m.perf_tag.tag}
+                          {pt.tag}
                         </span>
                       )}
                     </div>
                     <div className="field-hint" style={{ marginBottom: 0 }}>
-                      {m.description}
+                      {llmModelText(t, m.id, "desc", m.description)}
                     </div>
                   </div>
                   <span className={`badge ${m.installed ? "badge-success" : "badge-warning"}`} style={{ flexShrink: 0 }}>
@@ -1109,7 +1325,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                   <div style={{ marginBottom: 8 }}>
                     <div className="row-between" style={{ marginBottom: 4 }}>
                       <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                        {dl.message || dl.file_name} · {fmtSize(dl.total_downloaded)} / {fmtSize(dl.total_size)}
+                        {downloadMsgText(t, dl.message, dl.file_name, dl.phase)} · {fmtSize(dl.total_downloaded)} / {fmtSize(dl.total_size)}
                       </span>
                       <span style={{ fontSize: 12, color: "var(--text-secondary)", flexShrink: 0 }}>
                         {dl.total_size > 0
@@ -1174,7 +1390,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                           ipc.listLocalPolishModels().then((l) => setPolishModels(l)).catch(() => {});
                           ipc.getModelSuiteInfo().then(setSuiteInfo).catch(() => {});
                         } catch (e) {
-                          setMsg({ ok: false, text: String(e) });
+                          setMsg({ ok: false, text: i18nBackendError(e, t) });
                         } finally {
                           setEnablingId(null);
                         }
@@ -1194,7 +1410,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                         title={t("settings.localAsr.deleteModelTitle")}
                         disabled={enablingId === m.id || deletingId === m.id || !!dl}
                         onClick={async () => {
-                          if (!window.confirm(t("settings.localAsr.confirmDeleteModel", { title: m.title }))) return;
+                          if (!window.confirm(t("settings.localAsr.confirmDeleteModel", { title: modelDisplayTitle(t, m) }))) return;
                           setDeletingId(m.id);
                           try {
                             await ipc.deleteLlmModel(m.id);
@@ -1308,7 +1524,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                     ipc.listLocalTranslateModels().then((l) => setTranslateModels(l)).catch(() => {});
                     ipc.getModelSuiteInfo().then(setSuiteInfo).catch(() => {});
                   } catch (e) {
-                    setMsg({ ok: false, text: String(e) });
+                    setMsg({ ok: false, text: i18nBackendError(e, t) });
                   }
                 }}
               >
@@ -1325,6 +1541,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
           sortedTranslateModels.map((m) => {
             const selected = m.active && m.installed;
             const isDownloadingThis = (dlTargetId === m.id || dl?.target_id === m.id) && !!dl;
+            const pt = m.perf_tag ? perfTagText(m.perf_tag, isEn) : null;
             return (
               <div
                 key={m.id}
@@ -1334,7 +1551,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                 <div className="row-between" style={{ marginBottom: 6, alignItems: "flex-start" }}>
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontWeight: 600, marginBottom: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      {m.title}
+                      {llmModelText(t, m.id, "title", m.title)}
                       {m.recommended && (
                         <span className="badge badge-success" style={{ fontSize: 11 }}>
                           {t("settings.localAsr.recommended")}
@@ -1345,32 +1562,32 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                           {t("settings.localAsr.inUse")}
                         </span>
                       )}
-                      {m.perf_tag && (
+                      {pt && (
                         <span
                           className="badge"
                           style={{
                             fontSize: 11,
                             background:
-                              m.perf_tag.kind === "suitable"
+                              pt.kind === "suitable"
                                 ? "rgba(89, 212, 153, 0.14)"
-                                : m.perf_tag.kind === "usable"
+                                : pt.kind === "usable"
                                   ? "rgba(255, 149, 0, 0.14)"
                                   : "rgba(255, 69, 58, 0.12)",
                             color:
-                              m.perf_tag.kind === "suitable"
+                              pt.kind === "suitable"
                                 ? "var(--success)"
-                                : m.perf_tag.kind === "usable"
+                                : pt.kind === "usable"
                                   ? "var(--warning)"
                                   : "var(--danger)",
                           }}
-                          title={m.perf_tag.reason}
+                          title={pt.reason}
                         >
-                          {m.perf_tag.tag}
+                          {pt.tag}
                         </span>
                       )}
                     </div>
                     <div className="field-hint" style={{ marginBottom: 0 }}>
-                      {m.description}
+                      {llmModelText(t, m.id, "desc", m.description)}
                     </div>
                   </div>
                   <span className={`badge ${m.installed ? "badge-success" : "badge-warning"}`} style={{ flexShrink: 0 }}>
@@ -1385,7 +1602,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                   <div style={{ marginBottom: 8 }}>
                     <div className="row-between" style={{ marginBottom: 4 }}>
                       <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                        {dl.message || dl.file_name} · {fmtSize(dl.total_downloaded)} / {fmtSize(dl.total_size)}
+                        {downloadMsgText(t, dl.message, dl.file_name, dl.phase)} · {fmtSize(dl.total_downloaded)} / {fmtSize(dl.total_size)}
                       </span>
                       <span style={{ fontSize: 12, color: "var(--text-secondary)", flexShrink: 0 }}>
                         {dl.total_size > 0
@@ -1450,7 +1667,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                           ipc.listLocalTranslateModels().then((l) => setTranslateModels(l)).catch(() => {});
                           ipc.getModelSuiteInfo().then(setSuiteInfo).catch(() => {});
                         } catch (e) {
-                          setMsg({ ok: false, text: String(e) });
+                          setMsg({ ok: false, text: i18nBackendError(e, t) });
                         } finally {
                           setEnablingId(null);
                         }
@@ -1470,7 +1687,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                         title={t("settings.localAsr.deleteModelTitle")}
                         disabled={enablingId === m.id || deletingId === m.id || !!dl}
                         onClick={async () => {
-                          if (!window.confirm(t("settings.localAsr.confirmDeleteModel", { title: m.title }))) return;
+                          if (!window.confirm(t("settings.localAsr.confirmDeleteModel", { title: modelDisplayTitle(t, m) }))) return;
                           setDeletingId(m.id);
                           try {
                             await ipc.deleteLlmModel(m.id);
@@ -1548,7 +1765,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
           {/* 左：角色 / 风格包列表 */}
           <div className="roles-list">
             {stylePacks.map((p) => {
-              const prefix = p.match_prefix ?? "";
+              const prefix = packAliases(p, isEn);
               return (
                 <button
                   key={p.id}
@@ -1561,7 +1778,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                   }}
                 >
                   <span className="roles-item-name">
-                    {p.name}
+                    {packName(p, isEn)}
                     {p.is_builtin ? t("settings.polish.builtin") : ""}
                   </span>
                   {(prefix.trim() || p.role_kind === "translate") && (
@@ -1634,6 +1851,10 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                         model: null,
                         role_kind: "default",
                         output_mode: "insert",
+                        // EN 界面新建：双语同值写入（EN 字段驱动英文界面，中文字段兜底）。
+                        name_en: isEn ? newStyleName.trim() : "",
+                        system_prompt_en: isEn ? newStylePrompt.trim() : "",
+                        match_prefix_en: null,
                       });
                       setNewStyleName("");
                       setNewStylePrompt("");
@@ -1652,11 +1873,12 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                   <label className="field-label">{t("settings.roles.nameLabel")}</label>
                   <input
                     key={`${selectedPack.id}-name`}
-                    defaultValue={selectedPack.name}
+                    defaultValue={packName(selectedPack, isEn)}
                     onBlur={(e) => {
                       const v = e.target.value.trim();
-                      if (v && v !== selectedPack.name) {
-                        savePack(selectedPack, { name: v });
+                      if (v && v !== packName(selectedPack, isEn)) {
+                        // EN 界面编辑写 *_en，中文原字段不动。
+                        savePack(selectedPack, isEn ? { name_en: v } : { name: v });
                       }
                     }}
                   />
@@ -1665,12 +1887,15 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                   <label className="field-label">{t("settings.roles.prefixLabel")}</label>
                   <input
                     key={`${selectedPack.id}-prefix`}
-                    defaultValue={selectedPack.match_prefix ?? ""}
+                    defaultValue={packAliases(selectedPack, isEn)}
                     placeholder={t("settings.roles.prefixPh")}
                     onBlur={(e) => {
                       const v = e.target.value.trim();
-                      if (v !== (selectedPack.match_prefix ?? "")) {
-                        savePack(selectedPack, { match_prefix: v || null });
+                      if (v !== packAliases(selectedPack, isEn)) {
+                        savePack(
+                          selectedPack,
+                          isEn ? { match_prefix_en: v || null } : { match_prefix: v || null },
+                        );
                       }
                     }}
                   />
@@ -1708,13 +1933,16 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                   <label className="field-label">{t("settings.roles.promptLabel")}</label>
                   <textarea
                     key={`${selectedPack.id}-prompt`}
-                    defaultValue={selectedPack.system_prompt}
+                    defaultValue={packPrompt(selectedPack, isEn)}
                     rows={8}
                     placeholder={t("settings.roles.promptPh")}
                     onBlur={(e) => {
                       const v = e.target.value.trim();
-                      if (v && v !== selectedPack.system_prompt) {
-                        savePack(selectedPack, { system_prompt: v });
+                      if (v && v !== packPrompt(selectedPack, isEn)) {
+                        savePack(
+                          selectedPack,
+                          isEn ? { system_prompt_en: v } : { system_prompt: v },
+                        );
                       }
                     }}
                   />
@@ -1986,7 +2214,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                     const p = await ipc.openModelDirectory();
                     setMsg({ ok: true, text: t("settings.localLlm.openDirOk", { path: p }) });
                   } catch (e) {
-                    setMsg({ ok: false, text: String(e) });
+                    setMsg({ ok: false, text: i18nBackendError(e, t) });
                   }
                 }}
               >
@@ -2070,6 +2298,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                 const isDownloadingThis =
                   (dlTargetId === m.id || dl?.target_id === m.id) &&
                   (!!dl || !!modelStatus?.downloading);
+                const pt = m.perf_tag ? perfTagText(m.perf_tag, isEn) : null;
                 return (
                   <div
                     key={m.id}
@@ -2088,7 +2317,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                             flexWrap: "wrap",
                           }}
                         >
-                          {m.title}
+                          {asrModelText(t, m.id, "title", m.title)}
                           {m.recommended && (
                             <span className="badge badge-success" style={{ fontSize: 11 }}>
                               {t("settings.localAsr.recommended")}
@@ -2099,36 +2328,36 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                               {t("settings.localAsr.inUse")}
                             </span>
                           )}
-                          {m.perf_tag && (
+                          {pt && (
                             <span
                               className="badge"
                               style={{
                                 fontSize: 11,
                                 background:
-                                  m.perf_tag.kind === "suitable"
+                                  pt.kind === "suitable"
                                     ? "rgba(89, 212, 153, 0.14)"
-                                    : m.perf_tag.kind === "usable"
+                                    : pt.kind === "usable"
                                       ? "rgba(255, 149, 0, 0.14)"
-                                      : m.perf_tag.kind === "unknown"
+                                      : pt.kind === "unknown"
                                         ? "var(--card-hover)"
                                         : "rgba(255, 69, 58, 0.12)",
                                 color:
-                                  m.perf_tag.kind === "suitable"
+                                  pt.kind === "suitable"
                                     ? "var(--success)"
-                                    : m.perf_tag.kind === "usable"
+                                    : pt.kind === "usable"
                                       ? "var(--warning)"
-                                      : m.perf_tag.kind === "unknown"
+                                      : pt.kind === "unknown"
                                         ? "var(--text-tertiary)"
                                         : "var(--danger)",
                               }}
-                              title={m.perf_tag.reason}
+                              title={pt.reason}
                             >
-                              {m.perf_tag.tag}
+                              {pt.tag}
                             </span>
                           )}
                         </div>
                         <div className="field-hint" style={{ marginBottom: 0 }}>
-                          {m.description}
+                          {asrModelText(t, m.id, "desc", m.description)}
                         </div>
                       </div>
                       {m.installed ? (
@@ -2148,7 +2377,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                       <div style={{ marginBottom: 8 }}>
                         <div className="row-between" style={{ marginBottom: 4 }}>
                           <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                            {t("settings.localAsr.dlProgress", { msg: dl.message, i: dl.file_index + 1, n: dl.file_count })}
+                            {t("settings.localAsr.dlProgress", { msg: downloadMsgText(t, dl.message, dl.file_name, dl.phase), i: dl.file_index + 1, n: dl.file_count })}
                           </span>
                           <span style={{ fontSize: 12, color: "var(--text-secondary)", flexShrink: 0 }}>
                             {dl.total_size > 0
@@ -2213,7 +2442,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                             title={t("settings.localAsr.deleteModelTitle")}
                             disabled={enablingId === m.id || deletingId === m.id}
                             onClick={async () => {
-                              if (!window.confirm(t("settings.localAsr.confirmDeleteModel", { title: m.title }))) return;
+                              if (!window.confirm(t("settings.localAsr.confirmDeleteModel", { title: modelDisplayTitle(t, m) }))) return;
                               setDeletingId(m.id);
                               setEnableTip(null);
                               try {
@@ -2559,6 +2788,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
             <span className="slider" />
           </label>
         </div>
+        <UpdateRow t={t} />
         {IS_WIN && (
           <div className="set-row">
             <div>
@@ -2578,7 +2808,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                     await ipc.windowsImeRestoreProfile();
                     setMsg({ ok: true, text: t("settings.tsf.restoreDone") });
                   } catch (e) {
-                    setMsg({ ok: false, text: String(e) });
+                    setMsg({ ok: false, text: i18nBackendError(e, t) });
                   }
                 }}
               >
@@ -2742,7 +2972,7 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                 const r = await ipc.toggleRecording();
                 setRecording(r);
               } catch (e) {
-                setMsg({ ok: false, text: String(e) });
+                setMsg({ ok: false, text: i18nBackendError(e, t) });
               }
             }}
           >

@@ -17,7 +17,7 @@
     "ctaPrimary": "下载",
     "ctaSecondary": "GitHub",
     "metaItems": [
-      "v0.1.0",
+      "v0.2.0",
       "macOS 12+ · Windows beta",
       "MIT 开源",
       "完全离线"
@@ -170,6 +170,10 @@
       {
         "q": "如何反馈问题？",
         "a": "通过 GitHub Issue 反馈，或直接提交 PR —— 项目采用 MIT 协议。"
+      },
+      {
+        "q": "如何升级到新版本？",
+        "a": "v0.2.0 起支持应用内自动更新：设置 → App 行为 → 检查更新，或在 GitHub Releases 下载最新安装包覆盖安装（配置与数据保留）。"
       }
     ]
   },

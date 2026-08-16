@@ -67,7 +67,7 @@ pub fn collect_system_info(disk_path: &std::path::Path) -> SystemInfo {
         avail_mem,
         cpu_brand,
         cpu_cores,
-        os_version: sysinfo::System::long_os_version().unwrap_or_else(|| "未知".into()),
+        os_version: sysinfo::System::long_os_version().unwrap_or_else(|| "Unknown".into()),
         disk_free,
         is_apple_silicon,
         collected_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -130,7 +130,7 @@ fn statvfs_free_bytes(path: &std::path::Path) -> u64 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelPerfTag {
-    /// 标签文案：适合 / 可用但较慢 / 不推荐（需XGB）。
+    /// 标签文案（zh 默认）：适合 / 可用但较慢 / 不推荐（需XGB）。
     pub tag: String,
     /// 语义：suitable | usable | not_recommended | light
     pub kind: String,
@@ -138,6 +138,33 @@ pub struct ModelPerfTag {
     pub reason: String,
     /// 建议色值（前端直接用）：success / warning / danger。
     pub color: String,
+    /// 英文标签文案（en 界面用；旧持久化数据缺失 → serde default 空串，前端回退 tag）。
+    #[serde(default)]
+    pub tag_en: String,
+    /// 英文解释原因（en 界面 tooltip 用）。
+    #[serde(default)]
+    pub reason_en: String,
+}
+
+impl ModelPerfTag {
+    /// 中英双语组合（前端按界面语言取 en 字段，en 缺失回退 zh）。
+    fn new_bilingual(
+        tag: impl Into<String>,
+        reason: impl Into<String>,
+        kind: &str,
+        color: &str,
+        tag_en: impl Into<String>,
+        reason_en: impl Into<String>,
+    ) -> Self {
+        Self {
+            tag: tag.into(),
+            kind: kind.into(),
+            reason: reason.into(),
+            color: color.into(),
+            tag_en: tag_en.into(),
+            reason_en: reason_en.into(),
+        }
+    }
 }
 
 /// 按 `SystemInfo` 给模型打标签。磁盘空间仅在"剩余 < 2×模型体积"时影响。
@@ -151,94 +178,113 @@ pub fn compute_model_tag(approx_size: u64, sys: &SystemInfo) -> ModelPerfTag {
 
     // 若无法采集到内存（sysinfo 失败 -> 0），返回"未知"。
     if total_gb == 0 {
-        return ModelPerfTag {
-            tag: "未知".into(),
-            kind: "unknown".into(),
-            reason: "未能采集本机内存信息，请点\"重新采集\"重试".into(),
-            color: "var(--text-tertiary)".into(),
-        };
+        return ModelPerfTag::new_bilingual(
+            "未知",
+            "未能采集本机内存信息，请点\"重新采集\"重试",
+            "unknown",
+            "var(--text-tertiary)",
+            "Unknown",
+            "Could not collect machine memory info — click \"Re-collect\" to retry",
+        );
     }
 
     // 磁盘不足（剩余 < 2×模型体积）：优先提示磁盘，不再判断内存。
     let need_gb = gb(approx_size.saturating_mul(2).max(512 * 1024 * 1024));
     if free_gb > 0 && free_gb * 1024 * 1024 * 1024 < approx_size.saturating_mul(2) {
-        return ModelPerfTag {
-            tag: format!("需{need_gb}GB 磁盘"),
-            kind: "not_recommended".into(),
-            reason: format!("磁盘剩余约 {free_gb} GB / 需约 {need_gb} GB（约 2 倍模型体积）"),
-            color: "var(--danger)".into(),
-        };
+        return ModelPerfTag::new_bilingual(
+            format!("需{need_gb}GB 磁盘"),
+            format!("磁盘剩余约 {free_gb} GB / 需约 {need_gb} GB（约 2 倍模型体积）"),
+            "not_recommended",
+            "var(--danger)",
+            format!("{need_gb}GB disk needed"),
+            format!("~{free_gb} GB free / ~{need_gb} GB needed (~2× model size)"),
+        );
     }
 
     // 按体积档打内存标签。
-    let usable_not_recommended = |avail: u64, need: u64| ModelPerfTag {
-        tag: if avail >= 8 {
-            "可用但较慢".into()
-        } else {
-            format!("不推荐（需{need}GB）")
-        },
-        kind: "not_recommended".into(),
-        reason: format!(
-            "本机总内存 {total_gb} GB / 可用 {avail_gb} GB / 建议 ≥{need} GB，运行时可能卡顿或崩溃"
-        ),
-        color: "var(--danger)".into(),
+    let usable_not_recommended = |avail: u64, need: u64| {
+        ModelPerfTag::new_bilingual(
+            if avail >= 8 {
+                "可用但较慢".to_string()
+            } else {
+                format!("不推荐（需{need}GB）")
+            },
+            format!("本机总内存 {total_gb} GB / 可用 {avail_gb} GB / 建议 ≥{need} GB，运行时可能卡顿或崩溃"),
+            "not_recommended",
+            "var(--danger)",
+            if avail >= 8 {
+                "Usable but slow".to_string()
+            } else {
+                format!("Not recommended (needs {need}GB)")
+            },
+            format!("Total RAM {total_gb} GB / available {avail_gb} GB / ≥{need} GB recommended — may lag or crash"),
+        )
     };
 
     // 分档：size < 300MB 轻量；300-1100MB 中；> 1GB 重
     if approx_size < 300 * 1024 * 1024 {
         // 轻量：任何本机都适合
-        ModelPerfTag {
-            tag: "适合".into(),
-            kind: "suitable".into(),
-            reason: format!(
-                "本机总内存 {total_gb} GB / 可用 {avail_gb} GB，轻量模型，任意本机可用"
-            ),
-            color: "var(--success)".into(),
-        }
+        ModelPerfTag::new_bilingual(
+            "适合",
+            format!("本机总内存 {total_gb} GB / 可用 {avail_gb} GB，轻量模型，任意本机可用"),
+            "suitable",
+            "var(--success)",
+            "Suitable",
+            format!("Total RAM {total_gb} GB / available {avail_gb} GB — lightweight, runs on any machine"),
+        )
     } else if approx_size <= 1100 * 1024 * 1024 {
         // 中量：需 ≥8，推荐 16
         if total_gb >= 16 {
-            ModelPerfTag {
-                tag: "适合".into(),
-                kind: "suitable".into(),
-                reason: format!("本机总内存 {total_gb} GB，满足推荐 ≥16GB"),
-                color: "var(--success)".into(),
-            }
+            ModelPerfTag::new_bilingual(
+                "适合",
+                format!("本机总内存 {total_gb} GB，满足推荐 ≥16GB"),
+                "suitable",
+                "var(--success)",
+                "Suitable",
+                format!("Total RAM {total_gb} GB — meets the ≥16GB recommendation"),
+            )
         } else if total_gb >= 8 {
-            ModelPerfTag {
-                tag: "可用但较慢".into(),
-                kind: "usable".into(),
-                reason: format!(
-                    "本机总内存 {total_gb} GB / 可用 {avail_gb} GB / 建议 ≥16 GB，运行时可能较慢"
-                ),
-                color: "var(--warning)".into(),
-            }
+            ModelPerfTag::new_bilingual(
+                "可用但较慢",
+                format!("本机总内存 {total_gb} GB / 可用 {avail_gb} GB / 建议 ≥16 GB，运行时可能较慢"),
+                "usable",
+                "var(--warning)",
+                "Usable but slow",
+                format!("Total RAM {total_gb} GB / available {avail_gb} GB / ≥16 GB recommended — may be slower"),
+            )
         } else {
             usable_not_recommended(avail_gb, 16)
         }
     } else {
         // 1.5GB+ 重量级：需 ≥16，推荐 32（且 Apple Silicon 友好可作为加分说明）
         let extra = if sys.is_apple_silicon {
-            " · Apple Silicon fq16友好"
+            " · Apple Silicon fp16 友好"
+        } else {
+            ""
+        };
+        let extra_en = if sys.is_apple_silicon {
+            " · Apple Silicon fp16 friendly"
         } else {
             ""
         };
         if total_gb >= 32 {
-            ModelPerfTag {
-                tag: "适合".into(),
-                kind: "suitable".into(),
-                reason: format!("本机总内存 {total_gb} GB，满足重型模型需求{extra}"),
-                color: "var(--success)".into(),
-            }
+            ModelPerfTag::new_bilingual(
+                "适合",
+                format!("本机总内存 {total_gb} GB，满足重型模型需求{extra}"),
+                "suitable",
+                "var(--success)",
+                "Suitable",
+                format!("Total RAM {total_gb} GB — meets heavy-model needs{extra_en}"),
+            )
         } else if total_gb >= 16 {
-            ModelPerfTag {
-                tag: "可用但较慢".into(),
-                kind: "usable".into(),
-                reason: format!(
-                    "本机总内存 {total_gb} GB / 可用 {avail_gb} GB / 建议 ≥32 GB{extra}"
-                ),
-                color: "var(--warning)".into(),
-            }
+            ModelPerfTag::new_bilingual(
+                "可用但较慢",
+                format!("本机总内存 {total_gb} GB / 可用 {avail_gb} GB / 建议 ≥32 GB{extra}"),
+                "usable",
+                "var(--warning)",
+                "Usable but slow",
+                format!("Total RAM {total_gb} GB / available {avail_gb} GB / ≥32 GB recommended{extra_en}"),
+            )
         } else {
             usable_not_recommended(avail_gb, 16)
         }
@@ -362,12 +408,14 @@ pub fn compute_combo_tag(
 ) -> ModelPerfTag {
     let total_gb = sys.total_mem / GB_BYTES;
     if total_gb == 0 {
-        return ModelPerfTag {
-            tag: "未知".into(),
-            kind: "unknown".into(),
-            reason: "未能采集本机内存信息，请点\"重新采集\"重试".into(),
-            color: "var(--text-tertiary)".into(),
-        };
+        return ModelPerfTag::new_bilingual(
+            "未知",
+            "未能采集本机内存信息，请点\"重新采集\"重试",
+            "unknown",
+            "var(--text-tertiary)",
+            "Unknown",
+            "Could not collect machine memory info — click \"Re-collect\" to retry",
+        );
     }
     let budget = combo_budget(sys);
     let combo = asr_rss_bytes(asr_id)
@@ -390,52 +438,90 @@ pub fn compute_combo_tag(
             )
         }
     };
+    let combo_desc_en = |with_other: bool| {
+        if with_other {
+            format!(
+                "Total RAM {total_gb} GB / suite budget {} GB; with current ASR + translation models ≈ {} GB",
+                fmt_gb(budget),
+                fmt_gb(combo)
+            )
+        } else {
+            format!(
+                "Total RAM {total_gb} GB / suite budget {} GB; with current ASR model ≈ {} GB",
+                fmt_gb(budget),
+                fmt_gb(combo)
+            )
+        }
+    };
     let has_other = other_llm_id.map(|s| !s.is_empty()).unwrap_or(false);
     if combo > budget {
-        return ModelPerfTag {
-            tag: "超预算".into(),
-            kind: "not_recommended".into(),
-            reason: format!(
+        return ModelPerfTag::new_bilingual(
+            "超预算",
+            format!(
                 "{}，超出三件套预算（运行时可能卡顿或崩溃）",
                 combo_desc(has_other)
             ),
-            color: "var(--danger)".into(),
-        };
+            "not_recommended",
+            "var(--danger)",
+            "Over budget",
+            format!(
+                "{} — exceeds the suite budget (may lag or crash)",
+                combo_desc_en(has_other)
+            ),
+        );
     }
     if tps < 15.0 {
-        return ModelPerfTag {
-            tag: "估速过慢".into(),
-            kind: "not_recommended".into(),
-            reason: format!(
+        return ModelPerfTag::new_bilingual(
+            "估速过慢",
+            format!(
                 "{}；估测解码 {tps} tok/s，40 字需约 {:.1}s（输入法会明显卡）",
                 combo_desc(has_other),
                 40.0 / tps
             ),
-            color: "var(--danger)".into(),
-        };
+            "not_recommended",
+            "var(--danger)",
+            "Too slow (est.)",
+            format!(
+                "{}; estimated decode {tps} tok/s, ~{:.1}s per 40 chars (the IME would visibly stutter)",
+                combo_desc_en(has_other),
+                40.0 / tps
+            ),
+        );
     }
     if tps < 25.0 || combo > budget.saturating_mul(85) / 100 {
-        return ModelPerfTag {
-            tag: "可用但较慢".into(),
-            kind: "usable".into(),
-            reason: format!(
+        return ModelPerfTag::new_bilingual(
+            "可用但较慢",
+            format!(
                 "{}；估测解码 {tps} tok/s，40 字约 {:.1}s",
                 combo_desc(has_other),
                 40.0 / tps
             ),
-            color: "var(--warning)".into(),
-        };
+            "usable",
+            "var(--warning)",
+            "Usable but slow",
+            format!(
+                "{}; estimated decode {tps} tok/s, ~{:.1}s per 40 chars",
+                combo_desc_en(has_other),
+                40.0 / tps
+            ),
+        );
     }
-    ModelPerfTag {
-        tag: "适合".into(),
-        kind: "suitable".into(),
-        reason: format!(
+    ModelPerfTag::new_bilingual(
+        "适合",
+        format!(
             "{}；估测解码 {tps} tok/s，40 字约 {:.1}s",
             combo_desc(has_other),
             40.0 / tps
         ),
-        color: "var(--success)".into(),
-    }
+        "suitable",
+        "var(--success)",
+        "Suitable",
+        format!(
+            "{}; estimated decode {tps} tok/s, ~{:.1}s per 40 chars",
+            combo_desc_en(has_other),
+            40.0 / tps
+        ),
+    )
 }
 
 /// 推荐默认三件套（方案 §T6）。

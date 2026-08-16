@@ -37,6 +37,8 @@ export const ipc = {
   getConfig: () => invoke<AppConfig>("get_config"),
   defaultConfig: () => invoke<AppConfig>("default_config"),
   saveConfig: (config: AppConfig) => invoke<void>("save_app_config", { config }),
+  /** 界面语言下发后端（语音前缀角色 / system prompt 语言跟随）。 */
+  setUiLang: (lang: string) => invoke<void>("set_ui_lang", { lang }),
   /** 快捷键捕获期间挂起录音键/全局快捷键（true 开始 / false 结束） */
   setCaptureSuspend: (suspend: boolean) =>
     invoke<void>("set_capture_suspend", { suspend }),

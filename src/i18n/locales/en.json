@@ -98,7 +98,29 @@
       "noDedicatedDesc": "Skip downloading a translation model; translation goes through the cloud or the polish model (fallback).",
       "noDedicatedSize": "Nothing to download · no extra footprint",
       "noDedicatedEnableTip": "Enable \"no local translation model\"",
-      "noInstall": "Nothing to install"
+      "noInstall": "Nothing to install",
+      "models": {
+        "qwen3.5-0.8b": {
+          "title": "Fast · Qwen3.5-0.8B",
+          "desc": "Offline polish · ~0.5GB · first pick for low-end / 8GB machines. Fastest and lightest to keep resident; short phrases are rewritten on screen instantly; quality slightly below the 2B."
+        },
+        "qwen3.5-2b": {
+          "title": "Balanced · Qwen3.5-2B",
+          "desc": "Offline polish · ~1.4GB · default for 16GB machines. Balanced speed and quality — a ~40-char polish takes about 1s; the recommended pick for most machines."
+        },
+        "qwen3.5-4b": {
+          "title": "High quality · Qwen3.5-4B",
+          "desc": "Offline polish · ~2.7GB · default for 48GB / M-series Pro. Rewrites better and more consistently; needs ample RAM and memory bandwidth — slower on 16GB machines."
+        },
+        "milmmt-1b": {
+          "title": "MiLMMT-1B (default dedicated translator)",
+          "desc": "Offline translation · ~0.8GB · 46 languages (incl. Simplified/Traditional Chinese, Cantonese). SOTA 1B translator on the well-trodden Gemma3 architecture; short CN/EN/JA/KO phrases near production quality."
+        },
+        "hy-mt-1.8b": {
+          "title": "HY-MT1.5-1.8B (optional)",
+          "desc": "Offline translation · ~1.1GB · 33 languages + Cantonese/Tibetan/Mongolian/Uyghur. Tencent Hunyuan on-device translator with native term control (hotwords); community license, green-listed choice."
+        }
+      }
     },
     "engine": {
       "title": "Recognition engine",
@@ -135,6 +157,8 @@
       "appleSilicon": " · Apple Silicon",
       "collecting": "Collecting machine info…",
       "dlProgress": "{{msg}} ({{i}}/{{n}})",
+      "downloadingFile": "Downloading {{file}}",
+      "verifyingFile": "Verifying {{file}}",
       "recollectTitle": "Re-collect CPU / memory / disk info and re-tag models",
       "recollect": "Re-collect",
       "recommended": "Recommended",
@@ -213,6 +237,20 @@
       "launchDescWin": "Auto-start on Windows login, silently resident in the system tray.",
       "muteName": "Mute other apps while recording",
       "muteDesc": "When on, system audio playback pauses during voice input and resumes after."
+    },
+    "update": {
+      "name": "App update",
+      "desc": "Check and install app updates from GitHub Releases",
+      "current": "Current version v{{version}}",
+      "checkBtn": "Check for updates",
+      "checking": "Checking…",
+      "upToDate": "Up to date",
+      "available": "New version v{{version}} available",
+      "installBtn": "Download and install",
+      "downloading": "Downloading {{progress}}…",
+      "installing": "Installing, relaunching soon…",
+      "failed": "Update failed: {{error}}",
+      "retryBtn": "Retry"
     },
     "audio": {
       "title": "Audio",
@@ -296,10 +334,10 @@
     "roles": {
       "title": "Roles / Style Packs",
       "enabledName": "Enable prefix roles",
-      "enabledDesc": "Say “assistant name + role” to trigger a role, e.g. “小友翻译我想要走了” translates the content, “小友邮件明天开会” drafts an email. Roles use the same model as AI polish by default (local first) and can be overridden per role on the right. When enabled, dictation inserts as a whole (no streaming).",
+      "enabledDesc": "Say “assistant name + role” to trigger a role, e.g. “IME translate I want to leave now” translates the content, “IME email meeting tomorrow” drafts an email. Roles use the same model as AI polish by default (local first) and can be overridden per role on the right. When enabled, dictation inserts as a whole (no streaming).",
       "assistantNameLabel": "Assistant name",
       "assistantNameDesc": "Wake name for prefix roles (combo words are added to hotwords for accurate recognition); empty disables prefix roles.",
-      "assistantNamePh": "e.g. 小友",
+      "assistantNamePh": "e.g. IME",
       "prefixBadge": "Prefix: {{prefix}}",
       "translateKind": "translate role",
       "prefixPh": "Prefix aliases (| separated, e.g. mail|email)",
@@ -331,6 +369,47 @@
       "notInstalled": "Not installed (DLL missing). Using simulated typing.",
       "restoreBtn": "Restore system IME",
       "restoreDone": "System default IME restored"
+    },
+    "errors": {
+      "cloudLlmEndpointRequired": "Incomplete cloud LLM configuration: Endpoint is required (fill it together with the API key, or clear both)",
+      "cloudLlmKeyRequired": "Incomplete cloud LLM configuration: API key is required (fill it together with the endpoint, or clear both)",
+      "cloudLlmEndpointCheckFailed": "Cloud LLM endpoint validation failed: {{detail}}",
+      "baseUrlCheckFailed": "base_url validation failed: {{detail}}",
+      "endpointCheckFailed": "Endpoint \"{{url}}\" failed validation: {{detail}}",
+      "baseUrlScheme": "base_url must start with ws://, wss://, http://, or https://",
+      "cloudPolishMissingKey": "Cloud polish is missing an API key (required)",
+      "translateMissingKey": "Translation requires a cloud API key (required)",
+      "qaMissingKey": "Q&A requires a cloud API key (required)",
+      "cloudPolishNotConfigured": "Cloud polish is not configured",
+      "noTranslateBackend": "No translation backend available",
+      "hotkeySingleKeyNotAllowed": "Only the recording shortcut supports the single Fn/CapsLock key (the {{name}} shortcut must be a key combination)",
+      "hotkeyUnparsable": "{{name}} shortcut \"{{key}}\" could not be parsed",
+      "hotkeyConflict": "Shortcut conflict: \"{{a}}\" and \"{{b}}\" are the same ({{key}})",
+      "shortPressRange": "Short-press threshold must be within 100..=800, got {{value}} (default 300)",
+      "segDurationRange": "Segment duration must be within 10..=180, got {{value}} (default 60)",
+      "segOverlapRange": "Segment overlap must be within 1..=30, got {{value}} (default 4)",
+      "segParamsInvalid": "Invalid segmentation parameters: need 10≤duration≤180, 1≤overlap≤30, and overlap<duration",
+      "sherpaMissingModel": "sherpa provider is missing model",
+      "bailianMissingBaseUrl": "bailian provider is missing base_url",
+      "bailianMissingApiKey": "bailian provider is missing api_key",
+      "bailianMissingModel": "bailian provider is missing model",
+      "cloudAsrMissingBaseUrl": "Cloud ASR provider is missing base_url (endpoint)",
+      "cloudAsrMissingApiKey": "Cloud ASR provider is missing api_key",
+      "cloudAsrMissingModel": "Cloud ASR provider is missing model",
+      "saveFailed": "Failed to save config: {{detail}}",
+      "endpointInvalidUrl": "Invalid URL: {{detail}}",
+      "endpointUnsupportedScheme": "Unsupported scheme: {{scheme}}",
+      "endpointMissingHost": "URL is missing a host",
+      "endpointBlockedMetadata": "Blocked cloud metadata service address (IMDS)",
+      "endpointBlockedLinkLocal": "Blocked link-local address",
+      "endpointBlockedCgnat": "Blocked CGNAT address (100.64.0.0/10)",
+      "endpointBlockedReserved": "Blocked reserved address",
+      "endpointPublicRequiresTls": "Public addresses must use https / wss",
+      "hotkeyNames": {
+        "录音": "recording",
+        "风格包切换": "style-pack switch",
+        "翻译": "translation"
+      }
     },
     "autoSaved": "Auto-saved"
   },
@@ -383,5 +462,10 @@
     "deleteTitle": "Delete",
     "notFound": "No matching entries",
     "empty": "Dictionary is empty"
+  },
+  "toast": {
+    "translateIgnoredRecording": "Recording in progress; translate shortcut ignored",
+    "translateBackendMissing": "Set up a translation backend first: cloud LLM (endpoint + API key), or download a translation/polish model under Settings → Local models",
+    "updateAvailable": "New version v{{version}} available — update in Settings → App behavior"
   }
 }

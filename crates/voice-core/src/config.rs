@@ -282,6 +282,10 @@ pub struct AppConfig {
     /// 组合词写入热词精准纠错。空串 = 前缀角色不触发。
     #[serde(default = "default_assistant_name")]
     pub assistant_name: String,
+    /// i18n：App 界面语言（"zh" / "en"）。前端语言切换时通过 `set_ui_lang` 同步到后端，
+    /// 供 Rust 端按界面语言选择角色名 / 别名 / system prompt（语音触发与提示语言一致）。
+    #[serde(default = "default_ui_lang")]
+    pub ui_lang: String,
 
     // ── P1：R7 粘贴兜底 ──
     /// 插入策略：auto / type / paste。
@@ -348,6 +352,9 @@ fn default_translate_local_model() -> String {
 }
 fn default_assistant_name() -> String {
     "小友".into()
+}
+fn default_ui_lang() -> String {
+    "zh".into()
 }
 fn default_false() -> bool {
     false
@@ -432,6 +439,7 @@ impl Default for AppConfig {
             translate_policy: TranslatePolicy::PreferCloud,
             prefix_roles_enabled: true,
             assistant_name: default_assistant_name(),
+            ui_lang: default_ui_lang(),
             insert_strategy: InsertStrategy::Auto,
             paste_fallback_apps: Vec::new(),
             restore_clipboard: true,
@@ -579,6 +587,21 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_lang_defaults_to_zh_and_survives_serde() {
+        // 默认中文界面；旧持久化 JSON 没有 ui_lang 字段 → serde 回退默认。
+        assert_eq!(AppConfig::default().ui_lang, "zh");
+        let mut v = serde_json::to_value(AppConfig::default()).unwrap();
+        v.as_object_mut().unwrap().remove("ui_lang");
+        let old: AppConfig = serde_json::from_value(v).unwrap();
+        assert_eq!(old.ui_lang, "zh");
+        // 显式写 en 可反序列化。
+        let mut v2 = serde_json::to_value(AppConfig::default()).unwrap();
+        v2.as_object_mut().unwrap().insert("ui_lang".into(), "en".into());
+        let cfg: AppConfig = serde_json::from_value(v2).unwrap();
+        assert_eq!(cfg.ui_lang, "en");
+    }
 
     #[test]
     fn old_policy_variants_map_to_prefer_local() {

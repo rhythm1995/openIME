@@ -107,6 +107,8 @@ pub struct PolishContext {
     pub translate_use_llm_fallback: bool,
     /// 本地三件套：源语言短码（ASR `local_language`；`auto` 由脚本粗分）。
     pub source_lang: String,
+    /// i18n：界面语言（"zh"/"en"）——按它选择角色别名与 system prompt。
+    pub ui_lang: String,
 }
 
 impl PolishContext {
@@ -441,7 +443,7 @@ impl Pipeline {
             SessionIntent::Dictate => {
                 if ctx.prefix_roles_enabled {
                     if let Some((pack, rest)) =
-                        detect_prefix_role(&l0.text, &ctx.assistant_name, &ctx.style_packs)
+                        detect_prefix_role(&l0.text, &ctx.assistant_name, &ctx.style_packs, &ctx.ui_lang)
                     {
                         return self.apply_prefix_role(pack, &rest, ctx).await;
                     }
@@ -610,7 +612,7 @@ impl Pipeline {
         let req = PolishRequest {
             text: rest.to_string(),
             mode: PolishMode::Heavy,
-            style_prompt: Some(pack.system_prompt.clone()),
+            style_prompt: Some(pack.system_prompt_for(&ctx.ui_lang).to_string()),
             hotwords: ctx.hotwords.clone(),
             timeout: ctx.llm_timeout(),
             max_tokens: Some(1024),
@@ -1100,6 +1102,7 @@ mod tests {
             translate_policy: crate::config::TranslatePolicy::PreferCloud,
             translate_use_llm_fallback: false,
             source_lang: "auto".into(),
+            ui_lang: "zh".into(),
         }
     }
 
@@ -1305,6 +1308,9 @@ mod tests {
             model: None,
             role_kind: kind,
             output_mode: crate::store::OutputMode::Insert,
+            name_en: String::new(),
+            system_prompt_en: String::new(),
+            match_prefix_en: None,
         }
     }
 
@@ -1744,6 +1750,60 @@ mod tests {
             assert_eq!(results[0].text, "你好", "输入 {t}");
         }
         assert_eq!(*ins.out.lock().unwrap(), "你好你好");
+    }
+
+    #[tokio::test]
+    async fn prefix_role_uses_english_prompt_in_en_ui() {
+        // i18n：en 界面 → 命中英文别名 + 把英文 system prompt 发给 LLM。
+        struct CapturingCloud {
+            last_style_prompt: Arc<std::sync::Mutex<Option<String>>>,
+        }
+        #[async_trait]
+        impl LlmClient for CapturingCloud {
+            async fn polish(&self, req: PolishRequest) -> crate::Result<PolishResponse> {
+                *self.last_style_prompt.lock().unwrap() = req.style_prompt;
+                Ok(PolishResponse {
+                    text: "done".into(),
+                    provider: "capture".into(),
+                    latency_ms: 0,
+                })
+            }
+            async fn translate_text(&self, _req: TranslateRequest) -> crate::Result<String> {
+                Ok(String::new())
+            }
+            async fn polish_and_translate(
+                &self,
+                _req: TranslateRequest,
+            ) -> crate::Result<crate::polish::PolishTranslate> {
+                Ok(crate::polish::PolishTranslate {
+                    polished: String::new(),
+                    translation: String::new(),
+                })
+            }
+            async fn chat_stream(&self, _req: crate::ChatRequest) -> crate::Result<String> {
+                Ok(String::new())
+            }
+        }
+        let last = Arc::new(std::sync::Mutex::new(None));
+        let (deps, _ins) = ctx_with_cloud(Arc::new(CapturingCloud {
+            last_style_prompt: last.clone(),
+        }));
+        let pipe = Pipeline::new(deps);
+        let mut ctx = ctx_enabled(PolishMode::Off);
+        ctx.prefix_roles_enabled = true;
+        ctx.assistant_name = "IME".into();
+        ctx.ui_lang = "en".into();
+        let mut mail = role_pack("mail", "邮件|mail", RoleKind::Default);
+        mail.match_prefix_en = Some("email|mail".into());
+        mail.system_prompt_en = "Write an email in English.".into();
+        ctx.style_packs = vec![mail];
+        let results = pipe
+            .insert_finals_with_polish("s1", &["IME email 明天开会".into()], &ctx, &opts_default())
+            .await
+            .unwrap();
+        assert_eq!(results[0].text, "done");
+        let got = last.lock().unwrap().clone();
+        assert_eq!(got.as_deref(), Some("Write an email in English."));
     }
 
     #[tokio::test]

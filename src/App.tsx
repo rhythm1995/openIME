@@ -8,6 +8,8 @@ import Settings from "./components/Settings";
 import History from "./components/History";
 import Dictionary from "./components/Dictionary";
 import { ipc } from "./ipc";
+import { i18nBackendError } from "./i18n/backendErrors";
+import { checkUpdate } from "./updater";
 import { logger } from "./logger";
 
 type Page = "settings-voice" | "settings-ai" | "history" | "dictionary";
@@ -52,6 +54,11 @@ export default function App() {
 
   useEffect(() => {
     logger.info("主窗口 App 组件挂载");
+    // 启动同步：老版本升级安装可能「界面语言已是 en，但后端 ui_lang /
+    // 默认助手名没跟上」→ 启动时对齐一次；随后 changeLanguage（即使同语言
+    // 也会触发事件）让 Settings 重拉配置，避免旧副本在下次自动保存时回写。
+    const lang0 = i18n.language === "en" ? "en" : "zh";
+    void syncLangToBackend(lang0).then(() => i18n.changeLanguage(lang0));
     ipc
       .ping()
       .then((p) => {
@@ -85,12 +92,51 @@ export default function App() {
     };
   }, []);
 
+  // 启动静默检查更新（延迟 5s 避开启动 IPC 高峰）：发现新版本仅 toast 提示，
+  // 下载安装由用户在 设置 → App 行为 显式触发。失败静默（dev/无网）。
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void checkUpdate().then((u) => {
+        if (u) setToast(t("toast.updateAvailable", { version: u.version }));
+      });
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [t]);
+
   const nav: { id: Page; label: string; icon: LucideIcon }[] = [
     { id: "settings-voice", label: t("nav.settingsVoice"), icon: Mic },
     { id: "settings-ai", label: t("nav.settingsAi"), icon: Sparkles },
     { id: "history", label: t("nav.history"), icon: HistoryIcon },
     { id: "dictionary", label: t("nav.dictionary"), icon: BookOpen },
   ];
+
+  // 语言同步：后端 ui_lang 持久化 + 默认助手名 小友↔IME 跟随（自定义名不动）。
+  // 已同步时零额外写入；失败只记日志，不阻塞界面语言切换。
+  const syncLangToBackend = async (lang: "zh" | "en") => {
+    try {
+      const cfg = await ipc.getConfig();
+      const name = (cfg.assistant_name ?? "").trim();
+      const prevDefault = lang === "en" ? "小友" : "IME";
+      const nextDefault = lang === "en" ? "IME" : "小友";
+      if (cfg.ui_lang !== lang) {
+        await ipc.setUiLang(lang);
+      }
+      if (name === prevDefault) {
+        cfg.assistant_name = nextDefault;
+        await ipc.saveConfig(cfg);
+      }
+    } catch (e) {
+      logger.warn("语言同步后端失败:", e);
+    }
+  };
+
+  // 语言切换：后端先行，成功后再切 UI —— Settings 监听 languageChanged
+  // 重拉配置，顺序保证读到的是新值。
+  const toggleLang = async () => {
+    const newLang = i18n.language === "zh" ? "en" : "zh";
+    await syncLangToBackend(newLang);
+    i18n.changeLanguage(newLang);
+  };
 
   return (
     <div className="layout">
@@ -156,7 +202,9 @@ export default function App() {
           <button
             type="button"
             className="lang-toggle"
-            onClick={() => i18n.changeLanguage(i18n.language === "zh" ? "en" : "zh")}
+            onClick={() => {
+              void toggleLang();
+            }}
             title={t("lang.switchTitle")}
           >
             🌐 {i18n.language === "zh" ? t("lang.zh") : t("lang.en")}
@@ -191,7 +239,8 @@ export default function App() {
       </main>
       {toast && (
         <div className="toast" role="status">
-          {toast}
+          {/* 后端 toast 为中文常量，渲染时按界面语言转译（未知原样）。 */}
+          {i18nBackendError(toast, t)}
         </div>
       )}
     </div>

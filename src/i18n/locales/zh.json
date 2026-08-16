@@ -98,7 +98,29 @@
       "noDedicatedDesc": "不下载翻译模型；翻译由云端或润色模型（兼译）完成。",
       "noDedicatedSize": "无需下载 · 无额外占用",
       "noDedicatedEnableTip": "启用「不使用本地专翻」",
-      "noInstall": "无需安装"
+      "noInstall": "无需安装",
+      "models": {
+        "qwen3.5-0.8b": {
+          "title": "极速 · Qwen3.5-0.8B",
+          "desc": "离线润色 · 约 0.5GB · 弱机/8GB 首选。速度最快、常驻最小，短句改写即时上屏；质量比 2B 略逊。"
+        },
+        "qwen3.5-2b": {
+          "title": "均衡 · Qwen3.5-2B",
+          "desc": "离线润色 · 约 1.4GB · 16GB 默认。速度与质量均衡档，40 字润色约 1 秒；多数机器的推荐落点。"
+        },
+        "qwen3.5-4b": {
+          "title": "高质量 · Qwen3.5-4B",
+          "desc": "离线润色 · 约 2.7GB · 48GB/M 系列 Pro 默认。改写得更好、更稳，需要大内存与高带宽；16GB 上偏慢。"
+        },
+        "milmmt-1b": {
+          "title": "MiLMMT-1B（默认专翻）",
+          "desc": "离线专翻 · 约 0.8GB · 46 语（含简/繁/粤）。1B 专翻 SOTA，Gemma3 架构生态熟；中英日韩短句接近可用产品。"
+        },
+        "hy-mt-1.8b": {
+          "title": "HY-MT1.5-1.8B（自选）",
+          "desc": "离线专翻 · 约 1.1GB · 33 语 + 粤/藏/蒙/维。腾讯混元端侧翻译，原生术语干预（可接热词）；混元社区许可，绿标自选。"
+        }
+      }
     },
     "engine": {
       "title": "识别引擎",
@@ -135,6 +157,8 @@
       "appleSilicon": " · Apple Silicon",
       "collecting": "正在采集本机信息…",
       "dlProgress": "{{msg}}（{{i}}/{{n}}）",
+      "downloadingFile": "正在下载 {{file}}",
+      "verifyingFile": "正在校验 {{file}}",
       "recollectTitle": "重新采集本机 CPU/内存/磁盘信息并给模型打标签",
       "recollect": "重新采集",
       "recommended": "推荐",
@@ -213,6 +237,20 @@
       "launchDescWin": "登录 Windows 时自动启动，静默常驻系统托盘。",
       "muteName": "录音时静音其他应用",
       "muteDesc": "开启后，语音输入时暂停系统音频播放，完成后自动恢复。"
+    },
+    "update": {
+      "name": "应用更新",
+      "desc": "从 GitHub Releases 检查并安装应用更新",
+      "current": "当前版本 v{{version}}",
+      "checkBtn": "检查更新",
+      "checking": "检查中…",
+      "upToDate": "已是最新版本",
+      "available": "发现新版本 v{{version}}",
+      "installBtn": "下载并安装",
+      "downloading": "下载中 {{progress}}…",
+      "installing": "安装中，即将重启…",
+      "failed": "更新失败：{{error}}",
+      "retryBtn": "重试"
     },
     "audio": {
       "title": "音频",
@@ -332,6 +370,47 @@
       "restoreBtn": "恢复系统输入法",
       "restoreDone": "已恢复系统默认输入法"
     },
+    "errors": {
+      "cloudLlmEndpointRequired": "云端 LLM 配置不完整：Endpoint 为必填项（需与 API Key 同时填写，或两者都清空）",
+      "cloudLlmKeyRequired": "云端 LLM 配置不完整：API Key 为必填项（需与 Endpoint 同时填写，或两者都清空）",
+      "cloudLlmEndpointCheckFailed": "云端 LLM Endpoint 校验失败：{{detail}}",
+      "baseUrlCheckFailed": "base_url 校验失败：{{detail}}",
+      "endpointCheckFailed": "endpoint「{{url}}」校验失败：{{detail}}",
+      "baseUrlScheme": "base_url 必须以 ws://, wss://, http:// 或 https:// 开头",
+      "cloudPolishMissingKey": "云端润色缺少 API Key（必填）",
+      "translateMissingKey": "翻译需要云端 API Key（必填）",
+      "qaMissingKey": "问答需要云端 API Key（必填）",
+      "cloudPolishNotConfigured": "云端润色未配置",
+      "noTranslateBackend": "无可用翻译后端",
+      "hotkeySingleKeyNotAllowed": "仅录音快捷键支持单键 Fn/CapsLock（{{name}}快捷键请用组合键）",
+      "hotkeyUnparsable": "{{name}}快捷键「{{key}}」无法解析",
+      "hotkeyConflict": "快捷键冲突：「{{a}}」与「{{b}}」相同（{{key}}）",
+      "shortPressRange": "短按阈值须在 100..=800 之间，当前 {{value}}（默认 300）",
+      "segDurationRange": "分段时长须在 10..=180 之间，当前 {{value}}（默认 60）",
+      "segOverlapRange": "分段重叠须在 1..=30 之间，当前 {{value}}（默认 4）",
+      "segParamsInvalid": "分段参数非法：须 10≤duration≤180、1≤overlap≤30 且 overlap<duration",
+      "sherpaMissingModel": "sherpa provider 缺少 model",
+      "bailianMissingBaseUrl": "bailian provider 缺少 base_url",
+      "bailianMissingApiKey": "bailian provider 缺少 api_key",
+      "bailianMissingModel": "bailian provider 缺少 model",
+      "cloudAsrMissingBaseUrl": "云端 ASR provider 缺少 base_url（endpoint）",
+      "cloudAsrMissingApiKey": "云端 ASR provider 缺少 api_key",
+      "cloudAsrMissingModel": "云端 ASR provider 缺少 model",
+      "saveFailed": "保存配置失败：{{detail}}",
+      "endpointInvalidUrl": "URL 格式无效：{{detail}}",
+      "endpointUnsupportedScheme": "不支持的 scheme: {{scheme}}",
+      "endpointMissingHost": "URL 缺少 host",
+      "endpointBlockedMetadata": "禁止的云元数据服务地址（IMDS）",
+      "endpointBlockedLinkLocal": "禁止的 link-local 地址",
+      "endpointBlockedCgnat": "禁止的 CGNAT 地址（100.64.0.0/10）",
+      "endpointBlockedReserved": "禁止的保留地址",
+      "endpointPublicRequiresTls": "公网地址必须使用 https / wss",
+      "hotkeyNames": {
+        "录音": "录音",
+        "风格包切换": "风格包切换",
+        "翻译": "翻译"
+      }
+    },
     "autoSaved": "已自动保存"
   },
   "history": {
@@ -383,5 +462,10 @@
     "deleteTitle": "删除",
     "notFound": "未找到匹配词条",
     "empty": "词典为空"
+  },
+  "toast": {
+    "translateIgnoredRecording": "录音进行中，翻译键已忽略",
+    "translateBackendMissing": "请先配置翻译后端：云端 LLM（endpoint + API Key），或在设置 → 本地模型下载翻译/润色模型",
+    "updateAvailable": "发现新版本 v{{version}}，可到 设置 → App 行为 更新"
   }
 }

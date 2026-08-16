@@ -40,6 +40,8 @@ arboard = "3"
 # P1：QA 状态机 / 插入器 trait 实现
 async-trait = { workspace = true }
 uuid = { workspace = true }
+tauri-plugin-updater = "2.0.0-rc.4"
+tauri-plugin-process = "2.0.0-rc.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # R7：Win32 前台 exe 捕获 / 还焦（GetForegroundWindow / SetForegroundWindow）。

@@ -96,6 +96,8 @@ export interface AppConfig {
   prefix_roles_enabled?: boolean;
   /** 助手名称：「助手名+角色别名」组合触发前缀角色（空 = 关闭） */
   assistant_name?: string;
+  /** 界面语言（zh/en，v5 起持久化到后端，驱动角色别名/prompt 语言） */
+  ui_lang?: string;
 
   // ── P1：R7 粘贴兜底 ──
   insert_strategy?: InsertStrategy;
@@ -143,6 +145,10 @@ export interface StylePack {
   role_kind?: RoleKind;
   /** P1 仅 insert */
   output_mode?: OutputMode;
+  /** v5 双语：EN 界面显示/编辑字段；为空回退中文（与后端 name_for 同语义）。 */
+  name_en?: string;
+  system_prompt_en?: string;
+  match_prefix_en?: string | null;
 }
 
 /** 本地 LLM 候选（list_local_polish_models / list_local_translate_models）。 */
@@ -219,6 +225,10 @@ export interface ModelPerfTag {
   kind: string; // suitable | usable | not_recommended | unknown | light
   reason: string;
   color: string;
+  /** 英文标签文案（en 界面用；旧持久化数据可能缺失 → 回退 tag）。 */
+  tag_en?: string | null;
+  /** 英文解释原因（en 界面 tooltip 用）。 */
+  reason_en?: string | null;
 }
 export interface LocalAsrModelEntry {
   id: string;

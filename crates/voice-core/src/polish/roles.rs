@@ -19,10 +19,13 @@ use crate::store::StylePack;
 /// 组合前缀匹配：返回命中的包与去组合正文（已 trim）。
 ///
 /// `assistant_name` 来自配置（trim 后使用；空 = 不触发）。
+/// `lang` 为界面语言（"zh"/"en"）：en 界面用包的 `match_prefix_en` 别名集
+/// （未配置则回退 `match_prefix`），zh 界面用 `match_prefix`。
 pub fn detect_prefix_role<'a>(
     text: &str,
     assistant_name: &str,
     packs: &'a [StylePack],
+    lang: &str,
 ) -> Option<(&'a StylePack, String)> {
     let wake = assistant_name.trim();
     if wake.is_empty() {
@@ -31,9 +34,10 @@ pub fn detect_prefix_role<'a>(
     let t = text.trim();
     let mut best: Option<(&StylePack, usize)> = None;
     for p in packs {
-        let Some(spec) = p.match_prefix.as_deref() else {
+        let spec = p.aliases_for(lang);
+        if spec.trim().is_empty() {
             continue;
-        };
+        }
         for alias in spec.split('|').map(str::trim).filter(|s| !s.is_empty()) {
             // 组合前缀 = 助手名 + [分隔符] + 别名（「小优翻译」/「小优，翻译」）。
             // 中间分隔符容错：用户在助手名与角色名之间的小停顿（~0.2s）会让
@@ -148,6 +152,9 @@ mod tests {
             model: None,
             role_kind: crate::store::RoleKind::Default,
             output_mode: crate::store::OutputMode::Insert,
+            name_en: String::new(),
+            system_prompt_en: String::new(),
+            match_prefix_en: None,
         }
     }
 
@@ -158,10 +165,61 @@ mod tests {
     }
 
     #[test]
+    fn english_aliases_only_in_en_lang() {
+        // en 界面：别名集 = match_prefix_en（translate|t / email|mail），中文别名不生效。
+        let mut tr = translate_pack("tr", "翻译|translate|译", 0);
+        tr.match_prefix_en = Some("translate|t".into());
+        let mut mail = pack("mail", "邮件|mail|写邮件", 1);
+        mail.match_prefix_en = Some("email|mail".into());
+        let packs = [tr.clone(), mail.clone()];
+        // 英文别名命中。
+        let (p, rest) = detect_prefix_role("IME translate 明天开会", "IME", &packs, "en").unwrap();
+        assert_eq!(p.id, "tr");
+        assert_eq!(rest, "明天开会");
+        let (p, rest) = detect_prefix_role("IME t 明天开会", "IME", &packs, "en").unwrap();
+        assert_eq!(p.id, "tr");
+        assert_eq!(rest, "明天开会");
+        let (p, _) = detect_prefix_role("ime email 明天开会", "IME", &packs, "en").unwrap();
+        assert_eq!(p.id, "mail");
+        // en 界面不命中中文别名。
+        assert!(detect_prefix_role("IME 翻译 明天开会", "IME", &packs, "en").is_none());
+        // zh 界面仍命中中文别名（en 字段被忽略）。
+        let (p, _) = detect_prefix_role("小友翻译明天开会", "小友", &packs, "zh").unwrap();
+        assert_eq!(p.id, "tr");
+    }
+
+    #[test]
+    fn bilingual_getters_fall_back() {
+        let mut tr = translate_pack("tr", "翻译|translate|译", 0);
+        tr.name_en = "Translate".into();
+        tr.system_prompt_en = "Translate to target language only.".into();
+        tr.match_prefix_en = Some("translate|t".into());
+        // en：优先英文版。
+        assert_eq!(tr.name_for("en"), "Translate");
+        assert_eq!(tr.system_prompt_for("en"), "Translate to target language only.");
+        assert_eq!(tr.aliases_for("en"), "translate|t");
+        // zh：用中文版。
+        assert_eq!(tr.name_for("zh"), "tr");
+        assert_eq!(tr.system_prompt_for("zh"), "prompt");
+        assert_eq!(tr.aliases_for("zh"), "翻译|translate|译");
+        // en 但英文列空：回退中文（用户包常见情形）。
+        let mut plain = translate_pack("plain", "命令|command", 1);
+        plain.name_en = String::new();
+        plain.system_prompt_en = String::new();
+        plain.match_prefix_en = None;
+        plain.name = "自定义".into();
+        plain.system_prompt = "中文提示".into();
+        assert_eq!(plain.name_for("en"), "自定义");
+        assert_eq!(plain.system_prompt_for("en"), "中文提示");
+        assert_eq!(plain.aliases_for("en"), "命令|command");
+        assert_eq!(plain.aliases_for("zh"), "命令|command");
+    }
+
+    #[test]
     fn combo_triggers_without_punctuation() {
         // 核心场景：连说无标点直接触发（不再依赖 ASR 标点）。
         let packs = [translate_pack("tr", "翻译|translate|译", 0)];
-        let (p, rest) = detect_prefix_role("小友翻译我想要走了", "小友", &packs).unwrap();
+        let (p, rest) = detect_prefix_role("小友翻译我想要走了", "小友", &packs, "zh").unwrap();
         assert_eq!(p.id, "tr");
         assert_eq!(rest, "我想要走了");
     }
@@ -177,7 +235,7 @@ mod tests {
             ("小友翻译 你好", "你好"),
         ];
         for (t, want) in cases {
-            let (_, rest) = detect_prefix_role(t, "小友", &packs).unwrap();
+            let (_, rest) = detect_prefix_role(t, "小友", &packs, "zh").unwrap();
             assert_eq!(rest, want, "输入 {t}");
         }
     }
@@ -196,12 +254,12 @@ mod tests {
             ("小优。 翻译 明天我要开会", "明天我要开会"),
         ];
         for (t, want) in cases {
-            let (p, rest) = detect_prefix_role(t, "小优", &packs).unwrap();
+            let (p, rest) = detect_prefix_role(t, "小优", &packs, "zh").unwrap();
             assert_eq!(p.id, "tr", "输入 {t}");
             assert_eq!(rest, want, "输入 {t}");
         }
         // 别名内部不容分隔（那是 ASR 错字，交给热词纠错路径）。
-        assert!(detect_prefix_role("小优翻 译明天开会", "小优", &packs).is_none());
+        assert!(detect_prefix_role("小优翻 译明天开会", "小优", &packs, "zh").is_none());
     }
 
     #[test]
@@ -217,12 +275,12 @@ mod tests {
         ];
         for (t, want) in cases {
             let (p, rest) =
-                detect_prefix_role(t, "小优", &packs).unwrap_or_else(|| panic!("应触发：{t}"));
+                detect_prefix_role(t, "小优", &packs, "zh").unwrap_or_else(|| panic!("应触发：{t}"));
             assert_eq!(p.id, "tr");
             assert_eq!(rest, want, "输入 {t}");
         }
         // 非同音错字不触发（交给热词/正文路径）。
-        assert!(detect_prefix_role("小张翻译明天我要开会", "小优", &packs).is_none());
+        assert!(detect_prefix_role("小张翻译明天我要开会", "小优", &packs, "zh").is_none());
         // 句首同音错字也受守卫保护（组合未命中时跳润色直出）。
         assert!(starts_with_assistant("小幽你好", "小优"));
     }
@@ -238,7 +296,7 @@ mod tests {
             "翻译家在开会",
         ] {
             assert!(
-                detect_prefix_role(t, "小友", &packs).is_none(),
+                detect_prefix_role(t, "小友", &packs, "zh").is_none(),
                 "{t} 不应触发（须带助手名）"
             );
         }
@@ -247,8 +305,8 @@ mod tests {
     #[test]
     fn empty_assistant_name_disables_detection() {
         let packs = [pack("mail", "邮件|mail|写邮件", 0)];
-        assert!(detect_prefix_role("小友邮件: 明天", "", &packs).is_none());
-        assert!(detect_prefix_role("邮件: 明天", "  ", &packs).is_none());
+        assert!(detect_prefix_role("小友邮件: 明天", "", &packs, "zh").is_none());
+        assert!(detect_prefix_role("邮件: 明天", "  ", &packs, "zh").is_none());
         assert!(!starts_with_assistant("小友你好", ""));
     }
 
@@ -256,25 +314,25 @@ mod tests {
     fn custom_assistant_name() {
         // 自定义助手名生效。
         let packs = [translate_pack("tr", "翻译|translate|译", 0)];
-        let (p, rest) = detect_prefix_role("阿法翻译我想要走了", "阿法", &packs).unwrap();
+        let (p, rest) = detect_prefix_role("阿法翻译我想要走了", "阿法", &packs, "zh").unwrap();
         assert_eq!(p.id, "tr");
         assert_eq!(rest, "我想要走了");
         // 换名后旧名不再触发。
-        assert!(detect_prefix_role("小友翻译我想要走了", "阿法", &packs).is_none());
+        assert!(detect_prefix_role("小友翻译我想要走了", "阿法", &packs, "zh").is_none());
     }
 
     #[test]
     fn single_char_alias_combo_triggers() {
         // 单字别名「译」组合成三字词（小友译），安全触发。
         let packs = [translate_pack("tr", "翻译|translate|译", 0)];
-        let (_, rest) = detect_prefix_role("小友译我想要走了", "小友", &packs).unwrap();
+        let (_, rest) = detect_prefix_role("小友译我想要走了", "小友", &packs, "zh").unwrap();
         assert_eq!(rest, "我想要走了");
     }
 
     #[test]
     fn english_alias_combo_case_insensitive() {
         let packs = [pack("mail", "邮件|mail|写邮件", 0)];
-        let (p, rest) = detect_prefix_role("小友MAIL: hi there", "小友", &packs).unwrap();
+        let (p, rest) = detect_prefix_role("小友MAIL: hi there", "小友", &packs, "zh").unwrap();
         assert_eq!(p.id, "mail");
         assert_eq!(rest, "hi there");
     }
@@ -282,30 +340,30 @@ mod tests {
     #[test]
     fn empty_body_does_not_trigger() {
         let packs = [pack("mail", "邮件|mail|写邮件", 0)];
-        assert!(detect_prefix_role("小友邮件", "小友", &packs).is_none());
-        assert!(detect_prefix_role("小友邮件:", "小友", &packs).is_none());
-        assert!(detect_prefix_role("小友邮件：", "小友", &packs).is_none());
-        assert!(detect_prefix_role(" 小友邮件: ", "小友", &packs).is_none());
+        assert!(detect_prefix_role("小友邮件", "小友", &packs, "zh").is_none());
+        assert!(detect_prefix_role("小友邮件:", "小友", &packs, "zh").is_none());
+        assert!(detect_prefix_role("小友邮件：", "小友", &packs, "zh").is_none());
+        assert!(detect_prefix_role(" 小友邮件: ", "小友", &packs, "zh").is_none());
         // 只有助手名没有别名。
-        assert!(detect_prefix_role("小友", "小友", &packs).is_none());
+        assert!(detect_prefix_role("小友", "小友", &packs, "zh").is_none());
     }
 
     #[test]
     fn longest_combo_wins() {
         // 「小友写邮件」只命中 compose（mail 的「邮件」组合「小友邮件」不匹配开头）。
         let packs = [pack("mail", "邮件|mail", 0), pack("compose", "写邮件", 1)];
-        let (p, rest) = detect_prefix_role("小友写邮件: 你好", "小友", &packs).unwrap();
+        let (p, rest) = detect_prefix_role("小友写邮件: 你好", "小友", &packs, "zh").unwrap();
         assert_eq!(p.id, "compose");
         assert_eq!(rest, "你好");
         // 「小友邮件」命中 mail。
-        let (p, _) = detect_prefix_role("小友邮件你好", "小友", &packs).unwrap();
+        let (p, _) = detect_prefix_role("小友邮件你好", "小友", &packs, "zh").unwrap();
         assert_eq!(p.id, "mail");
     }
 
     #[test]
     fn equal_length_conflict_takes_smaller_ord() {
         let packs = [pack("b", "翻译", 5), translate_pack("a", "翻译", 2)];
-        let (p, _) = detect_prefix_role("小友翻译: hi", "小友", &packs).unwrap();
+        let (p, _) = detect_prefix_role("小友翻译: hi", "小友", &packs, "zh").unwrap();
         assert_eq!(p.id, "a");
     }
 
@@ -313,8 +371,8 @@ mod tests {
     fn mid_text_combo_does_not_trigger() {
         // 组合不在句首不触发。
         let packs = [translate_pack("tr", "翻译|translate|译", 0)];
-        assert!(detect_prefix_role("请小友翻译这段话", "小友", &packs).is_none());
-        assert!(detect_prefix_role("下午小友邮件会议", "小友", &packs).is_none());
+        assert!(detect_prefix_role("请小友翻译这段话", "小友", &packs, "zh").is_none());
+        assert!(detect_prefix_role("下午小友邮件会议", "小友", &packs, "zh").is_none());
     }
 
     #[test]

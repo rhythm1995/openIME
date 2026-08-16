@@ -65,6 +65,9 @@ pub fn run() {
     let mut app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // 应用内自动更新（GitHub Releases 的 latest.json 更新源）+ 更新后重启。
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // 开机自启（macOS 用 LaunchAgent）：自启时附带 --autostart 参数，
         // setup 据此判断是开机自启（静默常驻菜单栏）还是正常启动（显示面板）。
         .plugin(tauri_plugin_autostart::init(
@@ -302,6 +305,7 @@ pub fn run() {
             commands::default_config,
             commands::get_config,
             commands::save_app_config,
+            commands::set_ui_lang,
             commands::validate_provider,
             commands::test_cloud_connection,
             commands::test_cloud_polish,
