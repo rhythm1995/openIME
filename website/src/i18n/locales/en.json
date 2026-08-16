@@ -1,0 +1,173 @@
+{
+  "meta": {
+    "title": "openIME — Speak to type | Local-first open-source voice input"
+  },
+  "nav": {
+    "features": "Features",
+    "privacy": "Privacy",
+    "download": "Download",
+    "docs": "Docs",
+    "githubAria": "GitHub repository",
+    "langAria": "Switch language"
+  },
+  "hero": {
+    "title": "Speak. It types.",
+    "subtitle": "A local-first, open-source voice input method. Hold the shortcut, speak, and watch the words land at your cursor — audio never leaves your machine.",
+    "ctaPrimary": "Download for macOS",
+    "ctaSecondary": "GitHub",
+    "platformNote": "macOS stable · Windows beta",
+    "demoHint": "Press and hold the panel below — or focus it and hold Space",
+    "demoRecording": "Listening… release to insert",
+    "demoText": "Meeting at 3 this afternoon. Bring the design proposal.",
+    "demoAriaLabel": "Hold-to-talk demo",
+    "micToggle": "Live mic waveform",
+    "micDenied": "Microphone unavailable — using simulated waveform"
+  },
+  "trust": {
+    "items": ["MIT open source", "Fully offline", "Audio never leaves your Mac", "macOS + Windows"]
+  },
+  "how": {
+    "eyebrow": "How it works",
+    "title": "Three steps per input",
+    "steps": [
+      {
+        "num": "01",
+        "title": "Hold the shortcut",
+        "desc": "A global hotkey works in any app, any time"
+      },
+      {
+        "num": "02",
+        "title": "Speak",
+        "desc": "The local engine transcribes in real time — just redo if you misspeak"
+      },
+      {
+        "num": "03",
+        "title": "Release to insert",
+        "desc": "Text lands at the cursor, with numerals and variants normalized"
+      }
+    ],
+    "kbdNote": "Push-to-talk via Fn / Globe key",
+    "shotAlt": "openIME main window screenshot (macOS)",
+    "shotCaption": "openIME in action · macOS"
+  },
+  "features": {
+    "eyebrow": "Capabilities",
+    "title": "The professionalism an input method deserves",
+    "items": [
+      {
+        "num": "01",
+        "title": "Local ASR",
+        "desc": "In-process sherpa-onnx offline recognition. One-click model download with SHA256 verification, resumable transfer, and HF-to-mirror failover."
+      },
+      {
+        "num": "02",
+        "title": "Three-tier polish",
+        "desc": "L0 rule-based correction (hotwords, fuzzy pinyin, numeral ITN, S/T Chinese) plus L2 local LLM polish — Qwen 0.8B/2B/4B tiered by hardware, with graceful passthrough on failure."
+      },
+      {
+        "num": "03",
+        "title": "Speech translation",
+        "desc": "Speak Chinese, type another language. Seven base languages, extensible with the MiLMMT-46 local model."
+      },
+      {
+        "num": "04",
+        "title": "Hotwords & styles",
+        "desc": "A personal hotword dictionary corrects first; style packs set the tone; \"mail:\" and \"translate:\" prefixes jump straight to the task."
+      },
+      {
+        "num": "05",
+        "title": "File transcription",
+        "desc": "Long audio auto-segmented and transcribed, exported as timed SRT subtitles."
+      }
+    ]
+  },
+  "privacy": {
+    "eyebrow": "Privacy & local-first",
+    "title": "0 bytes of audio uploaded",
+    "desc": "The default engine runs entirely in-process: sound goes from the microphone into sherpa-onnx, text lands at your cursor, and the network is never involved. Cloud engines are only enabled if you configure them.",
+    "points": ["Default engine fully offline", "Audio data stays on-device", "Open source and auditable (MIT)"],
+    "diagram": {
+      "zone": "Your machine",
+      "mic": "Microphone",
+      "asr": "sherpa-onnx",
+      "asrSub": "in-process recognition",
+      "out": "Inserted at cursor",
+      "cloud": "Cloud engines",
+      "cloudSub": "Bailian / OpenAI-compatible",
+      "optional": "optional",
+      "caption": "The local pipeline: recognition never leaves the machine"
+    }
+  },
+  "engines": {
+    "eyebrow": "Engine matrix",
+    "title": "Local by default, cloud by choice",
+    "colEngine": "Engine",
+    "colDeploy": "Deployment",
+    "colNote": "Notes",
+    "deployLocal": "Local",
+    "deployCloud": "Cloud",
+    "rows": [
+      {
+        "engine": "sherpa-onnx",
+        "deploy": "local",
+        "note": "Recommended default, fully offline"
+      },
+      {
+        "engine": "Bailian WebSocket",
+        "deploy": "cloud",
+        "note": "Streaming, requires credentials"
+      },
+      {
+        "engine": "OpenAI-compatible REST",
+        "deploy": "cloud",
+        "note": "Custom endpoints"
+      },
+      {
+        "engine": "Qwen 0.8B / 2B / 4B",
+        "deploy": "local",
+        "note": "L2 polish, tiered by hardware"
+      },
+      {
+        "engine": "MiLMMT-46",
+        "deploy": "local",
+        "note": "Extended-language translation"
+      }
+    ]
+  },
+  "download": {
+    "eyebrow": "Download",
+    "title": "Get the installer from Releases",
+    "mac": "Download macOS · .dmg",
+    "win": "Windows · .exe (beta)",
+    "note": "After installing, download the local model in one click: Settings → Recognition engine.",
+    "go": "Go to GitHub Releases"
+  },
+  "faq": {
+    "eyebrow": "FAQ",
+    "items": [
+      {
+        "q": "Which platforms are supported?",
+        "a": "macOS is fully stable; Windows is in beta — the NSIS installer works, native TSF insertion is in progress."
+      },
+      {
+        "q": "Does it need internet?",
+        "a": "The default local engine works fully offline; only the first model download needs network. Optional cloud engines require credentials."
+      },
+      {
+        "q": "Is my voice uploaded?",
+        "a": "With the local engine, audio is recognized in-process on your machine — 0 bytes uploaded."
+      },
+      {
+        "q": "How do I report issues?",
+        "a": "Open a GitHub issue or send a PR — the project is MIT licensed."
+      }
+    ]
+  },
+  "footer": {
+    "tagline": "Local-first · Open source · Testable",
+    "docs": "Docs",
+    "github": "GitHub",
+    "issues": "Feedback",
+    "license": "MIT License · © 2026 openIME contributors"
+  }
+}

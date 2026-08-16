@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- openIME App Icon · 概念 A · 经典对称竖条声波
+       规格：1024×1024 macOS squircle
+       主色：粒蓝 #3B4FE0
+       设计：5 条白色竖条，中峰最高(420)，两侧递减(300/180)，圆角28
+       编辑风：纯实色，无渐变无发光，强对比 -->
+  <defs>
+    <!-- macOS squircle (superellipse 近似，对应 macOS Continuous Corner) -->
+    <clipPath id="sq">
+      <path d="M 512 64
+        C 256 64, 140 92, 92 140
+        C 44 188, 64 256, 64 512
+        C 64 768, 44 836, 92 884
+        C 140 932, 256 960, 512 960
+        C 768 960, 884 932, 932 884
+        C 980 836, 960 768, 960 512
+        C 960 256, 980 188, 932 140
+        C 884 92, 768 64, 512 64 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- 底色：粒蓝实色填充 squircle -->
+  <g clip-path="url(#sq)">
+    <rect width="1024" height="1024" fill="#3B4FE0"/>
+    <!-- 极淡的顶部高光，增加质感但不破坏编辑风的克制 -->
+    <rect width="1024" height="512" fill="url(#topLight)"/>
+    <linearGradient id="topLight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </g>
+
+  <!-- 声波：5 条对称竖条，白色，圆角 -->
+  <!-- 几何：条宽56 间距36 总宽424 居中起x=300；高 180/300/420/300/180 -->
+  <g fill="#FFFFFF">
+    <rect x="300" y="422" width="56" height="180" rx="28"/>
+    <rect x="392" y="362" width="56" height="300" rx="28"/>
+    <rect x="484" y="302" width="56" height="420" rx="28"/>
+    <rect x="576" y="362" width="56" height="300" rx="28"/>
+    <rect x="668" y="422" width="56" height="180" rx="28"/>
+  </g>
+</svg>

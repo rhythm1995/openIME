@@ -49,7 +49,7 @@ jobs:
           components: clippy
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -82,7 +82,7 @@ jobs:
           components: clippy
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -113,7 +113,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -124,3 +124,21 @@ jobs:
         run: pnpm test
       - name: Type check + build
         run: pnpm build
+
+  # 官网：类型检查 + 构建（部署在 pages.yml，这里覆盖 PR 与非 website 路径的 main 推送）。
+  website:
+    name: website build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install website deps
+        run: pnpm install --frozen-lockfile --filter openime-website...
+      - name: Type check + build
+        run: pnpm --filter openime-website build
