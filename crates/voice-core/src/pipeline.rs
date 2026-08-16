@@ -1570,7 +1570,7 @@ mod tests {
     #[tokio::test]
     async fn translate_fallback_switch_off_skips_fallback() {
         // fallback 句柄存在但开关关 → 无后端 → TranslateFailed。
-        let fb = Arc::new(RecordingTranslate::new("不应被调".into()));
+        let fb = Arc::new(RecordingTranslate::new("不应被调"));
         let (deps, ins) = deps_local_translate(None, Some(fb.clone()), None);
         let pipe = Pipeline::new(deps);
         let mut ctx = ctx_enabled(PolishMode::Off);

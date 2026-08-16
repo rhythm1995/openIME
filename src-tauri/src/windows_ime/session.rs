@@ -253,62 +253,61 @@ impl PreparedWindowsImeSession {
         }
         self.restored.set(true);
         let decision = restore_decision(self.saved.as_ref(), self.activated, !self.activated);
-        if !matches!(decision, ProfileRestoreDecision::RestoreSavedProfile) {
-            return;
-        }
-        #[cfg(target_os = "windows")]
-        {
-            let Some(saved) = self.saved.as_ref() else {
-                return;
-            };
-            unsafe {
-                use windows::Win32::System::Com::{
-                    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
-                    COINIT_APARTMENTTHREADED,
+        if matches!(decision, ProfileRestoreDecision::RestoreSavedProfile) {
+            #[cfg(target_os = "windows")]
+            {
+                let Some(saved) = self.saved.as_ref() else {
+                    return;
                 };
-                use windows::Win32::UI::TextServices::ITfInputProcessorProfiles;
-                use windows::Win32::UI::WindowsAndMessaging::{
-                    PostMessageW, WM_INPUTLANGCHANGEREQUEST,
-                };
-                let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-                let uninit = hr.0 == 0;
-                let profiles_res: windows::core::Result<ITfInputProcessorProfiles> =
-                    CoCreateInstance(
-                        &windows::Win32::UI::TextServices::CLSID_TF_InputProcessorProfiles,
-                        None,
-                        CLSCTX_INPROC_SERVER,
-                    );
-                if let Ok(profiles) = profiles_res {
-                    let hwnd = windows::Win32::Foundation::HWND(self.fg_hwnd as *mut _);
-                    match saved {
-                        ImeProfileSnapshot::TextService {
-                            lang,
-                            clsid,
-                            profile_guid,
-                        } => {
-                            // 现代优先：ActivateLanguageProfile；失败仅告警（尽力而为）。
-                            let c = guid_from_literal(clsid);
-                            let g = guid_from_literal(profile_guid);
-                            let _ = profiles.ActivateLanguageProfile(&c, *lang, &g);
-                            let _ = PostMessageW(
-                                hwnd,
-                                WM_INPUTLANGCHANGEREQUEST,
-                                windows::Win32::Foundation::WPARAM(0),
-                                windows::Win32::Foundation::LPARAM(0),
-                            );
-                        }
-                        ImeProfileSnapshot::KeyboardLayout { hkl, .. } => {
-                            let _ = PostMessageW(
-                                hwnd,
-                                WM_INPUTLANGCHANGEREQUEST,
-                                windows::Win32::Foundation::WPARAM(0),
-                                windows::Win32::Foundation::LPARAM(*hkl as isize),
-                            );
+                unsafe {
+                    use windows::Win32::System::Com::{
+                        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+                        COINIT_APARTMENTTHREADED,
+                    };
+                    use windows::Win32::UI::TextServices::ITfInputProcessorProfiles;
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        PostMessageW, WM_INPUTLANGCHANGEREQUEST,
+                    };
+                    let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                    let uninit = hr.0 == 0;
+                    let profiles_res: windows::core::Result<ITfInputProcessorProfiles> =
+                        CoCreateInstance(
+                            &windows::Win32::UI::TextServices::CLSID_TF_InputProcessorProfiles,
+                            None,
+                            CLSCTX_INPROC_SERVER,
+                        );
+                    if let Ok(profiles) = profiles_res {
+                        let hwnd = windows::Win32::Foundation::HWND(self.fg_hwnd as *mut _);
+                        match saved {
+                            ImeProfileSnapshot::TextService {
+                                lang,
+                                clsid,
+                                profile_guid,
+                            } => {
+                                // 现代优先：ActivateLanguageProfile；失败仅告警（尽力而为）。
+                                let c = guid_from_literal(clsid);
+                                let g = guid_from_literal(profile_guid);
+                                let _ = profiles.ActivateLanguageProfile(&c, *lang, &g);
+                                let _ = PostMessageW(
+                                    hwnd,
+                                    WM_INPUTLANGCHANGEREQUEST,
+                                    windows::Win32::Foundation::WPARAM(0),
+                                    windows::Win32::Foundation::LPARAM(0),
+                                );
+                            }
+                            ImeProfileSnapshot::KeyboardLayout { hkl, .. } => {
+                                let _ = PostMessageW(
+                                    hwnd,
+                                    WM_INPUTLANGCHANGEREQUEST,
+                                    windows::Win32::Foundation::WPARAM(0),
+                                    windows::Win32::Foundation::LPARAM(*hkl as isize),
+                                );
+                            }
                         }
                     }
-                }
-                if uninit {
-                    CoUninitialize();
+                    if uninit {
+                        CoUninitialize();
+                    }
                 }
             }
         }

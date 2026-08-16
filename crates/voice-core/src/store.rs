@@ -965,15 +965,17 @@ mod tests {
     fn style_packs_crud_and_seed() {
         let store = SqliteStore::open_in_memory().unwrap();
         // 内置纯风格包（正式/口语/commit）已下架，不再种子；手动 upsert 三个做 CRUD 验证。
-        let mut seed = 0;
-        for id in ["builtin-formal", "builtin-casual", "builtin-commit"] {
+        for (seed, id) in ["builtin-formal", "builtin-casual", "builtin-commit"]
+            .into_iter()
+            .enumerate()
+        {
             store
                 .upsert_style_pack(&StylePack {
                     id: id.into(),
                     name: format!("包{id}"),
                     system_prompt: "test".into(),
                     is_builtin: true,
-                    ord: seed,
+                    ord: seed as i32,
                     match_prefix: None,
                     provider: None,
                     model: None,
@@ -981,7 +983,6 @@ mod tests {
                     output_mode: OutputMode::Insert,
                 })
                 .unwrap();
-            seed += 1;
         }
         let packs = store.list_style_packs().unwrap();
         assert_eq!(packs.len(), 3);

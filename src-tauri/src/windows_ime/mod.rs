@@ -4,6 +4,10 @@
 //! `install`：TIP DLL 安装探测 / 自注册 / 系统收录验证；
 //! `ipc` / `session`：命名管道 client 与会话控制器。
 
+// R11 WIP：TSF 接线（原生上屏路径）尚未完成，协议/会话层先行实现、暂无调用方；
+// 接线完成后移除本豁免。
+#![allow(dead_code)]
+
 pub mod install;
 pub mod ipc;
 pub mod profile;

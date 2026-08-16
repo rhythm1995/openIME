@@ -706,11 +706,13 @@ mod tests {
     #[test]
     fn legacy_polish_model_resolves_to_2b() {
         // T11：旧 polish_local_model=qwen2.5-1.5b-… 读配置时映射到 qwen3.5-2b，不读旧文件。
-        let mut c = AppConfig::default();
-        c.polish_local_model = "qwen2.5-1.5b-instruct-q4_k_m".into();
+        let c = AppConfig {
+            polish_local_model: "qwen2.5-1.5b-instruct-q4_k_m".into(),
+            translate_local_model: "".into(),
+            ..Default::default()
+        };
         assert_eq!(c.resolved_polish_local_model(), "qwen3.5-2b");
         // 空 translate_local_model = 未选专翻。
-        c.translate_local_model = "".into();
         assert_eq!(c.resolved_translate_local_model(), "");
     }
 

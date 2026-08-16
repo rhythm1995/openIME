@@ -579,6 +579,7 @@ const TRANSLATE_USER_SET_KEY: &str = "translate_model_user_set";
 /// - 润色组：用户手动选过润色档（`polish_model_user_set=1`）→ 不改 `polish`。
 /// - 翻译组：用户手动选过专翻档（`translate_model_user_set=1`，含选空）→
 ///   不改 `translate` 与 `translate_use_llm_fallback`（推荐器两字段成对改写）。
+///
 /// 各组独立判断；系统信息可用性短路（total_mem==0）由调用方负责。
 /// 返回 (改写润色组, 改写翻译组)。
 fn recommended_defaults_apply(
@@ -671,6 +672,7 @@ fn apply_recommended_defaults(state: &State<'_, AppState>, cfg: &mut AppConfig) 
     true
 }
 
+#[allow(clippy::too_many_arguments)] // Tauri command 入口，参数随 LLM 三件套配置展开
 fn llm_entry(
     state: &State<'_, AppState>,
     model_root: &std::path::Path,
@@ -995,7 +997,7 @@ pub fn get_model_suite_info(state: State<'_, AppState>) -> Result<ModelSuiteInfo
     let translate = cfg.resolved_translate_local_model();
     // 兼译时专翻常驻按口径记 0（见 suite_used_bytes 注释）。
     let used = suite_used_bytes(&asr, &polish, &translate, cfg.translate_use_llm_fallback);
-    let weak_machine = sys.as_ref().map_or(false, |s| {
+    let weak_machine = sys.as_ref().is_some_and(|s| {
         let gb = s.total_mem / (1024 * 1024 * 1024);
         gb <= 8 || (!s.is_apple_silicon && gb < 16)
     });
