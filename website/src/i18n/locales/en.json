@@ -96,7 +96,7 @@
       "asrSub": "in-process recognition",
       "out": "Inserted at cursor",
       "cloud": "Cloud engines",
-      "cloudSub": "Bailian / OpenAI-compatible",
+      "cloudSub": "OpenAI-compatible",
       "optional": "optional",
       "caption": "The local pipeline: recognition never leaves the machine"
     }
@@ -114,11 +114,6 @@
         "engine": "sherpa-onnx",
         "deploy": "local",
         "note": "Recommended default, fully offline"
-      },
-      {
-        "engine": "Bailian WebSocket",
-        "deploy": "cloud",
-        "note": "Streaming, requires credentials"
       },
       {
         "engine": "OpenAI-compatible REST",

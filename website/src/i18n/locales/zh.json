@@ -96,7 +96,7 @@
       "asrSub": "进程内识别",
       "out": "光标处上屏",
       "cloud": "云端引擎",
-      "cloudSub": "百炼 / OpenAI 兼容",
+      "cloudSub": "OpenAI 兼容",
       "optional": "可选",
       "caption": "本地管线：识别全程在本机完成"
     }
@@ -114,11 +114,6 @@
         "engine": "sherpa-onnx",
         "deploy": "local",
         "note": "默认推荐，完全离线"
-      },
-      {
-        "engine": "百炼 WebSocket",
-        "deploy": "cloud",
-        "note": "流式识别，需凭据"
       },
       {
         "engine": "OpenAI 兼容 REST",
