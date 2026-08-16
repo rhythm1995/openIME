@@ -16,7 +16,12 @@
     "subtitle": "本地优先的开源语音输入法。按住快捷键、开口说话，文字就落在光标处 —— 音频永不出本机。",
     "ctaPrimary": "下载",
     "ctaSecondary": "GitHub",
-    "metaItems": ["v0.1.0", "macOS 12+ · Windows beta", "MIT 开源", "完全离线"],
+    "metaItems": [
+      "v0.1.0",
+      "macOS 12+ · Windows beta",
+      "MIT 开源",
+      "完全离线"
+    ],
     "demoHint": "按住下方面板说话试试 —— 或聚焦后按住空格键",
     "demoRecording": "聆听中，松开完成上屏",
     "demoText": "今天下午三点开会，记得带上设计方案。",
@@ -45,7 +50,7 @@
       }
     ],
     "kbdNote": "支持 Fn / Globe 键即按即说",
-    "shotAlt": "openIME 主界面截图（macOS）",
+    "shotAlt": "openIME AI 配置界面截图（macOS，深色）",
     "shotCaption": "openIME 实际界面 · macOS"
   },
   "features": {
@@ -88,7 +93,11 @@
     "eyebrow": "隐私与本地优先",
     "title": "音频不出本机，0 字节上传",
     "desc": "默认引擎完全在进程内运行：声音从麦克风进入 sherpa-onnx，文字落到光标处，全程没有网络参与。云端引擎仅在主动配置时启用。",
-    "points": ["默认引擎完全离线", "音频数据不出本机", "开源可审计（MIT）"],
+    "points": [
+      "默认引擎完全离线",
+      "音频数据不出本机",
+      "开源可审计（MIT）"
+    ],
     "diagram": {
       "zone": "本机",
       "mic": "麦克风",
@@ -137,7 +146,10 @@
     "title": "从 Releases 获取安装包",
     "mac": "下载 macOS · .dmg",
     "win": "Windows · .exe（beta）",
-    "metaItems": ["GitHub Releases", "安装后一键下载本地模型"],
+    "metaItems": [
+      "GitHub Releases",
+      "安装后一键下载本地模型"
+    ],
     "go": "前往 GitHub Releases"
   },
   "faq": {
@@ -165,6 +177,10 @@
     "tagline": "本地优先 · 开源 · 可测试",
     "docs": "文档",
     "issues": "反馈问题",
-    "metaItems": ["MIT License", "© 2026 openIME contributors", "github.com/rhythm1995/openIME"]
+    "metaItems": [
+      "MIT License",
+      "© 2026 openIME contributors",
+      "github.com/rhythm1995/openIME"
+    ]
   }
 }

@@ -46,7 +46,7 @@ export default function HowItWorks() {
             <span className="win-dot" />
             <span className="win-dot" />
           </div>
-          <img src="screenshots/main.png" alt={t("how.shotAlt")} loading="lazy" />
+          <img src="screenshots/settings.png" alt={t("how.shotAlt")} loading="lazy" />
           <figcaption className="window-caption meta-mono">
             {t("how.shotCaption")}
           </figcaption>

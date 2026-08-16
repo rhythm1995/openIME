@@ -16,7 +16,12 @@
     "subtitle": "A local-first, open-source voice input method. Hold the shortcut, speak, and watch the words land at your cursor — audio never leaves your machine.",
     "ctaPrimary": "Download",
     "ctaSecondary": "GitHub",
-    "metaItems": ["v0.1.0", "macOS 12+ · Windows beta", "MIT open source", "Fully offline"],
+    "metaItems": [
+      "v0.1.0",
+      "macOS 12+ · Windows beta",
+      "MIT open source",
+      "Fully offline"
+    ],
     "demoHint": "Press and hold the panel below — or focus it and hold Space",
     "demoRecording": "Listening… release to insert",
     "demoText": "Meeting at 3 this afternoon. Bring the design proposal.",
@@ -45,7 +50,7 @@
       }
     ],
     "kbdNote": "Push-to-talk via Fn / Globe key",
-    "shotAlt": "openIME main window screenshot (macOS)",
+    "shotAlt": "openIME AI settings screenshot (macOS, dark)",
     "shotCaption": "openIME in action · macOS"
   },
   "features": {
@@ -88,7 +93,11 @@
     "eyebrow": "Privacy & local-first",
     "title": "0 bytes of audio uploaded",
     "desc": "The default engine runs entirely in-process: sound goes from the microphone into sherpa-onnx, text lands at your cursor, and the network is never involved. Cloud engines are only enabled if you configure them.",
-    "points": ["Default engine fully offline", "Audio data stays on-device", "Open source and auditable (MIT)"],
+    "points": [
+      "Default engine fully offline",
+      "Audio data stays on-device",
+      "Open source and auditable (MIT)"
+    ],
     "diagram": {
       "zone": "Your machine",
       "mic": "Microphone",
@@ -137,7 +146,10 @@
     "title": "Get the installer from Releases",
     "mac": "Download macOS · .dmg",
     "win": "Windows · .exe (beta)",
-    "metaItems": ["GitHub Releases", "One-click local model download after install"],
+    "metaItems": [
+      "GitHub Releases",
+      "One-click local model download after install"
+    ],
     "go": "Go to GitHub Releases"
   },
   "faq": {
@@ -165,6 +177,10 @@
     "tagline": "Local-first · Open source · Testable",
     "docs": "Docs",
     "issues": "Feedback",
-    "metaItems": ["MIT License", "© 2026 openIME contributors", "github.com/rhythm1995/openIME"]
+    "metaItems": [
+      "MIT License",
+      "© 2026 openIME contributors",
+      "github.com/rhythm1995/openIME"
+    ]
   }
 }
