@@ -195,7 +195,8 @@ jobs:
 
   # ── GitHub Release ──
   release:
-    needs: [build-macos, build-windows]
+    # 需显式含 version-check：latest.json / release 名称要用它的 outputs。
+    needs: [version-check, build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
