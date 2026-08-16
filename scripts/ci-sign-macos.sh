@@ -24,7 +24,7 @@ security list-keychains -d user -s "$KEYCHAIN" "$(security list-keychains -d use
 
 echo "==> 生成一次性自签证书：${IDENTITY_NAME}"
 tmp="$(mktemp -d)"
-trap 'security remove-trusted-cert "$tmp/cert.pem" >/dev/null 2>&1 || true; rm -rf "$tmp"' RETURN
+trap 'sudo -n security remove-trusted-cert "$tmp/cert.pem" >/dev/null 2>&1 || security remove-trusted-cert "$tmp/cert.pem" >/dev/null 2>&1 || true; rm -rf "$tmp"' RETURN
 
 openssl req -x509 -newkey rsa:2048 \
   -keyout "$tmp/key.pem" -out "$tmp/cert.pem" \
@@ -54,11 +54,12 @@ security set-key-partition-list \
 
 # macOS 15+ 的 codesigning policy 要求自签证书显式受信任，否则
 # find-identity 显示 0 valid identities、codesign 报 no identity found。
-# 优先用户域（无需 sudo，CI/本地均可）；失败再退系统域（CI 有 sudo）。
+# CI（免密 sudo）走系统域，无 GUI 会话也能静默完成；用户域在无 GUI 的
+# runner 上会等授权弹窗挂死，仅作本地无 sudo 时的兜底（限时防挂）。
 echo "==> 信任自签证书（codesigning policy 要求）"
-if ! security add-trusted-cert -r trustRoot -k "$KEYCHAIN" "$tmp/cert.pem" >/dev/null 2>&1; then
-  sudo -n security add-trusted-cert -d -r trustRoot \
-    -k /Library/Keychains/System.keychain "$tmp/cert.pem" >/dev/null
+if ! sudo -n security add-trusted-cert -d -r trustRoot \
+    -k /Library/Keychains/System.keychain "$tmp/cert.pem" >/dev/null 2>&1; then
+  timeout 15 security add-trusted-cert -r trustRoot -k "$KEYCHAIN" "$tmp/cert.pem" >/dev/null
 fi
 
 echo "==> 验证身份可用"
