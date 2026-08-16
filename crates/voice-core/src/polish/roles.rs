@@ -196,7 +196,10 @@ mod tests {
         tr.match_prefix_en = Some("translate|t".into());
         // en：优先英文版。
         assert_eq!(tr.name_for("en"), "Translate");
-        assert_eq!(tr.system_prompt_for("en"), "Translate to target language only.");
+        assert_eq!(
+            tr.system_prompt_for("en"),
+            "Translate to target language only."
+        );
         assert_eq!(tr.aliases_for("en"), "translate|t");
         // zh：用中文版。
         assert_eq!(tr.name_for("zh"), "tr");
@@ -274,8 +277,8 @@ mod tests {
             ("小优翻意：明天我要开会", "明天我要开会"),
         ];
         for (t, want) in cases {
-            let (p, rest) =
-                detect_prefix_role(t, "小优", &packs, "zh").unwrap_or_else(|| panic!("应触发：{t}"));
+            let (p, rest) = detect_prefix_role(t, "小优", &packs, "zh")
+                .unwrap_or_else(|| panic!("应触发：{t}"));
             assert_eq!(p.id, "tr");
             assert_eq!(rest, want, "输入 {t}");
         }

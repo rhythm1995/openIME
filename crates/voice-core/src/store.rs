@@ -817,10 +817,23 @@ fn is_all_hanzi(s: &str) -> bool {
     n > 0 && s.to_pinyin().flatten().count() == n
 }
 
+/// 内置前缀角色包 9 元组：(id, name, match_prefix, RoleKind, system_prompt,
+/// ord, name_en, system_prompt_en, match_prefix_en)。
+type BuiltinPackSpec = (
+    &'static str,
+    &'static str,
+    &'static str,
+    RoleKind,
+    &'static str,
+    i32,
+    &'static str,
+    &'static str,
+    &'static str,
+);
+
 /// 内置前缀角色包清单（与 [`SqliteStore::seed_builtin_prefix_packs_if_missing`] 共享）。
-/// 元组：(id, name, match_prefix, RoleKind, system_prompt, ord, name_en, system_prompt_en, match_prefix_en)
 /// ord 即列表排序：翻译排第一（最高频角色），邮件、命令随后。
-const BUILTIN_PREFIX_PACKS: [(&str, &str, &str, RoleKind, &str, i32, &str, &str, &str); 3] = [
+const BUILTIN_PREFIX_PACKS: [BuiltinPackSpec; 3] = [
     (
         "builtin-role-translate",
         "翻译",
@@ -1353,7 +1366,10 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
-        assert_eq!(row, ("".into(), "".into(), None, Some("社交|social".into())));
+        assert_eq!(
+            row,
+            ("".into(), "".into(), None, Some("社交|social".into()))
+        );
     }
 
     #[test]
@@ -1439,12 +1455,12 @@ mod tests {
         store.upsert_style_pack(mail).unwrap();
         store.seed_builtin_prefix_packs_if_missing().unwrap();
         let got = store.list_style_packs().unwrap();
-        let mail = got
-            .iter()
-            .find(|p| p.id == "builtin-role-mail")
-            .unwrap();
+        let mail = got.iter().find(|p| p.id == "builtin-role-mail").unwrap();
         assert_eq!(mail.name_en, "Email", "空 EN 名应回填");
-        assert_eq!(mail.system_prompt_en, "Custom prompt", "用户改过的 EN prompt 不覆盖");
+        assert_eq!(
+            mail.system_prompt_en, "Custom prompt",
+            "用户改过的 EN prompt 不覆盖"
+        );
     }
 
     #[test]

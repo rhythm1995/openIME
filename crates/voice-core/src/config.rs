@@ -598,7 +598,9 @@ mod tests {
         assert_eq!(old.ui_lang, "zh");
         // 显式写 en 可反序列化。
         let mut v2 = serde_json::to_value(AppConfig::default()).unwrap();
-        v2.as_object_mut().unwrap().insert("ui_lang".into(), "en".into());
+        v2.as_object_mut()
+            .unwrap()
+            .insert("ui_lang".into(), "en".into());
         let cfg: AppConfig = serde_json::from_value(v2).unwrap();
         assert_eq!(cfg.ui_lang, "en");
     }
@@ -859,13 +861,19 @@ mod tests {
         // 序列化名必须与前端 PolishCloudProtocol 联合类型一致，
         // 否则 save_app_config 反序列化报 unknown variant、整单保存被拒。
         let json = serde_json::to_string(&AppConfig::default()).unwrap();
-        assert!(json.contains("\"polish_cloud_protocol\":\"openai_chat\""), "{json}");
+        assert!(
+            json.contains("\"polish_cloud_protocol\":\"openai_chat\""),
+            "{json}"
+        );
         for (variant, raw) in [
             (PolishCloudProtocol::OpenAiChat, "openai_chat"),
             (PolishCloudProtocol::Anthropic, "anthropic"),
             (PolishCloudProtocol::OpenAiResponses, "openai_responses"),
         ] {
-            assert_eq!(serde_json::to_value(variant).unwrap(), serde_json::json!(raw));
+            assert_eq!(
+                serde_json::to_value(variant).unwrap(),
+                serde_json::json!(raw)
+            );
         }
         // 前端实际发送的值能反序列化。
         for raw in ["openai_chat", "anthropic", "openai_responses"] {
@@ -873,7 +881,8 @@ mod tests {
         }
         // 兼容早期 snake_case 落库的旧值（open_ai_chat / open_ai_responses）。
         assert_eq!(
-            serde_json::from_value::<PolishCloudProtocol>(serde_json::json!("open_ai_chat")).unwrap(),
+            serde_json::from_value::<PolishCloudProtocol>(serde_json::json!("open_ai_chat"))
+                .unwrap(),
             PolishCloudProtocol::OpenAiChat
         );
         assert_eq!(

@@ -24,7 +24,7 @@ security list-keychains -d user -s "$KEYCHAIN" "$(security list-keychains -d use
 
 echo "==> 生成一次性自签证书：${IDENTITY_NAME}"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' RETURN
+trap 'security remove-trusted-cert "$tmp/cert.pem" >/dev/null 2>&1 || true; rm -rf "$tmp"' RETURN
 
 openssl req -x509 -newkey rsa:2048 \
   -keyout "$tmp/key.pem" -out "$tmp/cert.pem" \
@@ -51,6 +51,15 @@ security import "$tmp/id.p12" \
 security set-key-partition-list \
   -S apple-tool:,apple:,codesign: \
   -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+
+# macOS 15+ 的 codesigning policy 要求自签证书显式受信任，否则
+# find-identity 显示 0 valid identities、codesign 报 no identity found。
+# 优先用户域（无需 sudo，CI/本地均可）；失败再退系统域（CI 有 sudo）。
+echo "==> 信任自签证书（codesigning policy 要求）"
+if ! security add-trusted-cert -r trustRoot -k "$KEYCHAIN" "$tmp/cert.pem" >/dev/null 2>&1; then
+  sudo -n security add-trusted-cert -d -r trustRoot \
+    -k /Library/Keychains/System.keychain "$tmp/cert.pem" >/dev/null
+fi
 
 echo "==> 验证身份可用"
 security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null | grep -F "\"${IDENTITY_NAME}\"" >/dev/null

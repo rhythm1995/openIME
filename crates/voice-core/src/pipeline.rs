@@ -442,9 +442,12 @@ impl Pipeline {
             // ── 听写：L0 后前缀角色（R5），未命中走润色路由。
             SessionIntent::Dictate => {
                 if ctx.prefix_roles_enabled {
-                    if let Some((pack, rest)) =
-                        detect_prefix_role(&l0.text, &ctx.assistant_name, &ctx.style_packs, &ctx.ui_lang)
-                    {
+                    if let Some((pack, rest)) = detect_prefix_role(
+                        &l0.text,
+                        &ctx.assistant_name,
+                        &ctx.style_packs,
+                        &ctx.ui_lang,
+                    ) {
                         return self.apply_prefix_role(pack, &rest, ctx).await;
                     }
                     // 句首是助手名但组合未命中（如「小友你好」）：交给润色模型会把

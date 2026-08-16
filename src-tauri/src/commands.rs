@@ -1432,11 +1432,10 @@ pub async fn toggle_recording(
     tokio::spawn(async move {
         // partial 回调：overlay 显示实时识别。
         let app_for_cb = app_handle.clone();
-        let on_partial: Option<voice_core::pipeline::PartialCallback> = Some(Arc::new(
-            move |text| {
+        let on_partial: Option<voice_core::pipeline::PartialCallback> =
+            Some(Arc::new(move |text| {
                 let _ = app_for_cb.emit("recording://partial", text.to_string());
-            },
-        ));
+            }));
 
         // 流式模式：录音期间就上屏，先还焦。
         if streaming {

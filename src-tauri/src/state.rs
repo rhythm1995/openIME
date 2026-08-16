@@ -357,15 +357,12 @@ impl AppState {
             None
         } else {
             cfg.active_style_pack_id.as_deref().and_then(|id| {
-                self.store
-                    .list_style_packs()
-                    .ok()
-                    .and_then(|ps| {
-                        ps.into_iter()
-                            .find(|p| p.id == id)
-                            // i18n：英文界面用英文 system prompt（空则回退中文）。
-                            .map(|p| p.system_prompt_for(&cfg.ui_lang).to_string())
-                    })
+                self.store.list_style_packs().ok().and_then(|ps| {
+                    ps.into_iter()
+                        .find(|p| p.id == id)
+                        // i18n：英文界面用英文 system prompt（空则回退中文）。
+                        .map(|p| p.system_prompt_for(&cfg.ui_lang).to_string())
+                })
             })
         };
 
@@ -502,7 +499,9 @@ pub fn save_config(store: &SqliteStore, cfg: &AppConfig) -> Result<(), Error> {
         } else if crate::credentials::fetch_provider_key(i).is_some() {
             // 清空即删：不删的话 load_config 重启会回填旧 key，与 JSON 状态不一致。
             if let Err(e) = crate::credentials::delete_provider_key(i) {
-                crate::log_error!("provider[{i}] API Key 从 keychain 删除失败：{e}（重启后旧值可能复活）");
+                crate::log_error!(
+                    "provider[{i}] API Key 从 keychain 删除失败：{e}（重启后旧值可能复活）"
+                );
             }
         }
     }
