@@ -64,16 +64,18 @@
       "styleNamePh": "风格包名称（如：客服回复）",
       "stylePromptPh": "system prompt 指令（如：请把内容改写成礼貌的客服回复）",
       "addStylePack": "添加风格包",
-      "policyHint": "运行策略：本地模型优先，未下载或失败时自动回退云端（无需配置）",
-      "cloudModelIdLabel": "云端模型 ID",
+      "policyHint": "运行策略：本地模型优先，未下载或失败时自动回退云端（云端需填写下方协议 / Endpoint / API Key）",
+      "cloudModelIdLabel": "云端模型 ID（可选）",
+      "cloudModelIdPh": "留空 = 不携带 model 字段",
+      "cloudModelIdHint": "可选：留空时请求不携带 model 字段，由服务端 / 网关决定模型；填写后按所选协议生效。",
       "cloudProtocolLabel": "云端 LLM 协议",
       "cloudProtocol_openai_chat": "OpenAI Chat Completions（/chat/completions）",
       "cloudProtocol_anthropic": "Anthropic Messages（/v1/messages）",
       "cloudProtocol_openai_responses": "OpenAI Responses（/v1/responses）",
-      "cloudEndpointLabel": "云端 Endpoint（可选）",
-      "cloudEndpointPh": "留空 = 用百炼兼容地址 / 自填 https://openrouter.ai/api/v1",
-      "cloudApiKeyLabel": "云端 API Key（可选）",
-      "cloudApiKeyPh": "留空 = 用识别引擎的百炼 API Key",
+      "cloudEndpointLabel": "云端 Endpoint",
+      "cloudEndpointPh": "必填，OpenAI 系如 https://api.openai.com/v1；Anthropic 系填 base（自动补 /v1/messages），如 https://api.anthropic.com",
+      "cloudApiKeyLabel": "云端 API Key",
+      "cloudApiKeyPh": "必填，从你的 LLM 服务商获取（与识别引擎凭据相互独立）",
       "localModelMovedHint": "本地模型档位（极速/均衡/高质量）已移到下方「本地模型」卡片，下载后即可启用；本地优先，失败自动回退云端。",
       "llmFeatureOff": " · 当前构建未启用本地推理（需用 ./scripts/build.sh 重新打包）",
       "statusLoading": "状态加载中…"
@@ -184,8 +186,6 @@
       "fnWarningWin": "Windows 的 Fn 键多由键盘固件处理，系统感知不到（个别键盘例外）。已同时注册兜底快捷键 Ctrl+Shift+D；想要单键体验请改填 CapsLock。",
       "translateLabel": "翻译快捷键（可选）",
       "translateHint": "按一下开始说源语言，光标处插入目标语言；再按一下停止。",
-      "qaLabel": "划词问答快捷键（可选）",
-      "qaHint": "选中文字后按下：弹出问答浮窗，语音提问，流式回答。",
       "shortPressLabel": "短按阈值（毫秒）",
       "shortPressHint": "Hold 模式下按住 {{key}} 超过该时长才开录；提前松开不开录（{{key}} 为单键时补发其原功能）（100–800，默认 300）",
       "fnRepostName": "短按 {{key}} 补发原功能",
@@ -324,25 +324,6 @@
       "createBtn": "创建",
       "emptyEditor": "选择左侧角色查看和编辑，或点「新建」添加。"
     },
-    "qa": {
-      "title": "划词问答",
-      "hint": "选中一段文字 → 按问答快捷键打开浮窗 → 按录音键提问 → 流式回答。关窗即清空上下文。",
-      "saveHistoryName": "问答写入历史",
-      "saveHistoryDesc": "每次打开面板建一条会话，每轮问答写两条记录（Q: / A:）。"
-    },
-    "_qa": {
-      "title": "划词问答",
-      "subtitle": "按录音键提问 · 流式回答",
-      "refreshSelection": "刷新选区",
-      "clear": "清空对话",
-      "selectionLabel": "已选中的上下文",
-      "noSelection": "未检测到选区（打开面板时没有选中文字，可回原 App 选中后点刷新）",
-      "empty": "还没有问答。按录音键开始提问。",
-      "recording": "问答录音中…",
-      "cancel": "停止生成",
-      "copy": "复制回答",
-      "insert": "插入光标"
-    },
     "tsf": {
       "name": "TSF 输入法上屏（实验）",
       "installed": "已注册（{{path}}）。语音文字将经输入法直接上屏，不抢焦点、不碰剪贴板。",
@@ -402,19 +383,5 @@
     "deleteTitle": "删除",
     "notFound": "未找到匹配词条",
     "empty": "词典为空"
-  },
-  "qa": {
-    "title": "划词问答",
-    "subtitle": "按录音键提问 · 流式回答",
-    "refreshSelection": "刷新选区",
-    "clear": "清空对话",
-    "selectionLabel": "已选中的上下文",
-    "noSelection": "未检测到选区（打开面板时没有选中文字，可回原 App 选中后点刷新）",
-    "empty": "还没有问答。按录音键开始提问。",
-    "recording": "问答录音中…",
-    "cancel": "停止生成",
-    "copy": "复制回答",
-    "insert": "插入光标",
-    "noKeyBanner": "未配置云端 LLM，无法问答：请到设置 → AI 润色 填写 Endpoint 与 API Key"
   }
 }

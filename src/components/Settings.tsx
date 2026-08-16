@@ -292,6 +292,8 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
           savedSigRef.current = sig;
           setMsg({ ok: true, text: t("settings.autoSaved") });
         } catch (e) {
+          // 落盘到后端日志（console.error 被 logger 包装转发），便于排查保存失败。
+          console.error("[settings] 自动保存配置失败:", e);
           setMsg({ ok: false, text: String(e) });
         }
       })();
@@ -693,20 +695,6 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
           />
           <span className="field-hint">{t("settings.hotkey.translateHint")}</span>
         </div>
-        <div className="field">
-          <label className="field-label">{t("settings.hotkey.qaLabel")}</label>
-          <HotkeyCaptureInput
-            value={config.qa_hotkey}
-            onChange={(v) =>
-              setConfig({
-                ...config,
-                qa_hotkey: v || null,
-              })
-            }
-            optional
-          />
-          <span className="field-hint">{t("settings.hotkey.qaHint")}</span>
-        </div>
         {isFnHotkey && (
           <span
             className="field-hint"
@@ -909,17 +897,6 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
             </div>
 
             <div className="field">
-              <label className="field-label">{t("settings.polish.cloudModelIdLabel")}</label>
-              <input
-                value={config.polish_cloud_model ?? "qwen-turbo"}
-                onChange={(e) =>
-                  setConfig({ ...config, polish_cloud_model: e.target.value })
-                }
-                placeholder="qwen-turbo"
-              />
-            </div>
-
-            <div className="field">
               <label className="field-label">{t("settings.polish.cloudProtocolLabel")}</label>
               <select
                 value={config.polish_cloud_protocol ?? "openai_chat"}
@@ -959,6 +936,18 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
               />
             </div>
 
+            <div className="field">
+              <label className="field-label">{t("settings.polish.cloudModelIdLabel")}</label>
+              <input
+                value={config.polish_cloud_model ?? ""}
+                onChange={(e) =>
+                  setConfig({ ...config, polish_cloud_model: e.target.value })
+                }
+                placeholder={t("settings.polish.cloudModelIdPh")}
+              />
+              <span className="field-hint">{t("settings.polish.cloudModelIdHint")}</span>
+            </div>
+
             <div className="row-between" style={{ alignItems: "flex-end" }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 {polishTestResult && msgRow(polishTestResult)}
@@ -970,6 +959,8 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
                   setPolishTesting(true);
                   setPolishTestResult(null);
                   try {
+                    // 先落盘表单最新值再测试，避免防抖未触发时测到旧配置。
+                    await ipc.saveConfig(config);
                     const m = await ipc.testCloudPolish();
                     setPolishTestResult({ ok: true, text: m });
                   } catch (e) {
@@ -2366,30 +2357,6 @@ export default function Settings({ view = "voice" }: { view?: "voice" | "ai" }) 
               checked={config.translate_with_polish ?? false}
               onChange={(e) =>
                 setConfig({ ...config, translate_with_polish: e.target.checked })
-              }
-            />
-            <span className="slider" />
-          </label>
-        </div>
-      </div>
-
-      {/* P1：R6 划词问答 */}
-      <div className="card">
-        <h2 className="card-title">{t("settings.qa.title")}</h2>
-        <span className="field-hint" style={{ display: "block", marginBottom: 8 }}>
-          {t("settings.qa.hint")}
-        </span>
-        <div className="set-row">
-          <div>
-            <div className="set-name">{t("settings.qa.saveHistoryName")}</div>
-            <div className="set-desc">{t("settings.qa.saveHistoryDesc")}</div>
-          </div>
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={config.qa_save_history ?? false}
-              onChange={(e) =>
-                setConfig({ ...config, qa_save_history: e.target.checked })
               }
             />
             <span className="slider" />

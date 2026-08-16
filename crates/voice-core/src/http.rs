@@ -11,6 +11,10 @@ pub fn http_client_no_redirect(timeout: Duration) -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
+        // 桌面应用不继承 shell 的 HTTP(S)_PROXY 环境变量：开发者终端里常挂着
+        // Claude Code / token-plan 等中继代理，透传会把请求改写/转发到别的上游，
+        // 出现「填的是 A 服务、返回的却是 B 服务错误体」这类难以排查的问题。
+        .no_proxy()
         .build()
         .expect("reqwest client 构建不应失败")
 }

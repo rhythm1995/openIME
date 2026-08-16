@@ -118,15 +118,20 @@ pub enum HotkeyMode {
 }
 
 /// 云端润色 LLM 协议类型。
+/// 序列化名与前端 TS 联合类型对齐：`openai_chat` / `anthropic` / `openai_responses`
+/// （`snake_case` 会把 `OpenAiChat` 变成 `open_ai_chat`，故显式 rename；
+/// alias 兼容早期 snake_case 落库的旧值）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PolishCloudProtocol {
     /// OpenAI Chat Completions（/chat/completions）。
     #[default]
+    #[serde(rename = "openai_chat", alias = "open_ai_chat")]
     OpenAiChat,
     /// Anthropic Messages API（/v1/messages）。
     Anthropic,
     /// OpenAI Responses API（/v1/responses）。
+    #[serde(rename = "openai_responses", alias = "open_ai_responses")]
     OpenAiResponses,
 }
 
@@ -215,16 +220,16 @@ pub struct AppConfig {
     /// 本地 GGUF 模型 id（目录/文件约定，见 model_download）。
     #[serde(default = "default_polish_local_model")]
     pub polish_local_model: String,
-    /// 云端 chat 模型名（百炼 OpenAI 兼容），如 qwen-turbo。
-    #[serde(default = "default_polish_cloud_model")]
+    /// 云端 LLM 模型 ID（可选）。留空时请求不携带 model 字段，由服务端/网关决定。
+    #[serde(default)]
     pub polish_cloud_model: String,
     /// 云端润色 LLM 协议（openai_chat / anthropic / openai_responses）。
     #[serde(default)]
     pub polish_cloud_protocol: PolishCloudProtocol,
-    /// 云端润色 LLM endpoint（base URL，如 https://dashscope.aliyuncs.com/compatible-mode/v1）。
+    /// 云端润色 LLM endpoint（base URL，必填，如 https://api.openai.com/v1）。
     #[serde(default)]
     pub polish_cloud_endpoint: String,
-    /// 云端润色 LLM API Key（覆盖 provider api_key，若为空则用 bailian provider 的 key）。
+    /// 云端润色 LLM API Key（必填，独立于识别引擎凭据）。
     #[serde(default)]
     pub polish_cloud_api_key: String,
     /// 润色程度：Off（保持原样）/ Light（中度，仅校对）/ Heavy（高度，改写润色）。
@@ -278,14 +283,6 @@ pub struct AppConfig {
     #[serde(default = "default_assistant_name")]
     pub assistant_name: String,
 
-    // ── P1：R6 划词问答 ──
-    /// QA 快捷键（None = 不注册；P1 仅 Toggle）。
-    #[serde(default)]
-    pub qa_hotkey: Option<String>,
-    /// 是否把 QA 问答写入历史（sessions/utterances）。
-    #[serde(default)]
-    pub qa_save_history: bool,
-
     // ── P1：R7 粘贴兜底 ──
     /// 插入策略：auto / type / paste。
     #[serde(default)]
@@ -336,9 +333,6 @@ fn default_local_asr_model() -> String {
 }
 fn default_polish_local_model() -> String {
     POLISH_DEFAULT_LOCAL_MODEL.to_string()
-}
-fn default_polish_cloud_model() -> String {
-    "qwen-turbo".to_string()
 }
 fn default_polish_timeout_ms() -> u32 {
     800
@@ -421,7 +415,7 @@ impl Default for AppConfig {
             polish_enabled: false,
             polish_policy: PolishPolicy::PreferLocal,
             polish_local_model: POLISH_DEFAULT_LOCAL_MODEL.to_string(),
-            polish_cloud_model: "qwen-turbo".to_string(),
+            polish_cloud_model: String::new(),
             polish_cloud_protocol: PolishCloudProtocol::OpenAiChat,
             polish_cloud_endpoint: String::new(),
             polish_cloud_api_key: String::new(),
@@ -438,8 +432,6 @@ impl Default for AppConfig {
             translate_policy: TranslatePolicy::PreferCloud,
             prefix_roles_enabled: true,
             assistant_name: default_assistant_name(),
-            qa_hotkey: None,
-            qa_save_history: false,
             insert_strategy: InsertStrategy::Auto,
             paste_fallback_apps: Vec::new(),
             restore_clipboard: true,
@@ -519,6 +511,36 @@ impl AppConfig {
                 p.language = Some(lang);
             }
         }
+    }
+
+    /// 云端 LLM 必填项（协议 / Endpoint / API Key）完整性检查。
+    ///
+    /// - Endpoint 与 API Key 全空 → `Ok(false)`：未启用云端 LLM（合法）。
+    /// - 只填其一 → `Err`：必填项不完整，拒绝使用/保存。
+    /// - 都填 → 校验 Endpoint URL，通过返回 `Ok(true)`。
+    ///
+    /// 协议是枚举恒有值（默认 openai_chat），无需判空。
+    pub fn check_cloud_llm(&self) -> crate::Result<bool> {
+        let endpoint = self.polish_cloud_endpoint.trim();
+        let key = self.polish_cloud_api_key.trim();
+        if endpoint.is_empty() && key.is_empty() {
+            return Ok(false);
+        }
+        if endpoint.is_empty() {
+            return Err(Error::Config(
+                "云端 LLM 配置不完整：Endpoint 为必填项（需与 API Key 同时填写，或两者都清空）"
+                    .into(),
+            ));
+        }
+        if key.is_empty() {
+            return Err(Error::Config(
+                "云端 LLM 配置不完整：API Key 为必填项（需与 Endpoint 同时填写，或两者都清空）"
+                    .into(),
+            ));
+        }
+        crate::endpoint::validate_endpoint(endpoint)
+            .map_err(|e| Error::Config(format!("云端 LLM Endpoint 校验失败：{e}")))?;
+        Ok(true)
     }
 
     /// P2：保存期校验 P2 新增字段的范围（serde 之外的强约束，失败整单不落盘）。
@@ -674,8 +696,6 @@ mod tests {
         assert_eq!(c.translate_target_lang, "en");
         assert!(!c.translate_with_polish);
         assert!(c.prefix_roles_enabled);
-        assert_eq!(c.qa_hotkey, None);
-        assert!(!c.qa_save_history);
         assert_eq!(c.insert_strategy, InsertStrategy::Auto);
         assert!(c.paste_fallback_apps.is_empty());
         assert!(c.restore_clipboard);
@@ -795,6 +815,82 @@ mod tests {
         assert_eq!(c.resolved_translate_local_model(), "milmmt-1b");
         c.translate_local_model = "Hy-MT-1.8B".into();
         assert_eq!(c.resolved_translate_local_model(), "hy-mt-1.8b");
+    }
+
+    #[test]
+    fn polish_cloud_model_defaults_to_empty() {
+        // 云端模型 ID 默认为空（可选；留空时请求不带 model 字段）。
+        assert_eq!(AppConfig::default().polish_cloud_model, "");
+        let json = r#"{
+            "active_provider": 0,
+            "providers": [],
+            "hotkey": "Fn",
+            "mute_other_audio": false
+        }"#;
+        let c: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.polish_cloud_model, "");
+    }
+
+    #[test]
+    fn polish_cloud_protocol_wire_format_matches_frontend() {
+        // 序列化名必须与前端 PolishCloudProtocol 联合类型一致，
+        // 否则 save_app_config 反序列化报 unknown variant、整单保存被拒。
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(json.contains("\"polish_cloud_protocol\":\"openai_chat\""), "{json}");
+        for (variant, raw) in [
+            (PolishCloudProtocol::OpenAiChat, "openai_chat"),
+            (PolishCloudProtocol::Anthropic, "anthropic"),
+            (PolishCloudProtocol::OpenAiResponses, "openai_responses"),
+        ] {
+            assert_eq!(serde_json::to_value(variant).unwrap(), serde_json::json!(raw));
+        }
+        // 前端实际发送的值能反序列化。
+        for raw in ["openai_chat", "anthropic", "openai_responses"] {
+            let _: PolishCloudProtocol = serde_json::from_value(serde_json::json!(raw)).unwrap();
+        }
+        // 兼容早期 snake_case 落库的旧值（open_ai_chat / open_ai_responses）。
+        assert_eq!(
+            serde_json::from_value::<PolishCloudProtocol>(serde_json::json!("open_ai_chat")).unwrap(),
+            PolishCloudProtocol::OpenAiChat
+        );
+        assert_eq!(
+            serde_json::from_value::<PolishCloudProtocol>(serde_json::json!("open_ai_responses"))
+                .unwrap(),
+            PolishCloudProtocol::OpenAiResponses
+        );
+    }
+
+    #[test]
+    fn check_cloud_llm_requires_endpoint_and_key() {
+        // 全空 = 未启用云端 LLM（合法）。
+        let c = AppConfig::default();
+        assert!(matches!(c.check_cloud_llm(), Ok(false)));
+        // 只填 key → 报缺 Endpoint。
+        let c = AppConfig {
+            polish_cloud_api_key: "sk-123".into(),
+            ..AppConfig::default()
+        };
+        assert!(c.check_cloud_llm().is_err());
+        // 只填 endpoint → 报缺 API Key。
+        let c = AppConfig {
+            polish_cloud_endpoint: "https://api.openai.com/v1".into(),
+            ..AppConfig::default()
+        };
+        assert!(c.check_cloud_llm().is_err());
+        // 都填且 URL 合法 → Ok(true)。
+        let c = AppConfig {
+            polish_cloud_endpoint: "https://api.openai.com/v1".into(),
+            polish_cloud_api_key: "sk-123".into(),
+            ..AppConfig::default()
+        };
+        assert!(matches!(c.check_cloud_llm(), Ok(true)));
+        // 都填但 URL 非法 → Err。
+        let c = AppConfig {
+            polish_cloud_endpoint: "ftp://bad.example.com".into(),
+            polish_cloud_api_key: "sk-123".into(),
+            ..AppConfig::default()
+        };
+        assert!(c.check_cloud_llm().is_err());
     }
 
     #[test]

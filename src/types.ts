@@ -60,12 +60,13 @@ export interface AppConfig {
   polish_enabled?: boolean;
   polish_policy?: PolishPolicy;
   polish_local_model?: string;
+  /** 云端 LLM 模型 ID（可选；留空 = 请求不携带 model 字段） */
   polish_cloud_model?: string;
-  /** 云端 LLM 协议（openai_chat / anthropic / openai_responses） */
+  /** 云端 LLM 协议（openai_chat / anthropic / openai_responses，必填） */
   polish_cloud_protocol?: PolishCloudProtocol;
-  /** 云端 LLM endpoint（base URL） */
+  /** 云端 LLM endpoint（base URL，必填） */
   polish_cloud_endpoint?: string;
-  /** 云端 LLM API Key */
+  /** 云端 LLM API Key（必填，独立于识别引擎凭据） */
   polish_cloud_api_key?: string;
   polish_mode?: PolishMode;
   /** 当前选中的风格包 id（F1，仅 heavy 模式生效；null = 默认 Heavy prompt） */
@@ -95,12 +96,6 @@ export interface AppConfig {
   prefix_roles_enabled?: boolean;
   /** 助手名称：「助手名+角色别名」组合触发前缀角色（空 = 关闭） */
   assistant_name?: string;
-
-  // ── P1：R6 划词问答 ──
-  /** QA 快捷键（null = 不注册） */
-  qa_hotkey?: string | null;
-  /** QA 问答写入历史（sessions/utterances） */
-  qa_save_history?: boolean;
 
   // ── P1：R7 粘贴兜底 ──
   insert_strategy?: InsertStrategy;

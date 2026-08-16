@@ -91,6 +91,8 @@ pub async fn save_app_config(
     config.active().map_err(|e| e.to_string())?;
     // R3：保存期校验所有非空用户 endpoint（不强制 api_key；不合法整单不落盘）。
     validate_all_endpoints(&config).map_err(|e| e.to_string())?;
+    // 云端 LLM：协议 / Endpoint / API Key 均为必填（全空 = 未启用；只填部分 → 拒绝保存）。
+    config.check_cloud_llm().map_err(|e| e.to_string())?;
     // PR4：热键两两不等 + 可解析（任一失败 → 不写 DB、不改内存）。
     validate_hotkeys(&config)?;
     // P2：短按阈值 / 分段时长·重叠范围校验（失败整单不落盘）。
@@ -102,7 +104,6 @@ pub async fn save_app_config(
         old.hotkey != config.hotkey
             || old.style_switch_hotkey != config.style_switch_hotkey
             || old.translate_hotkey != config.translate_hotkey
-            || old.qa_hotkey != config.qa_hotkey
     };
     // 助手名组合热词同步：幂等（名字未变时零开销），保存必校准——
     // 不做新旧对比条件分支，避免任何一环判断失效导致词典与助手名脱节。
@@ -129,7 +130,6 @@ fn validate_hotkeys(cfg: &AppConfig) -> Result<(), String> {
         ("录音", Some(cfg.hotkey.as_str())),
         ("风格包切换", cfg.style_switch_hotkey.as_deref()),
         ("翻译", cfg.translate_hotkey.as_deref()),
-        ("问答", cfg.qa_hotkey.as_deref()),
     ] {
         let Some(s) = hk else { continue };
         let s = s.trim();
@@ -172,8 +172,9 @@ fn validate_hotkeys(cfg: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
-/// R3：保存期校验所有非空用户 endpoint（provider base_url + polish_cloud_endpoint）。
+/// R3：保存期校验所有非空用户 endpoint（provider base_url）。
 /// 百炼验归一化 wss；REST 验原文。Sherpa 无 URL 跳过。不强制 api_key。
+/// 云端 LLM（润色）的必填完整性由 `AppConfig::check_cloud_llm` 单独校验。
 fn validate_all_endpoints(cfg: &AppConfig) -> Result<(), String> {
     use voice_core::ProviderKind;
     for p in &cfg.providers {
@@ -188,10 +189,6 @@ fn validate_all_endpoints(cfg: &AppConfig) -> Result<(), String> {
         };
         voice_core::endpoint::validate_endpoint(&target)
             .map_err(|e| format!("endpoint「{}」校验失败：{e}", p.base_url))?;
-    }
-    if !cfg.polish_cloud_endpoint.trim().is_empty() {
-        voice_core::endpoint::validate_endpoint(cfg.polish_cloud_endpoint.trim())
-            .map_err(|e| format!("润色 endpoint 校验失败：{e}"))?;
     }
     Ok(())
 }
@@ -220,35 +217,28 @@ pub async fn test_cloud_connection(provider: ProviderConfig) -> Result<String, S
 #[tauri::command]
 pub async fn test_cloud_polish(state: State<'_, AppState>) -> Result<String, String> {
     let cfg = state.config.read().await.clone();
-    let (base, key, model, protocol) = {
-        if !cfg.polish_cloud_endpoint.trim().is_empty()
-            && !cfg.polish_cloud_api_key.trim().is_empty()
-        {
-            (
-                cfg.polish_cloud_endpoint.clone(),
-                cfg.polish_cloud_api_key.clone(),
-                cfg.polish_cloud_model.clone(),
-                cfg.polish_cloud_protocol,
-            )
-        } else {
-            // 回退 bailian provider
-            let p = cfg.providers.iter().find(|p| {
-                p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty()
-            });
-            let Some(p) = p else {
-                // 没配云端润色 key 属正常状态（本地优先运行，不影响使用），不算错误。
-                return Ok("未配置云端润色 API Key。本地优先运行，不影响使用；如需云端润色，请填 polish 独立配置或百炼 provider key。".into());
-            };
-            (
-                voice_core::BailianChatPolish::default_chat_base(),
-                p.api_key.clone(),
-                cfg.polish_cloud_model.clone(),
-                voice_core::PolishCloudProtocol::OpenAiChat,
-            )
+    // 协议 / Endpoint / API Key 均为必填；未配置或配置不完整直接给出明确错误，
+    // 不再回退到识别引擎（ASR）的凭据。
+    match cfg.check_cloud_llm() {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(
+                "未配置云端 LLM：协议 / Endpoint / API Key 均为必填，请先在设置中填写。".into(),
+            );
         }
-    };
-    let provider = voice_core::BailianChatPolish::new_with_protocol(key, base, model, protocol);
-    log_info!("测试云端润色连接：protocol={:?}", protocol);
+        Err(e) => return Err(e.to_string()),
+    }
+    let provider = voice_core::CloudPolishProvider::new_with_protocol(
+        cfg.polish_cloud_api_key.trim().to_string(),
+        cfg.polish_cloud_endpoint.trim().to_string(),
+        cfg.polish_cloud_model.trim().to_string(),
+        cfg.polish_cloud_protocol,
+    );
+    log_info!(
+        "测试云端润色连接：protocol={:?} endpoint={}",
+        cfg.polish_cloud_protocol,
+        cfg.polish_cloud_endpoint
+    );
     let req = voice_core::PolishRequest {
         text: "ping".into(),
         mode: voice_core::PolishMode::Light,
@@ -1351,14 +1341,13 @@ pub async fn toggle_recording(
         e.to_string()
     })?;
 
-    // 翻译：云端或本地（专翻/兼译）任一可用即可；QA 只用云端（小模型不承诺 QA 质量）。
+    // 翻译：云端或本地（专翻/兼译）任一可用即可。
     // 防御性检查（lib.rs 已拦，双保险）。
     let backend_ok = match intent {
         voice_core::SessionIntent::Dictate => true,
         voice_core::SessionIntent::Translate => {
             state.has_cloud_key() || state.has_local_translate()
         }
-        voice_core::SessionIntent::Qa => state.has_cloud_key(),
     };
     if !backend_ok {
         release_recording_guard(&state);
@@ -1393,7 +1382,7 @@ pub async fn toggle_recording(
     // 通知 overlay：录音已开始（避免挂载时 race 读到 false 显示空白）。
     let _ = app.emit("recording://started", ());
 
-    // frontmost 由 trigger_toggle 在 overlay 显示前捕获并传入（QA 为 None，还焦用开窗时的）。
+    // frontmost 由 trigger_toggle 在 overlay 显示前捕获并传入。
     log_info!("录音前前台 app：{:?}（intent={intent:?}）", frontmost);
 
     let recording = state.recording.clone();
@@ -1403,7 +1392,7 @@ pub async fn toggle_recording(
     let store = state.store.clone();
     let polish_ctx = state.polish_context(intent).await;
     // C1：流式引擎（百炼）边说边逐字上屏；R5：前缀角色开 → 强制整段插入（A5.8）。
-    // 翻译 / QA 永不流式上屏。提前算好，供 from_config 组装 tsf_enabled。
+    // 翻译永不流式上屏。提前算好，供 from_config 组装 tsf_enabled。
     let streaming = intent == voice_core::SessionIntent::Dictate
         && provider_cfg.kind == voice_core::ProviderKind::Bailian
         && !polish_ctx.prefix_roles_enabled;
@@ -1413,7 +1402,6 @@ pub async fn toggle_recording(
     let meta = SessionMeta {
         engine: match intent {
             voice_core::SessionIntent::Translate => "translate".into(),
-            voice_core::SessionIntent::Qa => "qa".into(),
             voice_core::SessionIntent::Dictate => "dictate".into(),
         },
         provider: format!("{:?}", provider_cfg.kind).to_lowercase(),
@@ -1421,18 +1409,15 @@ pub async fn toggle_recording(
     };
 
     tokio::spawn(async move {
-        // partial 回调：overlay 显示实时识别。QA 不推 partial（HUD 保持「问答录音中」）。
+        // partial 回调：overlay 显示实时识别。
         let app_for_cb = app_handle.clone();
-        let on_partial: Option<voice_core::pipeline::PartialCallback> =
-            if intent == voice_core::SessionIntent::Qa {
-                None
-            } else {
-                Some(Arc::new(move |text| {
-                    let _ = app_for_cb.emit("recording://partial", text.to_string());
-                }))
-            };
+        let on_partial: Option<voice_core::pipeline::PartialCallback> = Some(Arc::new(
+            move |text| {
+                let _ = app_for_cb.emit("recording://partial", text.to_string());
+            },
+        ));
 
-        // 流式模式：录音期间就上屏，先还焦（QA 无此路径）。
+        // 流式模式：录音期间就上屏，先还焦。
         if streaming {
             restore_frontmost_focus(&app_handle, frontmost.as_deref());
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
@@ -1451,13 +1436,12 @@ pub async fn toggle_recording(
             )
             .await;
 
-        // R9 防御 take_abort ②：record_and_collect 返回后、persist/QA/insert 之前。
+        // R9 防御 take_abort ②：record_and_collect 返回后、persist/insert 之前。
         if abort_flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            // 中止：不上屏、不 QA 提问，只删 pipeline 会话（不碰 QA history）。
+            // 中止：不上屏，只删 pipeline 会话。
             if let Ok(r) = &result {
                 let _ = store.delete_session(&r.session_id).await;
             }
-            crate::qa::mark_recording(&app_handle, false);
             let _ = app_handle.emit("recording://processing", "已取消");
             *recording.write().await = false;
             guard.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1482,18 +1466,6 @@ pub async fn toggle_recording(
                     hide_overlay_only(&app_handle);
                     let deduped = voice_core::polish::dedupe_consecutive_finals(&r.utterances);
                     let _ = app_handle.emit("recording://stopped", deduped.join(""));
-                }
-                voice_core::SessionIntent::Qa => {
-                    // QA：不插入、不落普通 utterances；把问题交给问答状态机。
-                    let question =
-                        voice_core::polish::dedupe_consecutive_finals(&r.utterances).join("");
-                    *recording.write().await = false;
-                    guard.store(false, std::sync::atomic::Ordering::SeqCst);
-                    hide_overlay_only(&app_handle);
-                    crate::qa::mark_recording(&app_handle, false);
-                    crate::qa::begin_streaming();
-                    log_info!("QA 问题识别完成：{} 字", question.chars().count());
-                    crate::qa::ask_and_stream(&app_handle, &question).await;
                 }
                 _ => {
                     // Dictate 非流式 / Translate：还焦 + 一次性处理上屏。
@@ -1726,12 +1698,6 @@ pub fn delete_style_pack(state: State<'_, AppState>, id: String) -> Result<(), S
         .map_err(|e| e.to_string())
 }
 
-/// F4：读前台 app 当前选中的文字（macOS AX 直读；Windows UIA TextPattern；不碰剪贴板）。
-#[tauri::command]
-pub fn get_selection() -> Result<Option<String>, String> {
-    Ok(crate::platform::current::fn_key::get_selection())
-}
-
 /// D3：文件转录结果（文本 + srt 字幕）。
 #[derive(serde::Serialize)]
 pub struct TranscribeResult {
@@ -1846,36 +1812,7 @@ pub fn export_diary(state: State<'_, AppState>) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-// ──────────────── R6：QA 面板命令 ────────────────
-
-/// 还焦（QA 插入按钮用）：开窗时冻结的 frontmost。
-pub(crate) fn restore_frontmost(app: &AppHandle, frontmost: Option<&str>) {
-    restore_frontmost_focus(app, frontmost);
-}
-
-#[tauri::command]
-pub fn qa_refresh_selection(app: AppHandle) -> Result<Option<String>, String> {
-    Ok(crate::qa::refresh_selection(&app))
-}
-
-#[tauri::command]
-pub fn qa_cancel(app: AppHandle) -> Result<(), String> {
-    crate::qa::cancel_stream(&app);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn qa_copy_last(app: AppHandle) -> Result<Option<String>, String> {
-    crate::qa::copy_last_answer(&app).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn qa_insert_last(app: AppHandle) -> Result<Option<String>, String> {
-    let outcome = crate::qa::insert_last_answer(&app)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(outcome.map(|o| format!("{o:?}")))
-}
+// ──────────────── R11 Windows TSF 状态 ────────────────
 
 /// R11（FR-11.11）：TSF 输入法安装状态（Installed / NotInstalled / RegistrationBroken），
 /// 附 DLL 路径与配置开关。只读 HKCU，不触发注册（注册由启动时 ensure_registered 完成）。
@@ -1907,13 +1844,6 @@ pub fn windows_ime_restore_profile() -> Result<(), String> {
     Ok(())
 }
 
-/// 清空当前 QA 对话（保持窗口打开）。
-#[tauri::command]
-pub fn qa_clear(app: AppHandle) -> Result<(), String> {
-    crate::qa::clear_messages(&app);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1923,7 +1853,6 @@ mod tests {
             hotkey: "Fn".into(),
             style_switch_hotkey: Some("Ctrl+Shift+P".into()),
             translate_hotkey: Some("Alt+Shift+T".into()),
-            qa_hotkey: Some("Cmd+Shift+;".into()),
             ..Default::default()
         }
     }
@@ -1933,7 +1862,6 @@ mod tests {
         assert!(validate_hotkeys(&base_cfg()).is_ok());
         let mut c = base_cfg();
         c.translate_hotkey = None;
-        c.qa_hotkey = None;
         assert!(validate_hotkeys(&c).is_ok());
     }
 
@@ -1946,9 +1874,9 @@ mod tests {
     }
 
     #[test]
-    fn qa_equal_style_hotkey_rejected() {
+    fn translate_equal_style_hotkey_rejected() {
         let mut c = base_cfg();
-        c.qa_hotkey = Some("Ctrl+Shift+P".into()); // 与风格键相同
+        c.translate_hotkey = Some("Ctrl+Shift+P".into()); // 与风格键相同
         assert!(validate_hotkeys(&c).is_err());
     }
 

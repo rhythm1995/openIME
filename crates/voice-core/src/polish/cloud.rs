@@ -1,10 +1,10 @@
 //! 云端润色：3 种 LLM 协议统一接入。
 //!
-//! - OpenAI Chat Completions（/chat/completions）— 百炼/OpenAI/OpenRouter 等
+//! - OpenAI Chat Completions（/chat/completions）— OpenAI / OpenRouter / 各兼容网关
 //! - Anthropic Messages API（/v1/messages）— Claude
 //! - OpenAI Responses API（/v1/responses）— OpenAI 新版
 //!
-//! 统一入口 `CloudPolishProvider`，按 `PolishCloudProtocol` 路由。
+//! 统一入口 [`CloudPolishProvider`]，按 `PolishCloudProtocol` 路由。
 //! P1 实现 [`LlmClient`]：polish / translate_text / polish_and_translate 覆盖三种协议
 //! （复用 `post_json`），`chat_stream`（QA SSE）仅 OpenAI Chat。
 
@@ -35,10 +35,7 @@ pub struct CloudPolishProvider {
     pub protocol: PolishCloudProtocol,
 }
 
-/// 向后兼容：旧名 BailianChatPolish = CloudPolishProvider(OpenAiChat)。
-pub type BailianChatPolish = CloudPolishProvider;
-
-impl BailianChatPolish {
+impl CloudPolishProvider {
     pub fn new(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
@@ -65,11 +62,6 @@ impl BailianChatPolish {
             protocol,
         }
     }
-
-    /// 向后兼容。
-    pub fn default_chat_base() -> String {
-        "https://dashscope.aliyuncs.com/compatible-mode/v1".into()
-    }
 }
 
 #[async_trait]
@@ -83,7 +75,7 @@ impl TextPolishProvider for CloudPolishProvider {
             });
         }
         if self.api_key.trim().is_empty() {
-            return Err(Error::Config("云端润色缺少 api_key".into()));
+            return Err(Error::Config("云端润色缺少 API Key（必填）".into()));
         }
 
         let t0 = Instant::now();
@@ -110,7 +102,7 @@ impl TextPolishProvider for CloudPolishProvider {
         };
 
         if text.is_empty() {
-            return Err(Error::Provider("云端润色返回空文本".into()));
+            return Err(Error::Llm("云端润色返回空文本".into()));
         }
 
         Ok(PolishResponse {
@@ -130,7 +122,7 @@ impl LlmClient for CloudPolishProvider {
     /// R4/R5：翻译。三种协议均走 post_json。
     async fn translate_text(&self, req: TranslateRequest) -> Result<String> {
         if self.api_key.trim().is_empty() {
-            return Err(Error::Config("翻译需要云端 api_key".into()));
+            return Err(Error::Config("翻译需要云端 API Key（必填）".into()));
         }
         if req.text.trim().is_empty() {
             return Ok(String::new());
@@ -151,7 +143,7 @@ impl LlmClient for CloudPolishProvider {
             }
         };
         if text.trim().is_empty() {
-            return Err(Error::Provider("云端翻译返回空文本".into()));
+            return Err(Error::Llm("云端翻译返回空文本".into()));
         }
         Ok(text.trim().to_string())
     }
@@ -159,10 +151,10 @@ impl LlmClient for CloudPolishProvider {
     /// R4：「先润色再翻译」哨兵合成调用。解析失败 → 回退纯 translate_text（FR-4.4）。
     async fn polish_and_translate(&self, req: TranslateRequest) -> Result<PolishTranslate> {
         if self.api_key.trim().is_empty() {
-            return Err(Error::Config("翻译需要云端 api_key".into()));
+            return Err(Error::Config("翻译需要云端 API Key（必填）".into()));
         }
         if req.text.trim().is_empty() {
-            return Err(Error::Provider("待翻译文本为空".into()));
+            return Err(Error::Llm("待翻译文本为空".into()));
         }
         let messages = build_polish_translate_messages(&req.text, &req.target_lang);
         let raw = match self.protocol {
@@ -194,7 +186,7 @@ impl LlmClient for CloudPolishProvider {
     /// R6：QA 流式。仅 OpenAI Chat（SSE）；Anthropic/Responses 返回错误。
     async fn chat_stream(&self, req: ChatRequest) -> Result<String> {
         if self.api_key.trim().is_empty() {
-            return Err(Error::Config("问答需要云端 api_key".into()));
+            return Err(Error::Config("问答需要云端 API Key（必填）".into()));
         }
         if self.protocol != PolishCloudProtocol::OpenAiChat {
             return Err(Error::Config(
@@ -218,17 +210,19 @@ impl CloudPolishProvider {
             .map(|(role, content)| json!({ "role": role, "content": content }))
             .collect();
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let body = json!({
-            "model": self.model,
-            "messages": body_msgs,
-            "temperature": 0.3,
-            "max_tokens": max_tokens,
-        });
+        let body = with_model(
+            json!({
+                "messages": body_msgs,
+                "temperature": 0.3,
+                "max_tokens": max_tokens,
+            }),
+            &self.model,
+        );
         let raw = self
             .post_json(&url, &body, AuthType::Bearer, req.timeout)
             .await?;
         let v: serde_json::Value = serde_json::from_str(&raw)
-            .map_err(|e| Error::Provider(format!("解析 OpenAI Chat JSON 失败: {e}")))?;
+            .map_err(|e| Error::Llm(format!("解析 OpenAI Chat JSON 失败: {e}")))?;
         Ok(parse_openai_chat_text(&v))
     }
 
@@ -241,18 +235,20 @@ impl CloudPolishProvider {
     ) -> Result<String> {
         // Anthropic 格式：system 独立，messages 只有 user/assistant。
         let (system_msg, chat_msgs) = split_system(messages);
-        let url = format!("{}/messages", self.base_url.trim_end_matches('/'));
-        let body = json!({
-            "model": self.model,
-            "max_tokens": max_tokens,
-            "system": system_msg,
-            "messages": chat_msgs,
-        });
+        let url = anthropic_messages_url(&self.base_url);
+        let body = with_model(
+            json!({
+                "max_tokens": max_tokens,
+                "system": system_msg,
+                "messages": chat_msgs,
+            }),
+            &self.model,
+        );
         let raw = self
             .post_json(&url, &body, AuthType::Anthropic, req.timeout)
             .await?;
         let v: serde_json::Value = serde_json::from_str(&raw)
-            .map_err(|e| Error::Provider(format!("解析 Anthropic JSON 失败: {e}")))?;
+            .map_err(|e| Error::Llm(format!("解析 Anthropic JSON 失败: {e}")))?;
         Ok(parse_anthropic_text(&v))
     }
 
@@ -271,18 +267,20 @@ impl CloudPolishProvider {
             .and_then(|m| m["content"].as_str())
             .unwrap_or("");
         let url = format!("{}/responses", self.base_url.trim_end_matches('/'));
-        let body = json!({
-            "model": self.model,
-            "instructions": system_msg,
-            "input": user_text,
-            "temperature": 0.3,
-            "max_output_tokens": max_tokens,
-        });
+        let body = with_model(
+            json!({
+                "instructions": system_msg,
+                "input": user_text,
+                "temperature": 0.3,
+                "max_output_tokens": max_tokens,
+            }),
+            &self.model,
+        );
         let raw = self
             .post_json(&url, &body, AuthType::Bearer, req.timeout)
             .await?;
         let v: serde_json::Value = serde_json::from_str(&raw)
-            .map_err(|e| Error::Provider(format!("解析 Responses JSON 失败: {e}")))?;
+            .map_err(|e| Error::Llm(format!("解析 Responses JSON 失败: {e}")))?;
         Ok(parse_responses_text(&v))
     }
 
@@ -301,17 +299,19 @@ impl CloudPolishProvider {
             .map(|(role, content)| json!({ "role": role, "content": content }))
             .collect();
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let body = json!({
-            "model": self.model,
-            "messages": body_msgs,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        });
+        let body = with_model(
+            json!({
+                "messages": body_msgs,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }),
+            &self.model,
+        );
         let raw = self
             .post_json(&url, &body, AuthType::Bearer, timeout)
             .await?;
         let v: serde_json::Value = serde_json::from_str(&raw)
-            .map_err(|e| Error::Provider(format!("解析 OpenAI Chat JSON 失败: {e}")))?;
+            .map_err(|e| Error::Llm(format!("解析 OpenAI Chat JSON 失败: {e}")))?;
         Ok(parse_openai_chat_text(&v))
     }
 
@@ -323,18 +323,20 @@ impl CloudPolishProvider {
         max_tokens: u32,
     ) -> Result<String> {
         let (system_msg, chat_msgs) = split_system(messages);
-        let url = format!("{}/messages", self.base_url.trim_end_matches('/'));
-        let body = json!({
-            "model": self.model,
-            "max_tokens": max_tokens,
-            "system": system_msg,
-            "messages": chat_msgs,
-        });
+        let url = anthropic_messages_url(&self.base_url);
+        let body = with_model(
+            json!({
+                "max_tokens": max_tokens,
+                "system": system_msg,
+                "messages": chat_msgs,
+            }),
+            &self.model,
+        );
         let raw = self
             .post_json(&url, &body, AuthType::Anthropic, timeout)
             .await?;
         let v: serde_json::Value = serde_json::from_str(&raw)
-            .map_err(|e| Error::Provider(format!("解析 Anthropic JSON 失败: {e}")))?;
+            .map_err(|e| Error::Llm(format!("解析 Anthropic JSON 失败: {e}")))?;
         Ok(parse_anthropic_text(&v))
     }
 
@@ -352,18 +354,20 @@ impl CloudPolishProvider {
             .and_then(|m| m["content"].as_str())
             .unwrap_or("");
         let url = format!("{}/responses", self.base_url.trim_end_matches('/'));
-        let body = json!({
-            "model": self.model,
-            "instructions": system_msg,
-            "input": user_text,
-            "temperature": 0.3,
-            "max_output_tokens": max_tokens,
-        });
+        let body = with_model(
+            json!({
+                "instructions": system_msg,
+                "input": user_text,
+                "temperature": 0.3,
+                "max_output_tokens": max_tokens,
+            }),
+            &self.model,
+        );
         let raw = self
             .post_json(&url, &body, AuthType::Bearer, timeout)
             .await?;
         let v: serde_json::Value = serde_json::from_str(&raw)
-            .map_err(|e| Error::Provider(format!("解析 Responses JSON 失败: {e}")))?;
+            .map_err(|e| Error::Llm(format!("解析 Responses JSON 失败: {e}")))?;
         Ok(parse_responses_text(&v))
     }
 
@@ -376,12 +380,14 @@ impl CloudPolishProvider {
             .map(|(role, content)| json!({ "role": role, "content": content }))
             .collect();
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let body = json!({
-            "model": self.model,
-            "messages": body_msgs,
-            "stream": true,
-            "max_tokens": req.max_tokens,
-        });
+        let body = with_model(
+            json!({
+                "messages": body_msgs,
+                "stream": true,
+                "max_tokens": req.max_tokens,
+            }),
+            &self.model,
+        );
         let client = crate::http::http_client_no_redirect(req.timeout);
         let resp = client
             .post(&url)
@@ -389,7 +395,7 @@ impl CloudPolishProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("问答请求失败: {e}")))?;
+            .map_err(|e| Error::Llm(format!("问答请求失败（POST {url}）: {e}")))?;
         let status = resp.status();
         if !status.is_success() {
             let raw = resp
@@ -399,7 +405,9 @@ impl CloudPolishProvider {
                 .chars()
                 .take(300)
                 .collect::<String>();
-            return Err(Error::Provider(format!("问答 HTTP {status}: {raw}")));
+            return Err(Error::Llm(format!(
+                "问答 HTTP {status}（POST {url}）: {raw}"
+            )));
         }
 
         let mut stream = resp.bytes_stream();
@@ -409,9 +417,9 @@ impl CloudPolishProvider {
         'outer: while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
                 tracing::info!("QA 流被取消");
-                return Err(Error::Provider("已取消".into()));
+                return Err(Error::Llm("已取消".into()));
             }
-            let chunk = chunk.map_err(|e| Error::Provider(format!("读取 SSE 失败: {e}")))?;
+            let chunk = chunk.map_err(|e| Error::Llm(format!("读取 SSE 失败: {e}")))?;
             buf.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(idx) = buf.find('\n') {
                 let line: String = buf.drain(..=idx).collect();
@@ -440,22 +448,25 @@ impl CloudPolishProvider {
         let mut req_builder = client.post(url).json(body);
         req_builder = match auth {
             AuthType::Bearer => req_builder.bearer_auth(self.api_key.trim()),
-            AuthType::Anthropic => req_builder
-                .header("x-api-key", self.api_key.trim())
-                .header("anthropic-version", "2023-06-01"),
+            AuthType::Anthropic => {
+                let (header, value) = anthropic_auth_header(self.api_key.trim());
+                req_builder
+                    .header(header, value)
+                    .header("anthropic-version", "2023-06-01")
+            }
         };
         let resp = req_builder
             .send()
             .await
-            .map_err(|e| Error::Provider(format!("云端润色请求失败: {e}")))?;
+            .map_err(|e| Error::Llm(format!("云端润色请求失败（POST {url}）: {e}")))?;
         let status = resp.status();
         let raw = resp
             .text()
             .await
-            .map_err(|e| Error::Provider(format!("读取云端响应失败: {e}")))?;
+            .map_err(|e| Error::Llm(format!("读取云端响应失败（POST {url}）: {e}")))?;
         if !status.is_success() {
-            return Err(Error::Provider(format!(
-                "云端润色 HTTP {status}: {}",
+            return Err(Error::Llm(format!(
+                "云端润色 HTTP {status}（POST {url}）: {}",
                 raw.chars().take(300).collect::<String>()
             )));
         }
@@ -466,6 +477,39 @@ impl CloudPolishProvider {
 enum AuthType {
     Bearer,
     Anthropic,
+}
+
+/// 云端模型 ID 可选：留空时不携带 model 字段（由服务端/网关决定）。
+fn with_model(mut body: serde_json::Value, model: &str) -> serde_json::Value {
+    let m = model.trim();
+    if !m.is_empty() {
+        body["model"] = serde_json::Value::String(m.to_string());
+    }
+    body
+}
+
+/// Anthropic Messages API 完整 URL：`{base}/v1/messages`。
+/// base 已含 `/v1` 时不重复拼接（如用户直接填 `https://api.anthropic.com/v1`）。
+/// 兼容 Claude Code 生态（如阿里云 token-plan 的
+/// `https://…/apps/anthropic` 需要补 `/v1`）。
+fn anthropic_messages_url(base_url: &str) -> String {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.ends_with("/v1") {
+        format!("{base}/messages")
+    } else {
+        format!("{base}/v1/messages")
+    }
+}
+
+/// Anthropic 鉴权头选择：
+/// - `sk-ant-` 前缀 = 官方 Anthropic API Key → `x-api-key`。
+/// - 其它（如 `sk-sp-` Spruce 令牌 / Claude Code 网关）→ `Authorization: Bearer`。
+fn anthropic_auth_header(api_key: &str) -> (&'static str, String) {
+    if api_key.starts_with("sk-ant-") {
+        ("x-api-key", api_key.to_string())
+    } else {
+        ("Authorization", format!("Bearer {api_key}"))
+    }
 }
 
 /// 从 messages 分离 system 和 user/assistant（Anthropic 需要 system 独立字段）。
@@ -583,6 +627,44 @@ mod tests {
         assert_eq!(parse_anthropic_text(&json!({})), "");
         assert_eq!(parse_responses_text(&json!({})), "");
         assert_eq!(parse_openai_chat_text(&json!({})), "");
+    }
+
+    #[test]
+    fn anthropic_messages_url_appends_v1() {
+        assert_eq!(
+            anthropic_messages_url("https://api.anthropic.com"),
+            "https://api.anthropic.com/v1/messages"
+        );
+        // Claude Code 生态（token-plan 等）：base 不含 /v1，同样补上。
+        assert_eq!(
+            anthropic_messages_url(
+                "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic"
+            ),
+            "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic/v1/messages"
+        );
+        // 已含 /v1（含尾部斜杠）不重复拼接。
+        assert_eq!(
+            anthropic_messages_url("https://api.anthropic.com/v1"),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            anthropic_messages_url("https://api.anthropic.com/v1/"),
+            "https://api.anthropic.com/v1/messages"
+        );
+    }
+
+    #[test]
+    fn anthropic_auth_header_dispatches_by_prefix() {
+        // 官方 Anthropic key → x-api-key。
+        assert_eq!(
+            anthropic_auth_header("sk-ant-api03-xxx"),
+            ("x-api-key", "sk-ant-api03-xxx".to_string())
+        );
+        // Spruce / 网关令牌 → Authorization: Bearer。
+        assert_eq!(
+            anthropic_auth_header("sk-sp-xxx"),
+            ("Authorization", "Bearer sk-sp-xxx".to_string())
+        );
     }
 
     #[test]

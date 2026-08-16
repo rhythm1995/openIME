@@ -63,9 +63,9 @@ pub use pipeline::{
     SessionIntent,
 };
 pub use polish::{
-    detect_prefix_role, parse_polish_translate, parse_sse_line, BailianChatPolish, ChatRequest,
-    CloudPolishProvider, GgufRuntime, LlmClient, LocalGgufPolish, LocalGgufTranslate, PolishRouter,
-    PolishRouterConfig, PolishTranslate, SseLine, TranslateRequest, TranslateRouter,
+    detect_prefix_role, parse_polish_translate, parse_sse_line, ChatRequest, CloudPolishProvider,
+    GgufRuntime, LlmClient, LocalGgufPolish, LocalGgufTranslate, PolishRouter, PolishRouterConfig,
+    PolishTranslate, SseLine, TranslateRequest, TranslateRouter,
 };
 pub use providers::bailian::test_connection;
 pub use providers::sherpa::{SherpaModelPaths, SherpaProvider};
@@ -97,6 +97,8 @@ pub enum Error {
     Audio(String),
     #[error("ASR provider 错误: {0}")]
     Provider(String),
+    #[error("云端 LLM 错误: {0}")]
+    Llm(String),
     #[error("协议错误: {0}")]
     Protocol(String),
     #[error("存储错误: {0}")]

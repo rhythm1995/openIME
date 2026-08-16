@@ -197,26 +197,6 @@ void openime_hide_window_without_activating(void *ns_window) {
     });
 }
 
-// F4：返回系统当前选中的文字（malloc UTF-8，调用方 free；无选中返回 NULL）。
-// 通过 AXUIElement 的 kAXSelectedTextAttribute 直读，不碰剪贴板（需辅助功能权限）。
-const char* openime_get_selection(void) {
-    __block const char *out = NULL;
-    openime_on_main(^{
-        AXUIElementRef systemWide = AXUIElementCreateSystemWide();
-        CFTypeRef selectedText = NULL;
-        AXError err = AXUIElementCopyAttributeValue(systemWide, kAXSelectedTextAttribute, &selectedText);
-        CFRelease(systemWide);
-        if (err == kAXErrorSuccess && selectedText) {
-            NSString *ns = (__bridge_transfer NSString *)selectedText;
-            const char *cstr = [ns UTF8String];
-            if (cstr) out = strdup(cstr);
-        } else if (selectedText) {
-            CFRelease(selectedText);
-        }
-    });
-    return out;
-}
-
 // R7：发送 Cmd+V 粘贴和弦（CGEvent：kVK_ANSI_V=9 + Command）。成功 1 / 失败 0。
 // 与 enigo 文本输入同需辅助功能权限；CGEvent 保证是「物理键 + Command」而非 insertText。
 int openime_paste_cmd_v(void) {

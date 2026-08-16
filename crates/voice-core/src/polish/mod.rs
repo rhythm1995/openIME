@@ -17,16 +17,15 @@ mod sanitize;
 mod script;
 mod translate_router;
 
-pub use cloud::{parse_polish_translate, BailianChatPolish, CloudPolishProvider};
+pub use cloud::{parse_polish_translate, CloudPolishProvider};
 pub use correction::{correct_l0, L0Result};
 pub use itn::normalize_itn;
 pub use llm::{parse_sse_line, ChatRequest, LlmClient, PolishTranslate, SseLine, TranslateRequest};
 pub use local::{arch_needs_no_think, LocalGgufPolish, LocalGgufTranslate};
 pub use prompts::{
     build_local_translate_messages, build_messages, build_polish_translate_messages,
-    build_qa_system, build_translate_messages, detect_source_lang, lang_display_name,
-    lang_english_name, looks_like_instruction_leak, truncate_selection, wrap_selected_text,
-    POLISHED_SOURCE_SENTINEL, TRANSLATION_SENTINEL,
+    build_translate_messages, detect_source_lang, lang_display_name, lang_english_name,
+    looks_like_instruction_leak, POLISHED_SOURCE_SENTINEL, TRANSLATION_SENTINEL,
 };
 pub use punct::full_to_half_punct;
 pub use roles::{assistant_combo_words, detect_prefix_role, starts_with_assistant};

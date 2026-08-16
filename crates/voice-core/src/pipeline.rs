@@ -7,7 +7,7 @@
 //! 3. 主循环：audio.next_frame → session.feed；
 //! 4. 录音停止（audio 返回 None 或外部 cancel）→ session.finish → 等 reader 结束。
 //!
-//! P1：按 [`SessionIntent`] 分流（听写 / 翻译 / QA 录音）；听写 L0 后做前缀角色检测
+//! P1：按 [`SessionIntent`] 分流（听写 / 翻译）；听写 L0 后做前缀角色检测
 //! （R5），命中直连 cloud/local，未命中走 [`crate::polish::PolishRouter`]。
 //! 插入走四态 `insert_ex`（R7），`InsertOpts` 由薄壳组装传入。
 //!
@@ -54,8 +54,6 @@ pub enum SessionIntent {
     Dictate,
     /// 翻译（翻译键）：说源语言，出目标语言。不走前缀 / 风格包 / Router。
     Translate,
-    /// QA 录音（QA 窗可见时按录音键）：只转写不插入。
-    Qa,
 }
 
 /// 润色/处理阶段的可展示警告（薄壳据此发 HUD 文案）。
@@ -459,11 +457,6 @@ impl Pipeline {
                 }
                 self.apply_routed_polish(&l0.text, ctx).await
             }
-            // ── QA 录音不进插入路径；防御性 L0 直出。
-            SessionIntent::Qa => PolishOutcome {
-                text: l0.text,
-                warning: None,
-            },
         }
     }
 

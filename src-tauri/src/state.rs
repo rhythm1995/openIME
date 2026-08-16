@@ -7,9 +7,9 @@ use tauri::AppHandle;
 use tokio::sync::RwLock;
 use voice_core::pipeline::{Pipeline, PipelineDeps, PolishContext, SessionIntent};
 use voice_core::{
-    AppConfig, BailianChatPolish, CloudPolishProvider, Error, GgufRuntime, HistoryStore, LlmClient,
-    LocalGgufPolish, LocalGgufTranslate, PolishMode, PolishPolicy, PolishRouter,
-    PolishRouterConfig, RoutingProvider, SqliteStore, TextInserter, TextPolishProvider,
+    AppConfig, CloudPolishProvider, Error, GgufRuntime, HistoryStore, LlmClient, LocalGgufPolish,
+    LocalGgufTranslate, PolishMode, PolishPolicy, PolishRouter, PolishRouterConfig,
+    RoutingProvider, SqliteStore, TextInserter, TextPolishProvider,
 };
 
 use crate::insert_fallback::CompositeInserter;
@@ -295,56 +295,24 @@ impl AppState {
         (dedicated, fallback)
     }
 
-    /// 云端润色：优先用独立配置（polish_cloud_endpoint/api_key/protocol），
-    /// 否则回退从 bailian provider 取 key + 默认 base。
+    /// 云端 LLM：仅使用独立配置（协议 / endpoint / api_key 均必填，模型 ID 可选）。
+    /// 不再回退到任何识别引擎（ASR）凭据——云端 LLM 与 ASR 引擎配置完全解耦。
     fn cloud_polish_from(&self, cfg: &AppConfig) -> Option<CloudPolishProvider> {
-        if !cfg.polish_cloud_endpoint.trim().is_empty()
-            && !cfg.polish_cloud_api_key.trim().is_empty()
-        {
-            let base = cfg.polish_cloud_endpoint.trim().to_string();
-            let key = cfg.polish_cloud_api_key.trim().to_string();
-            let model = if cfg.polish_cloud_model.trim().is_empty() {
-                "qwen-turbo".into()
-            } else {
-                cfg.polish_cloud_model.clone()
-            };
-            Some(BailianChatPolish::new_with_protocol(
-                key,
-                base,
-                model,
-                cfg.polish_cloud_protocol,
-            ))
-        } else {
-            // 回退：从 bailian provider 取 key + 默认 base。
-            cfg.providers
-                .iter()
-                .find(|p| {
-                    p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty()
-                })
-                .map(|p| {
-                    BailianChatPolish::new(
-                        p.api_key.clone(),
-                        BailianChatPolish::default_chat_base(),
-                        if cfg.polish_cloud_model.trim().is_empty() {
-                            "qwen-turbo".into()
-                        } else {
-                            cfg.polish_cloud_model.clone()
-                        },
-                    )
-                })
+        if !matches!(cfg.check_cloud_llm(), Ok(true)) {
+            return None;
         }
+        Some(CloudPolishProvider::new_with_protocol(
+            cfg.polish_cloud_api_key.trim().to_string(),
+            cfg.polish_cloud_endpoint.trim().to_string(),
+            cfg.polish_cloud_model.trim().to_string(),
+            cfg.polish_cloud_protocol,
+        ))
     }
 
     /// 是否配置了可用云端 key（翻译 / QA 启动前的「可否开始」检查）。
     pub fn has_cloud_key(&self) -> bool {
         let cfg = self.config.blocking_read();
-        let independent = !cfg.polish_cloud_endpoint.trim().is_empty()
-            && !cfg.polish_cloud_api_key.trim().is_empty();
-        let via_provider = cfg
-            .providers
-            .iter()
-            .any(|p| p.kind == voice_core::ProviderKind::Bailian && !p.api_key.trim().is_empty());
-        independent || via_provider
+        matches!(cfg.check_cloud_llm(), Ok(true))
     }
 
     /// 本地翻译是否可用：专翻已装，或兼译开启且润色模型已装。
@@ -469,16 +437,35 @@ pub fn load_config(store: &SqliteStore) -> Result<Option<AppConfig>, Error> {
         Some(json) => {
             let mut cfg: AppConfig = serde_json::from_str(&json)
                 .map_err(|e| Error::Store(format!("解析 app_config 失败: {e}")))?;
+            // PR1：polish_cloud_api_key 迁移到 keychain（若 JSON 仍残留明文）。
+            // 必须在 provider 回填之前：迁移落盘时 provider 字段仍是 DB 原值，
+            // 不会把回填的 provider 明文写回 JSON。
+            if !cfg.polish_cloud_api_key.trim().is_empty() {
+                match crate::credentials::store_polish_key(cfg.polish_cloud_api_key.trim()) {
+                    Ok(()) => {
+                        cfg.polish_cloud_api_key.clear();
+                        // 迁移成功即把清空后的 JSON 落盘：明文不留 DB，且避免每次启动重复迁移。
+                        if let Ok(json) = serde_json::to_string(&cfg) {
+                            if let Err(e) = store.set_setting(CONFIG_KEY, &json) {
+                                crate::log_error!(
+                                    "云端 Key 迁入 keychain 后落盘失败：{e}（下次启动会重试迁移）"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // 写入失败保留 JSON 明文（本次启动内仍可用），下次启动重试迁移。
+                        crate::log_error!(
+                            "云端 API Key 迁入 keychain 失败：{e}（明文暂留 JSON，下次启动重试；非阻断）"
+                        );
+                    }
+                }
+            }
             // H2：provider api_key 从 keychain 填充（save 时已置空，明文不落 JSON）。
             for (i, p) in cfg.providers.iter_mut().enumerate() {
                 if p.api_key.is_empty() {
                     p.api_key = crate::credentials::fetch_provider_key(i).unwrap_or_default();
                 }
-            }
-            // PR1：polish_cloud_api_key 迁移到 keychain（若 JSON 仍残留明文）。
-            if !cfg.polish_cloud_api_key.trim().is_empty() {
-                let _ = crate::credentials::store_polish_key(cfg.polish_cloud_api_key.trim());
-                cfg.polish_cloud_api_key.clear();
             }
             // PR1：从 keychain 回填 polish_cloud_api_key 到内存（运行时使用）。
             if cfg.polish_cloud_api_key.is_empty() {
@@ -498,14 +485,32 @@ pub fn save_config(store: &SqliteStore, cfg: &AppConfig) -> Result<(), Error> {
     let mut cfg = cfg.clone();
     for (i, p) in cfg.providers.iter_mut().enumerate() {
         if !p.api_key.is_empty() {
-            let _ = crate::credentials::store_provider_key(i, &p.api_key);
+            if let Err(e) = crate::credentials::store_provider_key(i, &p.api_key) {
+                crate::log_error!("provider[{i}] API Key 写入 keychain 失败：{e}（重启后需重填）");
+            }
             p.api_key.clear();
+        } else if crate::credentials::fetch_provider_key(i).is_some() {
+            // 清空即删：不删的话 load_config 重启会回填旧 key，与 JSON 状态不一致。
+            if let Err(e) = crate::credentials::delete_provider_key(i) {
+                crate::log_error!("provider[{i}] API Key 从 keychain 删除失败：{e}（重启后旧值可能复活）");
+            }
         }
     }
     // PR1：polish_cloud_api_key 存 keychain，JSON 置空（不落明文）。
+    // 写入失败会丢失跨重启的 key——必须记日志，否则用户只会看到「重启后 key 没了」。
     if !cfg.polish_cloud_api_key.trim().is_empty() {
-        let _ = crate::credentials::store_polish_key(cfg.polish_cloud_api_key.trim());
+        if let Err(e) = crate::credentials::store_polish_key(cfg.polish_cloud_api_key.trim()) {
+            crate::log_error!(
+                "云端 API Key 写入 keychain 失败：{e}（本次运行内仍有效，重启后需重填）"
+            );
+        }
         cfg.polish_cloud_api_key.clear();
+    } else if crate::credentials::fetch_polish_key().is_some() {
+        // 清空即删：旧值不删会在重启后回填复活，且「endpoint 空 + key 非空」
+        // 会让 check_cloud_llm 拒绝后续所有保存（用户改任何设置都存不进去）。
+        if let Err(e) = crate::credentials::delete_polish_key() {
+            crate::log_error!("云端 API Key 从 keychain 删除失败：{e}（重启后旧值可能复活）");
+        }
     }
     let json = serde_json::to_string(&cfg)
         .map_err(|e| Error::Store(format!("序列化 app_config 失败: {e}")))?;

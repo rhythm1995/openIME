@@ -1,7 +1,7 @@
 //! Windows 版 fn_key 兼容层：macOS 薄壳的调用面在 Windows 上转发为 exe basename。
 //! Fn（Globe）键监听由 `super::fn_monitor`（WH_KEYBOARD_LL 低阶键盘钩子）实现：
 //! CapsLock 为「Fn 等价单键」（全键盘可靠可见），厂商 Fn 扫描码 best-effort；
-//! overlay 无激活显示用 SW_SHOWNOACTIVATE 实现，选区读取由 `super::uia`（UI Automation）实现。
+//! overlay 无激活显示用 SW_SHOWNOACTIVATE 实现。
 // 仅 macOS 调用路径使用的桩（prepare_overlay_window 等）在 Windows 上为预期死代码。
 #![allow(dead_code)]
 
@@ -71,11 +71,6 @@ pub fn hide_window_raw(hwnd: *mut std::ffi::c_void) {
     unsafe {
         let _ = ShowWindow(HWND(hwnd as _), SW_HIDE);
     }
-}
-
-/// 读焦点元素选中文本：UIA TextPattern（见 `super::uia`）。不支持 TextPattern 的应用返回 None。
-pub fn get_selection() -> Option<String> {
-    super::uia::get_selected_text()
 }
 
 #[cfg(test)]

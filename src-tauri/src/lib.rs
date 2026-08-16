@@ -7,7 +7,6 @@ mod fn_policy;
 mod insert_fallback;
 mod logging;
 mod platform;
-mod qa;
 mod state;
 mod windows_ime;
 
@@ -248,18 +247,7 @@ pub fn run() {
                 }
             }
 
-            // R6：QA 窗关闭请求 → close_qa_panel（禁止只 hide 留 messages，NFR-6.3）。
-            if let Some(qa_win) = app.get_webview_window("qa") {
-                let app_handle = app.handle().clone();
-                qa_win.on_window_event(move |event| {
-                    if let WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        qa::close_qa_panel(&app_handle);
-                    }
-                });
-            }
-
-            // 快捷键注册中心（PR4 收口）：录音 / 风格循环 / 翻译 / QA。
+            // 快捷键注册中心（PR4 收口）：录音 / 风格循环 / 翻译。
             let cfg = app.state::<AppState>().config.blocking_read().clone();
             apply_hotkey(app.handle(), &cfg);
 
@@ -339,7 +327,6 @@ pub fn run() {
             commands::set_active_style_pack,
             commands::upsert_style_pack,
             commands::delete_style_pack,
-            commands::get_selection,
             commands::transcribe_file,
             commands::cancel_transcribe,
             commands::export_diary,
@@ -361,11 +348,6 @@ pub fn run() {
             commands::delete_llm_model,
             commands::get_model_suite_info,
             commands::open_model_directory,
-            commands::qa_refresh_selection,
-            commands::qa_cancel,
-            commands::qa_insert_last,
-            commands::qa_clear,
-            commands::qa_copy_last,
             commands::windows_ime_status,
             commands::windows_ime_restore_profile,
         ])
@@ -423,7 +405,7 @@ pub fn run() {
     });
 }
 
-/// 全局快捷键：按注册中心分流——录音（听写/QA 录音）→ 翻译 → QA 窗开关 → 风格循环。
+/// 全局快捷键：按注册中心分流——录音（听写）→ 翻译 → 风格循环。
 fn on_hotkey(app: &tauri::AppHandle, shortcut: &Shortcut) {
     // 设置页正在捕获新快捷键：所有全局组合键静默忽略。
     if CAPTURE_SUSPEND.load(Ordering::SeqCst) {
@@ -431,14 +413,10 @@ fn on_hotkey(app: &tauri::AppHandle, shortcut: &Shortcut) {
         return;
     }
     // R2:润色中按 ESC → 取消润色（ESC 由润色流程动态注册，见 commands.rs）。
-    // R6:QA 流式中按 ESC → 取消 QA 流（保留已输出）。
     if shortcut.key == Code::Escape && shortcut.mods.is_empty() {
         let state = app.state::<AppState>();
         state.request_cancel_polish();
         let _ = app.emit("recording://polish-cancelled", ());
-        if qa::panel_visible() && qa::phase() == qa::QaPhase::Streaming {
-            qa::cancel_stream(app);
-        }
         log_info!("已请求取消（ESC）");
         return;
     }
@@ -454,11 +432,6 @@ fn on_hotkey(app: &tauri::AppHandle, shortcut: &Shortcut) {
     let translate_sc = cfg.translate_hotkey.as_deref().and_then(parse_shortcut);
     if translate_sc == Some(*shortcut) {
         on_translate_hotkey(app);
-        return;
-    }
-    let qa_sc = cfg.qa_hotkey.as_deref().and_then(parse_shortcut);
-    if qa_sc == Some(*shortcut) {
-        on_qa_hotkey(app);
         return;
     }
     let record_sc = effective_record_shortcut(&cfg);
@@ -503,16 +476,12 @@ fn effective_record_shortcut(cfg: &voice_core::AppConfig) -> Option<Shortcut> {
 /// R4：翻译快捷键（P1 仅 Toggle）。云端或本地（专翻/兼译）任一可用才开录。
 fn on_translate_hotkey(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-    // 互斥表：听写 / 翻译录音中 → 忽略 + toast；QA 窗可见 → 忽略。
+    // 互斥：录音进行中 → 忽略 + toast。
     if state
         .recording_guard
         .load(std::sync::atomic::Ordering::SeqCst)
     {
         let _ = app.emit("toast://info", "录音进行中，翻译键已忽略");
-        return;
-    }
-    if qa::panel_visible() {
-        let _ = app.emit("toast://info", "问答面板打开中，翻译键已忽略");
         return;
     }
     if !state.has_cloud_key() && !state.has_local_translate() {
@@ -530,55 +499,8 @@ fn on_translate_hotkey(app: &tauri::AppHandle) {
     trigger_toggle(app);
 }
 
-/// R6：QA 快捷键 toggle。开窗前抓选区 + 冻结 frontmost；听写中 → 拒绝并 toast。
-fn on_qa_hotkey(app: &tauri::AppHandle) {
-    if qa::panel_visible() {
-        qa::close_qa_panel(app);
-        return;
-    }
-    // A6.4：听写进行中 QA 键不开窗。
-    let state = app.state::<AppState>();
-    if state
-        .recording_guard
-        .load(std::sync::atomic::Ordering::SeqCst)
-    {
-        let _ = app.emit("toast://info", "录音进行中，问答面板暂不可开");
-        return;
-    }
-    qa::open_qa_panel(app);
-}
-
-/// 录音键：QA 窗可见时改走 QA 录音（流式中 → 取消流）；否则听写。
+/// 录音键：开始/停止听写（QA 窗口已移除，本函数回归单一职责）。
 fn on_record_hotkey(app: &tauri::AppHandle) {
-    if qa::panel_visible() {
-        match qa::phase() {
-            qa::QaPhase::Streaming | qa::QaPhase::Transcribing => {
-                // FR-6.10：流式中再按录音键 = 取消（保留已输出）。
-                qa::cancel_stream(app);
-                return;
-            }
-            qa::QaPhase::Recording => {
-                // QA 录音中：走正常停止路径。
-                trigger_toggle(app);
-                return;
-            }
-            _ => {
-                // Idle：开始 QA 录音（FR-6.9：无 key 不录）。
-                let state = app.state::<AppState>();
-                if !state.has_cloud_key() {
-                    let _ = app.emit(
-                        "toast://info",
-                        "请先配置云端 LLM（润色 endpoint + API Key）",
-                    );
-                    return;
-                }
-                if let Ok(mut intent) = state.pending_intent.lock() {
-                    *intent = voice_core::SessionIntent::Qa;
-                }
-                qa::mark_recording(app, true);
-            }
-        }
-    }
     trigger_toggle(app);
 }
 
@@ -760,62 +682,6 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
-/// R6：显示 QA 浮窗（可聚焦、不抢原 app）。Regular + show + set_focus，
-/// 与 overlay 的 orderFront / 鼠标穿透完全不同。位置：指针所在屏右下角距边 24px，
-/// 之后记住上次位置（窗口已有位置则不动）。
-pub(crate) fn show_qa_window(app: &tauri::AppHandle) {
-    let Some(win) = app.get_webview_window("qa") else {
-        log_warn!("qa 窗口不存在");
-        return;
-    };
-    // QA 浮窗需可聚焦；macOS 下还需切 Regular 激活策略才稳定获焦
-    // （Windows 无此概念，直接靠 show + set_focus）。
-    #[cfg(target_os = "macos")]
-    {
-        if let Err(e) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
-            log_warn!("QA：切换 Regular 激活策略失败：{e}");
-        }
-    }
-    // 首次显示：定位到指针所在屏右下角（距边 24px）。
-    if let Ok(false) = win.is_visible() {
-        let (scale, monitor) = match win.current_monitor() {
-            Ok(Some(m)) => (m.scale_factor(), Some(m)),
-            _ => (1.0, None),
-        };
-        let win_size = win
-            .outer_size()
-            .map(|s| (s.width as f64 / scale, s.height as f64 / scale))
-            .unwrap_or((400.0, 520.0));
-        let pos = match (monitor, app.cursor_position().ok()) {
-            (Some(m), Some(cursor)) => {
-                let mp = m.position();
-                let ms = m.size();
-                let cursor_in_monitor = cursor.x >= mp.x as f64
-                    && cursor.x <= mp.x as f64 + ms.width as f64
-                    && cursor.y >= mp.y as f64
-                    && cursor.y <= mp.y as f64 + ms.height as f64;
-                if cursor_in_monitor {
-                    // 物理坐标 → 逻辑坐标（Tauri set_position 用逻辑坐标，原点左上）。
-                    let x = mp.x as f64 / scale + (ms.width as f64 / scale) - win_size.0 - 24.0;
-                    let y = mp.y as f64 / scale + (ms.height as f64 / scale) - win_size.1 - 24.0;
-                    Some((x.max(0.0), y.max(0.0)))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        if let Some((x, y)) = pos {
-            let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
-        }
-    }
-    if let Err(e) = win.show() {
-        log_error!("qa show 失败：{e}");
-    }
-    let _ = win.set_focus();
-    log_info!("QA 窗口已显示");
-}
-
 /// 单实例协调：用 unix domain socket 做存在性探测。
 ///
 /// - 若 socket 文件存在且能连上 → 已有实例在跑：发 "show" 唤起其主窗口，返回 Err 让调用方退出。
@@ -899,7 +765,7 @@ pub(crate) fn store_fn_tap_consume(cfg: &voice_core::AppConfig) {
     crate::platform::current::fn_key::set_fn_tap_consume(consume);
 }
 
-/// PR4 收口：`unregister_all` 后注册 录音 / 风格循环 / 翻译 / QA。
+/// PR4 收口：`unregister_all` 后注册 录音 / 风格循环 / 翻译。
 /// 任何 hotkey 字段变化都调用本函数重新注册（save_app_config 与启动都走这里）。
 fn apply_hotkey(app: &tauri::AppHandle, cfg: &voice_core::AppConfig) {
     let _ = app.global_shortcut().unregister_all();
@@ -969,11 +835,10 @@ fn apply_hotkey(app: &tauri::AppHandle, cfg: &voice_core::AppConfig) {
     // R9：下发「是否吞 Fn 键」（hotkey==Fn && Hold 才吞）。
     store_fn_tap_consume(cfg);
 
-    // 可选快捷键：风格循环 / 翻译 / QA（P1 仅 Toggle）。
+    // 可选快捷键：风格循环 / 翻译（P1 仅 Toggle）。
     for (name, hk) in [
         ("风格包切换", cfg.style_switch_hotkey.as_deref()),
         ("翻译", cfg.translate_hotkey.as_deref()),
-        ("问答", cfg.qa_hotkey.as_deref()),
     ] {
         let Some(s) = hk else { continue };
         let s = s.trim();
@@ -1245,7 +1110,7 @@ pub(crate) fn on_fn_edge(pressed: bool) {
 }
 
 /// 切换录音 + 显示 overlay（快捷键与 Fn 共用入口）。
-/// 意图读 `pending_intent`（听写 / 翻译 / QA），由 toggle_recording 在抢到 guard 后 take。
+/// 意图读 `pending_intent`（听写 / 翻译），由 toggle_recording 在抢到 guard 后 take。
 fn trigger_toggle(app: &tauri::AppHandle) {
     log_info!("录音快捷键触发");
     let intent = match app.state::<AppState>().pending_intent.lock() {
@@ -1254,11 +1119,7 @@ fn trigger_toggle(app: &tauri::AppHandle) {
     };
     // 必须在 overlay 显示前记录前台 app：随后立刻还焦，录音过程中 caret 不消失；
     // 录音结束再次还焦，保证 enigo 插入到用户输入框。
-    // QA 不改 frontmost（开窗时已冻结），也无需还焦。
-    let frontmost = match intent {
-        voice_core::SessionIntent::Qa => None,
-        _ => crate::platform::current::fn_key::frontmost_bundle_id(),
-    };
+    let frontmost = crate::platform::current::fn_key::frontmost_bundle_id();
     let app_clone = app.clone();
     let frontmost_for_cmd = frontmost.clone();
     // 仅在「即将开始录音」时显示 HUD；已在录音中则由松开/停止路径处理，避免闪一下。
@@ -1273,14 +1134,8 @@ fn trigger_toggle(app: &tauri::AppHandle) {
         show_overlay(app, frontmost.as_deref());
         let _ = app.emit("recording://started", ());
         // 意图对应的 HUD 起始文案（overlay 的 processing 通道）。
-        match intent {
-            voice_core::SessionIntent::Translate => {
-                let _ = app.emit("recording://processing", "正在聆听（翻译）…");
-            }
-            voice_core::SessionIntent::Qa => {
-                let _ = app.emit("recording://processing", "问答录音中…");
-            }
-            voice_core::SessionIntent::Dictate => {}
+        if intent == voice_core::SessionIntent::Translate {
+            let _ = app.emit("recording://processing", "正在聆听（翻译）…");
         }
     }
     tauri::async_runtime::spawn(async move {
@@ -1334,8 +1189,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_shortcut_supports_semicolon_qa_hotkey() {
-        // PR4：Cmd+Shift+;（QA 默认 placeholder）必须可解析。
+    fn parse_shortcut_supports_semicolon() {
+        // PR4：标点键（; 及别名 semicolon）必须可解析。
         let sc = parse_shortcut("Cmd+Shift+;").expect("应能解析 Cmd+Shift+;");
         assert_eq!(sc.key, Code::Semicolon);
         assert!(sc.mods.contains(Modifiers::SUPER));

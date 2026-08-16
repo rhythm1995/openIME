@@ -83,8 +83,5 @@ pub mod current {
         ) {
         }
         pub fn hide_window_without_activating(_ns_window: *mut std::ffi::c_void) {}
-        pub fn get_selection() -> Option<String> {
-            None
-        }
     }
 }

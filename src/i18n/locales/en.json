@@ -64,16 +64,18 @@
       "styleNamePh": "Style pack name (e.g. Customer support)",
       "stylePromptPh": "system prompt instruction (e.g. Rewrite the content as polite customer-support replies)",
       "addStylePack": "Add style pack",
-      "policyHint": "Policy: local model first; auto-fallback to cloud if not downloaded or on failure (no config needed)",
-      "cloudModelIdLabel": "Cloud model ID",
+      "policyHint": "Policy: local model first; auto-fallback to cloud if not downloaded or on failure (cloud needs protocol / endpoint / API key below)",
+      "cloudModelIdLabel": "Cloud model ID (optional)",
+      "cloudModelIdPh": "Empty = no model field in requests",
+      "cloudModelIdHint": "Optional: when empty, requests omit the model field and the server / gateway decides; otherwise it applies per the selected protocol.",
       "cloudProtocolLabel": "Cloud LLM protocol",
       "cloudProtocol_openai_chat": "OpenAI Chat Completions (/chat/completions)",
       "cloudProtocol_anthropic": "Anthropic Messages (/v1/messages)",
       "cloudProtocol_openai_responses": "OpenAI Responses (/v1/responses)",
-      "cloudEndpointLabel": "Cloud endpoint (optional)",
-      "cloudEndpointPh": "Empty = use Bailian-compatible URL / or fill https://openrouter.ai/api/v1",
-      "cloudApiKeyLabel": "Cloud API key (optional)",
-      "cloudApiKeyPh": "Empty = use the ASR engine's Bailian API key",
+      "cloudEndpointLabel": "Cloud endpoint",
+      "cloudEndpointPh": "Required. OpenAI-style: https://api.openai.com/v1. Anthropic-style: base URL only (/v1/messages is appended), e.g. https://api.anthropic.com",
+      "cloudApiKeyLabel": "Cloud API key",
+      "cloudApiKeyPh": "Required, from your LLM provider (independent of the ASR engine credentials)",
       "localModelMovedHint": "Local model tiers (fast / balanced / high quality) have moved to the \"Local models\" card below; download one to enable it. Local first, falls back to cloud on failure.",
       "llmFeatureOff": " · Local inference is disabled in this build (rebuild with ./scripts/build.sh)",
       "statusLoading": "Loading status…"
@@ -180,8 +182,6 @@
       "fnWarningWin": "On Windows the Fn key is consumed by keyboard firmware on most machines and never reaches the OS (a few keyboards except). Fallback Ctrl+Shift+D is also registered; for a single-key experience use CapsLock instead.",
       "translateLabel": "Translation shortcut (optional)",
       "translateHint": "Speak in the source language; the target language appears at the caret.",
-      "qaLabel": "Selection QA shortcut (optional)",
-      "qaHint": "Select text, press the key: a QA panel opens, ask by voice, streamed answer.",
       "shortPressLabel": "Short-press threshold (ms)",
       "shortPressHint": "In Hold mode, recording starts only after {{key}} is held longer than this; releasing earlier does not record (for single keys the original function is re-posted) (100–800, default 300)",
       "fnRepostName": "Re-post original function on short {{key}} press",
@@ -324,25 +324,6 @@
       "createBtn": "Create",
       "emptyEditor": "Select a role on the left to view and edit, or click New."
     },
-    "qa": {
-      "title": "Selection QA",
-      "hint": "Select text → press the QA hotkey → ask by voice with the recording hotkey → streamed answer. Closing the panel clears context.",
-      "saveHistoryName": "Save QA to history",
-      "saveHistoryDesc": "Create one session per panel open, two utterances per round (Q: / A:)."
-    },
-    "_qa": {
-      "title": "Selection QA",
-      "subtitle": "Press the recording key to ask · streamed answers",
-      "refreshSelection": "Refresh selection",
-      "clear": "Clear conversation",
-      "selectionLabel": "Selected context",
-      "noSelection": "No selection detected (select text in the target app, then press refresh)",
-      "empty": "No questions yet. Press the recording key to ask.",
-      "recording": "Listening for question…",
-      "cancel": "Stop generating",
-      "copy": "Copy answer",
-      "insert": "Insert at caret"
-    },
     "tsf": {
       "name": "TSF IME insertion (experimental)",
       "installed": "Registered ({{path}}). Text will be committed via the IME — no focus stealing, no clipboard.",
@@ -402,19 +383,5 @@
     "deleteTitle": "Delete",
     "notFound": "No matching entries",
     "empty": "Dictionary is empty"
-  },
-  "qa": {
-    "title": "Selection QA",
-    "subtitle": "Press the recording key to ask · streamed answers",
-    "refreshSelection": "Refresh selection",
-    "clear": "Clear conversation",
-    "selectionLabel": "Selected context",
-    "noSelection": "No selection detected (select text in the target app, then press refresh)",
-    "empty": "No questions yet. Press the recording key to ask.",
-    "recording": "Listening for question…",
-    "cancel": "Stop generating",
-    "copy": "Copy answer",
-    "insert": "Insert at caret",
-    "noKeyBanner": "No cloud LLM configured: fill Endpoint + API Key under Settings → AI Polish to use QA"
   }
 }

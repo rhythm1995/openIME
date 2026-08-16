@@ -13,4 +13,3 @@ pub mod fn_monitor;
 pub mod focus;
 pub mod permissions;
 pub mod single_instance;
-pub mod uia;

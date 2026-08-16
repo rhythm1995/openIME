@@ -36,7 +36,7 @@ const defaultConfig = {
   polish_mode: "off",
   polish_policy: "prefer_local",
   polish_local_model: "qwen3.5-2b",
-  polish_cloud_model: "qwen-turbo",
+  polish_cloud_model: "",
   polish_cloud_protocol: "openai_chat",
   polish_cloud_endpoint: "",
   polish_cloud_api_key: "",
@@ -50,8 +50,6 @@ const defaultConfig = {
   translate_use_llm_fallback: false,
   translate_policy: "prefer_cloud",
   prefix_roles_enabled: true,
-  qa_hotkey: null,
-  qa_save_history: false,
   insert_strategy: "auto",
   paste_fallback_apps: [],
   restore_clipboard: true,
@@ -247,7 +245,7 @@ describe("Settings", () => {
     expect(invokeMock).toHaveBeenCalledWith("set_capture_suspend", { suspend: false });
   });
 
-  it("翻译/QA 快捷键为可选：清除按钮置空", async () => {
+  it("翻译快捷键为可选：清除按钮置空", async () => {
     mockInvoke({
       get_config: {
         ...defaultConfig,
@@ -657,18 +655,10 @@ describe("Settings", () => {
     expect(screen.getByRole("option", { name: "本地 GGUF" })).toBeTruthy();
   });
 
-  it("渲染划词问答设置", async () => {
-    mockInvoke({ get_config: defaultConfig });
-    render(<Settings view="ai" />);
-    expect(await screen.findByText("划词问答")).toBeTruthy();
-    expect(screen.getByText("问答写入历史")).toBeTruthy();
-  });
-
-  it("快捷键卡片包含翻译 / QA 输入", async () => {
+  it("快捷键卡片包含翻译输入", async () => {
     mockInvoke({ get_config: defaultConfig });
     render(<Settings />);
     expect(await screen.findByText("翻译快捷键（可选）")).toBeTruthy();
-    expect(screen.getByText("划词问答快捷键（可选）")).toBeTruthy();
   });
 
   it("触发模式默认按住说话且为第一项；语音视图不含 AI 卡", async () => {
@@ -736,7 +726,6 @@ describe("Settings", () => {
               translate_target_lang: "en",
               insert_strategy: "auto",
               prefix_roles_enabled: true,
-              qa_save_history: false,
               restore_clipboard: true,
             }),
           }),

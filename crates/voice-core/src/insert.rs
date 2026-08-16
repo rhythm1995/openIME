@@ -35,7 +35,7 @@ pub struct InsertOpts {
 }
 
 impl InsertOpts {
-    /// P2 R11：唯一业务构造器（`toggle_recording` 与 `qa::insert_last_answer` 都必须走它）。
+    /// P2 R11：唯一业务构造器（插入路径都必须走它）。
     /// `tsf_enabled = windows && cfg.windows_tsf_enabled && !streaming`。
     pub fn from_config(cfg: &AppConfig, frontmost: Option<String>, streaming: bool) -> Self {
         let tsf = cfg!(windows) && cfg.windows_tsf_enabled && !streaming;
