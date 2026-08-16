@@ -23,4 +23,4 @@
 
 ## 截图
 
-`docs/screenshots/` — `main.png` / `en.png` / `dictionary.png` / `history.png`
+`docs/screenshots/` — `main.png`（中文主界面）/ `settings.png`（中文设置）/ `dictionary.png`（词典）/ `history.png`（历史记录）/ `en-main.png`（英文主界面）/ `en-settings.png`（英文设置）/ `en-history.png`（英文历史）

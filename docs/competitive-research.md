@@ -12,7 +12,7 @@
 >
 > **📌 落地状态（2026-08-13 更新）**：本文写于 2026-08-12，此后 openIME 二期已实现其中 **A1 / B1 / B2 / B3 / B4 / B5 / B6 / C1 / D1 / D2 / D3 / F1 / F4 / H2** 共 14 项（见 [README](../README.md) 路线图 ✅ 段）；**未实现**的需求已抽到 [roadmap.md](./roadmap.md)。下文 §2 / §3 的「建议清单 / 优先级」保留作历史档案，**当前状态以本段为准**。
 >
-> openIME 当前能力：Tauri + Rust（`voice-core`）+ React，macOS 优先；本地 sherpa-onnx（SenseVoice / FireRedASR / FunASR-Nano / Zipformer）+ 阿里云百炼流式 ASR；**enigo 逐字插入 + 百炼流式逐字上屏**；SQLite 历史 + 搜索；Fn 全局快捷键（Toggle / Hold PTT）；悬浮 HUD；AI 润色三档（Off / Light / Heavy，L0 规则纠错含 ITN / 热词同音模糊音 / 繁简 / 去句末标点 / 按 app 标点 + L2 LLM，本地 GGUF Qwen2.5-1.5B / 百炼云端三协议）；CSV 热词 + 风格包；选区注入；文件转录 SRT；日记导出；凭据钥匙串；本机性能 → 模型适配标签；界面 i18n（中 / 英）。
+> openIME 当前能力：Tauri + Rust（`voice-core`）+ React，macOS 优先；本地 sherpa-onnx（SenseVoice / FireRedASR / FunASR-Nano / Zipformer）+ 阿里云百炼流式 ASR；**enigo 逐字插入 + 百炼流式逐字上屏**；SQLite 历史 + 搜索；Fn 全局快捷键（Toggle / Hold PTT）；悬浮 HUD；AI 润色三档（Off / Light / Heavy，L0 规则纠错含 ITN / 热词同音模糊音 / 繁简 / 去句末标点 / 按 app 标点 + L2 LLM，本地 GGUF Qwen2.5-1.5B / 云端 LLM 三协议）；CSV 热词 + 风格包；选区注入；文件转录 SRT；日记导出；凭据钥匙串；本机性能 → 模型适配标签；界面 i18n（中 / 英）。
 
 ---
 

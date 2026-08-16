@@ -300,7 +300,7 @@ pub enum InsertStrategy {
 **保存校验（`save_app_config` 新行为，不是现状）：**
 
 1. `active()` 索引合法（已有）。
-2. **每一个非空** `providers[i].base_url` 以及非空 `polish_cloud_endpoint` 走 `validate_endpoint`（百炼见 R3：只验归一化 URL）。**不**因为缺 `api_key` 而拒绝整单保存（用户可能先填地址再填 key；今日前端 `validateProvider` 在云端引擎上会卡 key——PR1 把「URL 校验」放进 save，**不把** `ProviderConfig::validate` 的 key 完备性检查并进 save）。
+2. **每一个非空** `providers[i].base_url` 走 `validate_endpoint`（百炼见 R3：只验归一化 URL）。**不**因为缺 `api_key` 而拒绝整单保存（用户可能先填地址再填 key；PR1 把「URL 校验」放进 save，**不把** `ProviderConfig::validate` 的 key 完备性检查并进 save）。云端 LLM 的 `polish_cloud_endpoint` / `polish_cloud_api_key` 则经 `AppConfig::check_cloud_llm` 做**必填成对校验**：两者全空 = 未启用云端（合法），只填其一 → 拒绝保存。
 3. 热键两两不等（PR4 起：含翻译 / QA / 风格 / 录音）。无法 `parse_shortcut` 的非空热键 → 保存失败。
 4. 任一项失败 → `Err(String)`，**不写 DB、不改内存 config**。
 
@@ -341,7 +341,7 @@ pub enum InsertStrategy {
 | A3.1 | 润色 endpoint 填 `http://169.254.169.254/` 保存 | 失败，文案含元数据或 link-local；刷新后仍是旧值 |
 | A3.2 | ASR **OpenAI 兼容**填 `http://192.168.1.20:8080/v1` 保存 | 成功 |
 | A3.3 | **润色或 OpenAI REST** 填 `http://openai.com/v1` 保存 | 失败，文案含「https」 |
-| A3.4 | 润色填 `https://dashscope.aliyuncs.com/compatible-mode/v1` | 成功 |
+| A3.4 | 润色填 `https://api.openai.com/v1` | 成功 |
 | A3.5 | 填 `http://localhost:11434/v1` | 成功 |
 | A3.6 | 填 `http://100.64.1.1:80` | 失败（CGNAT） |
 | A3.7 | 手工把 DB 里写成元数据 URL 后启动 | load 清空该字段；日志 warn |
