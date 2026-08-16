@@ -33,15 +33,11 @@
 ## Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/en-main.png" alt="Main window" width="720" />
+  <img src="docs/screenshots/en-history.png" alt="History" width="720" />
 </p>
 
 <p align="center">
   <img src="docs/screenshots/en-settings.png" alt="Settings" width="720" />
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/en-qa.png" alt="Selection QA" width="520" />
 </p>
 
 ---

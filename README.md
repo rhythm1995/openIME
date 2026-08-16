@@ -36,7 +36,7 @@
 ## 产品截图
 
 <p align="center">
-  <img src="docs/screenshots/main.png" alt="主界面" width="720" />
+  <img src="docs/screenshots/history.png" alt="历史页" width="720" />
 </p>
 
 <p align="center">
@@ -44,7 +44,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/qa.png" alt="划词问答" width="520" />
+  <img src="docs/screenshots/dictionary.png" alt="词典页" width="720" />
 </p>
 
 ---
