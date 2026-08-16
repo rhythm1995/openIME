@@ -6,8 +6,11 @@ type Step = { num: string; title: string; desc: string };
 const STEP_ICONS = [Keyboard, Mic, TextCursorInput];
 
 export default function HowItWorks() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const steps = t("how.steps", { returnObjects: true }) as Step[];
+  // 语言对应的界面截图：英文版展示英文界面（en-main），中文版展示中文设置页。
+  const shot =
+    i18n.language === "en" ? "screenshots/en-main.png" : "screenshots/settings.png";
 
   return (
     <section className="section" id="how">
@@ -46,7 +49,7 @@ export default function HowItWorks() {
             <span className="win-dot" />
             <span className="win-dot" />
           </div>
-          <img src="screenshots/settings.png" alt={t("how.shotAlt")} loading="lazy" />
+          <img src={shot} alt={t("how.shotAlt")} loading="lazy" />
           <figcaption className="window-caption meta-mono">
             {t("how.shotCaption")}
           </figcaption>
