@@ -46,6 +46,22 @@ jobs:
           fi
           echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
+      # fail-fast：updater 私钥缺失时，macOS/Windows 各要编译十几分钟才在
+      # createUpdaterArtifacts 签名处炸掉；这里 5 秒内挡下并给出明确指引。
+      # 只强制 KEY——minisign 私钥密码允许为空，PASSWORD 不强制。
+      - name: 校验 updater 签名 secret
+        env:
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$UPDATER_KEY" ]]; then
+            echo "错误：secrets.TAURI_SIGNING_PRIVATE_KEY 未配置（或为空）。" >&2
+            echo "应用内自动更新的 .sig 签名依赖它，配置后重跑本 workflow：" >&2
+            echo "  repo Settings → Secrets and variables → Actions → New repository secret" >&2
+            echo "  名称：TAURI_SIGNING_PRIVATE_KEY（内容：tauri signer generate -w ~/.tauri/openime.key 产出的私钥）" >&2
+            echo "  如私钥设有密码，另配 TAURI_SIGNING_PRIVATE_KEY_PASSWORD。" >&2
+            exit 1
+          fi
+          echo "updater 签名 secret 已配置 ✓"
 
   # ── 测试门禁：打包前强制全绿（与 ci.yml 同口径的 voice-core + 前端） ──
   test:
@@ -56,7 +72,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11
       - uses: actions/setup-node@v5
@@ -93,7 +109,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11
       - uses: actions/setup-node@v5
@@ -150,7 +166,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11
       - uses: actions/setup-node@v5

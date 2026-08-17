@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# pre-push 门禁：与 CI（ci.yml）完全同口径，本地过 = CI 过。
+# 应急绕过：git push --no-verify（绕过的推送仍会被 CI 变红兜底）。
+#
+# 激活方式：core.hooksPath 指向 .githooks（package.json 的 prepare 脚本
+# 在 pnpm install 时自动设置；或手动执行
+#   git config core.hooksPath .githooks ）。
+
+set -euo pipefail
+
+say() { printf "\n\033[1;36m==> pre-push 门禁：%s\033[0m\n" "$1"; }
+
+say "cargo fmt --check"
+cargo fmt --all -- --check
+
+say "clippy voice-core（默认 feature）"
+cargo clippy -p voice-core --all-targets -- -D warnings
+
+say "clippy voice-core（sherpa feature）"
+cargo clippy -p voice-core --features sherpa --all-targets -- -D warnings
+
+say "clippy openime（src-tauri）"
+cargo clippy -p openime --all-targets -- -D warnings
+
+say "前端 vitest + build"
+pnpm test
+pnpm build
+
+say "全绿，放行推送 ✓"
